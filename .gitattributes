@@ -1,0 +1,3 @@
+# LF everywhere, also on Windows checkouts (core.autocrlf=true): vendored
+# files are compared byte by byte with the TribChem originals, which use LF.
+* text=auto eol=lf
