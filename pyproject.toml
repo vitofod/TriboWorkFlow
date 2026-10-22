@@ -44,6 +44,10 @@ version = {attr = 'triboworkflow.__version__'}
 [tool.setuptools.packages.find]
 include = ['triboworkflow*']
 
+[tool.setuptools.package-data]
+# JSON files that the vendored TribChem code reads next to its modules.
+'triboworkflow.vendored' = ['**/*.json']
+
 [tool.pytest.ini_options]
 testpaths = ['tests']
 addopts = '-ra'
