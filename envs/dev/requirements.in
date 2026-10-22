@@ -1,0 +1,14 @@
+# Development environment of TriboWorkFlow.
+#
+# Every package shared with the historic environment keeps the version of
+# envs/historic/requirements.lock, except ASE. See envs/README.md.
+
+numpy==1.26.4
+# 1.14.0 removed scipy.integrate.simps, used by TribChem's charge analyzer.
+scipy==1.13.1
+pymatgen==2024.6.10
+# Same version as Xsorb, whose ASE calculator uses private ASE symbols.
+ase==3.26.0
+
+pytest
+pip

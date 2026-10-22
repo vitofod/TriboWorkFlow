@@ -40,3 +40,13 @@ SCS (Strategic Configuration Sampling)
              https://creativecommons.org/licenses/by/4.0/
   Use:       batched workers, job manager, LAMMPS-based MLIP runs; every
              reused piece cites its source file.
+
+atomate 1.1.0
+  Source:    https://github.com/hackingmaterials/atomate
+  Copyright: The Regents of the University of California, through Lawrence
+             Berkeley National Laboratory
+  Licence:   modified BSD licence, see the LICENSE file of atomate
+  Use:       not part of the package. envs/historic/atomate-1.1.0-vdw-kernel.patch
+             quotes context lines of atomate/vasp/fireworks/core.py to apply,
+             in the historic test environment only, the change described in
+             TribChem's installation guide.

@@ -10,8 +10,18 @@ authors = [
     { name = 'Vito Foderà', email = 'vitofode87@gmail.com' },
 ]
 requires-python = '>=3.12'
-# Dependencies and pinned versions come with the locked environment.
-dependencies = []
+# Hard constraints only: the exact versions of every package are in
+# envs/dev/requirements.lock (see envs/README.md).
+dependencies = [
+    # TribChem's upper bound.
+    'numpy>=1.26.4,<2',
+    # 1.14.0 removed scipy.integrate.simps, used by TribChem's charge analyzer.
+    'scipy>=1.13.1,<1.14',
+    # Interface matching (ZSLGenerator) and adsorption sites as in TribChem.
+    'pymatgen==2024.6.10',
+    # Same version as Xsorb, whose ASE calculator uses private ASE symbols.
+    'ase==3.26.0',
+]
 # Licence still to be decided; third-party licences are listed in NOTICE.
 classifiers = [
     'Development Status :: 2 - Pre-Alpha',

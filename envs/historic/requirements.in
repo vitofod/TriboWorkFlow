@@ -1,0 +1,37 @@
+# Historic TribChem environment: the reference for the golden tests.
+#
+# Source: requirements.txt of the TribChem branch devel-align_elisa_w_devel,
+# which gives only upper bounds. Each bound is taken as the exact version,
+# except SciPy (see below). Transitive dependencies are resolved with
+# --exclude-newer 2024-07-17: the release dates of these bounds all fall
+# between 2024-07-09 and 2024-07-16. See envs/README.md.
+
+ase==3.23.0
+atomate==1.1.0
+fireworks==2.0.3
+matplotlib==3.9.1
+numpy==1.26.4
+pandas==2.2.2
+pymatgen==2024.6.10
+# requirements.txt allows scipy<=1.14.0, but 1.14.0 removed
+# scipy.integrate.simps, called with even='avg' by
+# tribchem/physics/electronics/charge/analyzer.py.
+scipy==1.13.1
+mp-api==0.41.2
+ruamel.yaml==0.17.40
+seaborn==0.13.2
+setuptools==70.3.0
+pip==24.0
+# requirements.txt also pins python==3.12.4: the interpreter of this venv.
+
+# Imported by TribChem's setup.py but missing from requirements.txt.
+importlib_metadata
+# Installed with pip in the micromamba environment of the installation guide
+# (conda-forge pip 24.0 depends on setuptools and wheel). With wheel present,
+# pip 24.0 installs TribChem through the legacy 'setup.py develop', which puts
+# the project root on sys.path. Without it pip takes the PEP 660 route and,
+# since setup.py declares py_modules=[] and no packages, exposes nothing.
+wheel
+
+# Runner for the tests of this environment and for the golden tests.
+pytest

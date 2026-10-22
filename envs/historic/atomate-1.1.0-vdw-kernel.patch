@@ -1,0 +1,46 @@
+Change to atomate 1.1.0 described in TribChem's
+docs/installation/Installation-Guide.md, section '"Fixing" some issues in
+atomate': OptimizeFW and StaticFW get a vdw_kernel_dir argument and copy the
+VASP vdW kernel when the input set uses a vdW functional, as ScanOptimizeFW
+already does. The added lines are the guide's, verbatim; the context lines
+are atomate code (modified BSD licence, see NOTICE). Applied with
+'patch -p1' in site-packages by envs/historic/create_env.sh.
+
+--- a/atomate/vasp/fireworks/core.py
++++ b/atomate/vasp/fireworks/core.py
+@@ -67,6 +67,7 @@
+         auto_npar=">>auto_npar<<",
+         half_kpts_first_relax=HALF_KPOINTS_FIRST_RELAX,
+         parents=None,
++        vdw_kernel_dir=VDW_KERNEL_DIR,
+         **kwargs,
+     ):
+         """
+@@ -104,6 +105,9 @@
+ 
+         t = []
+         t.append(WriteVaspFromIOSet(structure=structure, vasp_input_set=vasp_input_set))
++        # Copy the pre-compiled VdW kernel for VASP, if required
++        if vasp_input_set.vdw is not None:
++            t.append(CopyFiles(from_dir=vdw_kernel_dir))
+         t.append(
+             RunVaspCustodian(
+                 vasp_cmd=vasp_cmd,
+@@ -306,6 +310,7 @@
+         vasptodb_kwargs=None,
+         parents=None,
+         spec_structure_key=None,
++        vdw_kernel_dir=VDW_KERNEL_DIR,
+         **kwargs,
+     ):
+         """
+@@ -370,6 +375,9 @@
+         else:
+             raise ValueError("Must specify structure or previous calculation")
+ 
++        # Copy the pre-compiled VdW kernel for VASP, if required
++        if vasp_input_set.vdw is not None:
++            t.append(CopyFiles(from_dir=vdw_kernel_dir))
+         t.append(RunVaspCustodian(vasp_cmd=vasp_cmd, auto_npar=">>auto_npar<<"))
+         t.append(PassCalcLocs(name=name))
+         t.append(VaspToDb(db_file=db_file, **vasptodb_kwargs))
