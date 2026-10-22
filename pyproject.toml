@@ -1,0 +1,39 @@
+[build-system]
+requires = ['setuptools >= 64']
+build-backend = 'setuptools.build_meta'
+
+[project]
+name = 'TriboWorkFlow'
+description = 'Conservative port of the TribChem workflows to Quantum ESPRESSO, MLIPs and CP2K, without MongoDB, FireWorks and atomate.'
+dynamic = ['version']
+authors = [
+    { name = 'Vito Foderà', email = 'vitofode87@gmail.com' },
+]
+requires-python = '>=3.12'
+# Dependencies and pinned versions come with the locked environment.
+dependencies = []
+# Licence still to be decided; third-party licences are listed in NOTICE.
+classifiers = [
+    'Development Status :: 2 - Pre-Alpha',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.12',
+    'Intended Audience :: Science/Research',
+    'Topic :: Scientific/Engineering :: Physics',
+    'Private :: Do Not Upload',
+]
+
+[project.optional-dependencies]
+# Filled in phase 5 (MLIP) and phase 6 (CP2K).
+mlip = []
+cp2k = []
+dev = ['pytest']
+
+[tool.setuptools.dynamic]
+version = {attr = 'triboworkflow.__version__'}
+
+[tool.setuptools.packages.find]
+include = ['triboworkflow*']
+
+[tool.pytest.ini_options]
+testpaths = ['tests']
+addopts = '-ra'

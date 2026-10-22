@@ -1,0 +1,42 @@
+TriboWorkFlow
+=============
+
+Conservative port of the TribChem workflows to Quantum ESPRESSO, MLIPs and
+CP2K, without MongoDB, FireWorks and atomate.
+
+Licence of this package: not decided yet.
+The third-party code it contains stays under its own licence, listed below.
+Every copied or adapted file states its source in its header. The "Use"
+entries describe the planned reuse.
+
+
+Third-party sources
+-------------------
+
+TribChem
+  Source:    https://gitlab.com/triboteam/tribchem
+             (local copy: tribchem_devel-align_elisa_w_devel)
+  Copyright: Prof. M.C. Righi, University of Bologna, and the authors named
+             in each file header
+  Licence:   Creative Commons Attribution-ShareAlike 4.0 International
+             (CC BY-SA 4.0), https://creativecommons.org/licenses/by-sa/4.0/
+  Use:       modules copied unchanged except for the imports into
+             triboworkflow/vendored/; Firetask bodies ported with database
+             and FireWorks calls replaced. ShareAlike applies to these
+             adapted parts.
+
+Xsorb
+  Source:    https://github.com/Enry99/xsorb
+  Authors:   Enrico Pedretti, Paolo Restuccia, Maria Clelia Righi
+  Licence:   Creative Commons Attribution 4.0 International (CC BY 4.0),
+             https://creativecommons.org/licenses/by/4.0/
+  Use:       TOML settings, job scheduling, QE output parsing; every reused
+             piece cites its source file.
+
+SCS (Strategic Configuration Sampling)
+  Source:    https://github.com/41bY/SCS-python
+  Authors:   see the original repository
+  Licence:   Creative Commons Attribution 4.0 International (CC BY 4.0),
+             https://creativecommons.org/licenses/by/4.0/
+  Use:       batched workers, job manager, LAMMPS-based MLIP runs; every
+             reused piece cites its source file.
