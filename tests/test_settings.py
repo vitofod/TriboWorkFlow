@@ -1,5 +1,11 @@
-"""TOML settings: the examples load, the pw.x keys pass as given, and every
-validation error is reported with the TOML path of the field."""
+# Author: Vito Foderà
+# Created: 2026-10-23
+
+"""Tests of the TOML settings (``triboworkflow.core.settings``).
+
+The examples load, the pw.x keys pass as given, and every validation error
+is reported with the TOML path of the field.
+"""
 
 import copy
 import re
@@ -15,7 +21,8 @@ from triboworkflow.vendored.highput.utils.tasktools import read_default_params
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / 'examples'
-TRIBCHEM_DEFAULTS = ROOT / 'triboworkflow' / 'vendored' / 'highput' / 'firetasks' / 'defaults.json'
+# Defaults of the interface matching, read by the vendored read_default_params.
+MATCHING_DEFAULTS = ROOT / 'triboworkflow' / 'vendored' / 'highput' / 'firetasks' / 'defaults.json'
 
 DELETE = object()
 
@@ -146,7 +153,7 @@ def test_namelist_get_ignores_case():
     assert key_name(' London_C6(2) ') == 'london_c6'
 
 
-# Values that pw.x, TribChem or the user judge: the settings take them as given.
+# Values that pw.x, the interface matching or the user judge: the settings take them as given.
 ACCEPTED = [
     ('d2-only', W := WORKFLOW, {'namelists.SYSTEM.vdw_corr': 'grimme-d2'}),
     ('d2-keys-ignored', W, {'namelists.SYSTEM.london_s6': 0.75, 'namelists.SYSTEM.dftd3_version': 4}),
@@ -213,18 +220,18 @@ def test_engine_per_step():
     assert settings.interface.engine_for('ppes') == 'qe'
 
 
-# --- TribChem's inter_params ------------------------------------------------------
+# --- inter_params of the interface matching -----------------------------------------
 
-def test_inter_params_keys_are_tribchem_keys():
-    defaults = read_default_params(str(TRIBCHEM_DEFAULTS), 'inter_params', {})
+def test_inter_params_keys_are_the_matching_keys():
+    defaults = read_default_params(str(MATCHING_DEFAULTS), 'inter_params', {})
     assert InterParams().given() == {}
     assert set(InterParams.__dataclass_fields__) == set(defaults)
 
 
-def test_inter_params_defaults_filled_as_in_tribchem():
-    # FT_StartInterfaceMatch fills the missing keys from defaults.json.
+def test_inter_params_defaults_filled_by_read_default_params():
+    # The workflow fills the missing keys with read_default_params.
     given = settings_from_dict(copy.deepcopy(WORKFLOW)).interface.inter_params.given()
-    params = read_default_params(str(TRIBCHEM_DEFAULTS), 'inter_params', given)
+    params = read_default_params(str(MATCHING_DEFAULTS), 'inter_params', given)
     assert params == {'max_area': 150.0, 'interface_distance': 2.0, 'max_angle_tol': 0.01,
                       'max_length_tol': 0.02, 'max_area_ratio_tol': 0.05,
                       'strain_weight_1': 1, 'strain_weight_2': 1, 'best_match': 'area'}

@@ -22,7 +22,7 @@ Constraints come in two frames, never mixed in one structure:
 | Site property | Frame | Values | From |
 |---|---|---|---|
 | `if_pos` | cartesian components, as pw.x applies them to the forces | 3 integers, 0 fixed, 1 free; `None` = no constraint given in the file | PWI, extxyz |
-| `selective_dynamics` | lattice vectors, as ASE reads POSCAR flags (`FixScaled`) | 3 booleans, True free | POSCAR, JSON, TribChem's `VaspInputSet` |
+| `selective_dynamics` | lattice vectors, as ASE reads POSCAR flags (`FixScaled`) | 3 booleans, True free | POSCAR, JSON, the vendored `VaspInputSet` |
 
 Flags along the lattice vectors become `if_pos` only when the lattice vectors
 they leave free lie along cartesian axes, e.g. `F F T` with c along z gives
@@ -33,7 +33,7 @@ Magnetisation: two different quantities, never converted into each other.
 
 | Quantity | Where | Meaning |
 |---|---|---|
-| `magmom` (site property) | extxyz (`initial_magmoms`), JSON | initial moment per atom in Bohr magnetons, as VASP's MAGMOM, ASE's initial moments and TribChem |
+| `magmom` (site property) | extxyz (`initial_magmoms`), JSON | initial moment per atom in Bohr magnetons, as VASP's MAGMOM and ASE's initial moments |
 | `starting_magnetization(i)` | `[[atomic_species]]` of the TOML | pw.x fraction per species: the only source for the inputs |
 | `starting_magnetization(i)` read from a PWI | `structure.properties['qe_species']` | provenance only: never becomes `magmom`, never replaces the TOML |
 
@@ -45,7 +45,7 @@ Magnetisation: two different quantities, never converted into each other.
 | `xyz` | ASE (plain) | no: `[structure.cell] source = "config"` | — (elements only) | — | — | a comment line with `Lattice=` is an extxyz file: error |
 | `extxyz` | ASE | `Lattice`, `pbc="T T T"` | column `qe_label` | `move_mask` (cartesian) | `initial_magmoms` | other columns become site properties |
 | `pwi` | ASE parsing functions | `CELL_PARAMETERS`, `ibrav = 0` only | whole labels | `if_pos` of `ATOMIC_POSITIONS` | — | `qe_species`: label, mass, pseudopotential, `starting_magnetization` |
-| `poscar` | pymatgen, as TribChem | yes | element | `selective_dynamics` | — | input only |
+| `poscar` | pymatgen | yes | element | `selective_dynamics` | — | input only |
 | `json` | pymatgen dict | `lattice.matrix` required | `label` of the sites | site properties | site properties | `Structure` or `Slab`; see below |
 
 `format = "auto"` takes the format from the name: `.cif`, `.xyz`,
@@ -53,14 +53,16 @@ Magnetisation: two different quantities, never converted into each other.
 `POSCAR` or `CONTCAR`. Relative paths in the settings are taken from the
 folder of the settings file.
 
-**JSON slabs.** A pymatgen `Slab` dict, e.g. the `structure.opt` of a
-TribChem slab document, is read without losses: lattice matrix, sites
-(fractional coordinates, labels, properties), `miller_index`, `shift`,
-`scale_factor`, `reconstruction`, `energy`, `oriented_unit_cell`. pymatgen's
-`Slab.from_dict` alone is not lossless: it rebuilds the lattice with
-`Lattice.from_parameters` and drops the reconstruction and the labels.
-A dict without `lattice.matrix`, as the custom slabs stored by TribChem, has
-no orientation and is an error; so are unknown keys and a charge.
+**JSON slabs.** A pymatgen `Slab` dict (`Slab.as_dict`) is read without
+losses: lattice matrix, sites (fractional coordinates, labels, properties),
+`miller_index`, `shift`, `scale_factor`, `reconstruction`, `energy`,
+`oriented_unit_cell`. pymatgen's `Slab.from_dict` alone is not lossless: it
+rebuilds the lattice with `Lattice.from_parameters` and drops the
+reconstruction and the labels. A dict without `lattice.matrix` has no
+orientation and is an error; so are unknown keys and a charge.
+
+To remove: the JSON slabs include the `structure.opt` of TribChem slab
+documents; those of TribChem's custom slabs have no `lattice.matrix`.
 
 ## Writing
 
@@ -91,37 +93,44 @@ errors. A `Slab` becomes plain `Atoms`.
   of the file > `default_if_pos`, per atom; `read_from_file = false` ignores
   the file. `load_structure` returns the `if_pos` of every atom with its
   source (`override`, `file`, `default`).
-- **Workflows**: the constraints of the `calc_type`, as in TribChem, set by its
+- **Workflows**: the constraints of the `calc_type`, set by the vendored
   `VaspInputSet` (`interface_z_relax`: `0 0 1`, H atoms `1 1 1`;
   `slab_pos_relax`: `1 1 1`), with source `calc_type`. The constraints of
   the slab files are kept in the structure as read, as provenance.
 
 ## Slabs of the workflows
 
-The interface workflow of TribChem works on pymatgen `Slab` objects read from
-its database. `load_workflow_slabs` gives, for each slab of `[interface]`,
-the structure as read (`original`), the `Slab` that TribChem would use
-(`slab`) and the transformation between them:
+The interface workflow (vendored matching and high-symmetry modules) works on
+pymatgen `Slab` objects. `load_workflow_slabs` gives, for each slab of
+`[interface]`, the structure as read (`original`), the `Slab` given to the
+workflow (`slab`) and the transformation between them:
 
-- a JSON slab follows the database path: `Slab.from_dict`, as
-  `FT_StartInterfaceMatch`; its `miller_index` must equal `miller`;
-- any other file follows the custom-slab path, a port of
-  `FT_StoreCustomSlab` checked against TribChem by golden tests: `Slab` with
+- a JSON slab follows the `database` path: it is used as stored, with
+  `Slab.from_dict`; its `miller_index` must equal `miller`;
+- any other file follows the `custom_slab` path: `Slab` with
   `oriented_unit_cell` = the structure, `shift = 0`, `scale_factor = (1, 1,
-  1)`; only `magmom` among the site properties, from the file or zeros as
-  with an INCAR without MAGMOM; then `Slab.from_dict`.
+  1)`; only `magmom` among the site properties, from the file or zeros;
+  stored as a dict without lattice matrix and read back with
+  `Slab.from_dict`.
 
 Both paths rebuild the lattice with `Lattice.from_parameters`, already in the
 `Slab` constructor (`reorient_lattice=True`): c along z, a along x. Hence:
 
 - the cell must be right-handed with c perpendicular to a and b (|cos| at
   most 1e-6); otherwise the slab would be mirrored or its surface tilted, and
-  the file is refused, where TribChem would transform it;
+  the file is refused;
 - the rotation from the frame of the file to that of the slab is recorded
   (`rotation`, `rotated`, `provenance()`), with the data dropped (e.g.
   `selective_dynamics`, structure properties) and added (`magmom`);
-- QE labels other than the element are refused: TribChem does not carry
-  them, so the workflows cannot guarantee them along the chain. This
+- QE labels other than the element are refused: the workflow code does not
+  carry them, so the workflows cannot guarantee them along the chain. This
   also excludes, for now, magnetic cases with several QE species of the same
   element (e.g. `Fe1`, `Fe2` with opposite `starting_magnetization`). No
   label is ever turned into its element silently.
+
+To remove: the two paths reproduce how TribChem's interface workflow reads
+its slabs from the database (`FT_StartInterfaceMatch`) and how
+`FT_StoreCustomSlab` stores a custom slab, whose MAGMOM of the INCAR is
+replaced by the moments of the file; golden tests compare `custom_slab` with
+that Firetask. TribChem transforms the left-handed and tilted cells that are
+refused here.

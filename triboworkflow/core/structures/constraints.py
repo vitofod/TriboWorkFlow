@@ -1,3 +1,6 @@
+# Author: Vito Foderà
+# Created: 2026-10-23
+
 """Constraints of the atoms: frames, conversion and the ones applied.
 
 ``if_pos`` (cartesian) and ``selective_dynamics`` (lattice vectors) are
@@ -8,10 +11,13 @@ directions they leave free span the same space as some cartesian axes, e.g.
 ``StructureError``: no conversion is made for generic cells.
 
 The constraints applied to a calculation are an ``AppliedConstraints``, with
-the origin of every atom's ``if_pos``. Outside the workflows the precedence of
-the settings holds (override > file > ``default_if_pos``,
-``resolve_if_pos``); inside them the constraints of the ``calc_type`` hold, as
-in TribChem, and the ones read from the files are only provenance.
+the origin of every atom's ``if_pos``:
+
+- outside the workflows the precedence of the settings holds (override >
+  file > ``default_if_pos``, ``resolve_if_pos``);
+- inside them the constraints of the ``calc_type`` hold
+  (``calc_type_if_pos``), and the ones read from the files are only
+  provenance.
 """
 
 from dataclasses import dataclass
@@ -29,19 +35,42 @@ SOURCES = ('override', 'file', 'default', 'calc_type')
 
 @dataclass
 class AppliedConstraints:
-    """The ``if_pos`` of every atom and where it comes from (``SOURCES``)."""
+    """The ``if_pos`` of every atom and where it comes from.
+
+    Attributes
+    ----------
+    if_pos : list of tuple of int
+        pw.x flags of every atom, in the order of the structure.
+    source : list of str
+        Origin of each entry, one of ``SOURCES``.
+    """
 
     if_pos: list[tuple[int, int, int]]
     source: list[str]
 
     def as_dict(self):
+        """JSON data of the constraints."""
         return {'if_pos': [list(f) for f in self.if_pos], 'source': list(self.source)}
 
 
 def file_constraints(structure):
-    """``(key, values)`` of the constraints carried by ``structure``.
+    """The constraints carried by a structure.
 
-    ``key`` is ``'if_pos'``, ``'selective_dynamics'`` or None (no constraints).
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+
+    Returns
+    -------
+    key : {'if_pos', 'selective_dynamics'} or None
+        The site property holding the constraints; None without constraints.
+    values : list or None
+        Its values, one per atom.
+
+    Raises
+    ------
+    StructureError
+        If the structure has constraints in both frames.
     """
     props = structure.site_properties
     present = [k for k in (IF_POS, SELECTIVE_DYNAMICS) if k in props]
@@ -54,10 +83,27 @@ def file_constraints(structure):
 
 
 def if_pos_from_lattice_flags(matrix, flags, tol=AXIS_TOL):
-    """``if_pos`` equal to flags along the lattice vectors (True free).
+    """Cartesian ``if_pos`` equal to flags along the lattice vectors.
 
-    The lattice vectors left free must span the space of a set of cartesian
-    axes; otherwise StructureError.
+    Parameters
+    ----------
+    matrix : array_like, shape (3, 3)
+        Lattice vectors as rows, in angstrom.
+    flags : sequence of bool
+        True for each lattice vector along which the atom is free.
+    tol : float, optional
+        Components up to this value (angstrom) count as zero.
+
+    Returns
+    -------
+    tuple of int
+        The three pw.x flags.
+
+    Raises
+    ------
+    StructureError
+        If the free lattice vectors do not span the space of a set of
+        cartesian axes.
     """
     free = [np.asarray(v, float) for v, f in zip(matrix, flags) if f]
     axes = {j for v in free for j in range(3) if abs(v[j]) > tol}
@@ -70,10 +116,23 @@ def if_pos_from_lattice_flags(matrix, flags, tol=AXIS_TOL):
 
 
 def cartesian_if_pos(structure):
-    """The constraints of ``structure`` as cartesian ``if_pos`` (None where not given).
+    """The constraints of a structure as cartesian ``if_pos``.
 
-    None if the structure has no constraints. Flags along the lattice vectors
-    are converted with ``if_pos_from_lattice_flags``.
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+
+    Returns
+    -------
+    list of (tuple of int or None) or None
+        The flags of every atom (None where the file gives none), or None if
+        the structure has no constraints. Flags along the lattice vectors are
+        converted with ``if_pos_from_lattice_flags``.
+
+    Raises
+    ------
+    StructureError
+        If some flags along the lattice vectors cannot be converted.
     """
     key, values = file_constraints(structure)
     if key is None:
@@ -95,8 +154,24 @@ def cartesian_if_pos(structure):
 def resolve_if_pos(structure, params):
     """Constraints of a single calculation: override > file > default_if_pos.
 
-    ``params`` is the ``[structure.constraints]`` table of the settings.
-    The values are taken as given; atoms are counted from 1 in the overrides.
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+    params : triboworkflow.core.settings.schema.ConstraintsParams
+        The ``[structure.constraints]`` table; atoms are counted from 1 in its
+        overrides.
+
+    Returns
+    -------
+    AppliedConstraints
+        Values taken as given, with sources ``override``, ``file`` or
+        ``default``.
+
+    Raises
+    ------
+    StructureError
+        If an override names an atom beyond the structure, or flags of the
+        file along the lattice vectors are not cartesian and not overridden.
     """
     n = len(structure)
     overrides = {}
@@ -133,11 +208,30 @@ def resolve_if_pos(structure, params):
 
 
 def calc_type_if_pos(structure):
-    """Constraints set on ``structure`` by TribChem for its ``calc_type``.
+    """Constraints set on a structure for its ``calc_type``.
 
-    ``VaspInputSet.get_vasp_settings`` adds ``selective_dynamics`` for
-    ``*pos_relax`` and ``*z_relax`` (``highput/utils/vasp_tools.py:536-557``,
-    H atoms free in ``z_relax``); without it every atom is free.
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+        A structure prepared by the vendored ``VaspInputSet``, which adds
+        ``selective_dynamics`` for ``*pos_relax`` (every atom free) and
+        ``*z_relax`` (free along c only, H atoms free).
+
+    Returns
+    -------
+    AppliedConstraints
+        With source ``calc_type``; every atom free when the structure has no
+        ``selective_dynamics``.
+
+    Raises
+    ------
+    StructureError
+        If the flags are not cartesian in this cell.
+
+    Notes
+    -----
+    To remove: ``VaspInputSet.get_vasp_settings`` sets the flags in
+    ``highput/utils/vasp_tools.py:536-557`` of TribChem.
     """
     n = len(structure)
     flags = structure.site_properties.get(SELECTIVE_DYNAMICS)

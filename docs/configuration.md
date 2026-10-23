@@ -176,10 +176,10 @@ the order of `ATOMIC_SPECIES` and of the per-species `pw.x` indices
 - `grid` and `offset` are read only with `automatic`, `kdens` only with
   `kdens`.
 - `gamma` writes `K_POINTS gamma` (real wavefunctions, Γ-point routines).
-- `kdens` computes the grid when the cell is known, as TribChem does for
-  VASP: `MeshFromDensity(structure, kdens, material_type, force_gamma=True)`
-  (`highput/utils/vasp_tools.py`), i.e. k-points per Å⁻¹ of each reciprocal
-  vector, k3 = 1 for slabs and interfaces, mesh centred on Γ (offset 0 0 0).
+- `kdens` computes the grid when the cell is known, with the vendored
+  `MeshFromDensity(structure, kdens, material_type, force_gamma=True)`:
+  k-points per Å⁻¹ of each reciprocal vector, k3 = 1 for slabs and
+  interfaces, mesh centred on Γ (offset 0 0 0).
 
 ## `[generation]` (one calculation)
 
@@ -214,28 +214,28 @@ Needed only to run on HPC. No value is tied to a specific machine.
 | `engine` | str | `"qe"` | engine of the steps that run calculations |
 | `engines` | table | `{}` | per-step engine for `pes`, `adhesion`, `ppes`, `charge`; only `qe` for now |
 
-`[[interface.slabs]]`: the identifiers TribChem uses for a slab.
+`[[interface.slabs]]`: a slab and its identifiers.
 
 | Key | Type | | Notes |
 |---|---|---|---|
-| `file` | str | R | slab structure, relative to the folder of the settings file; `""` is a placeholder. A pymatgen JSON slab is used as TribChem reads it from its database, any other file as a TribChem custom slab ([structures.md](structures.md)) |
+| `file` | str | R | slab structure, relative to the folder of the settings file; `""` is a placeholder. A pymatgen JSON slab is used as stored, any other file is turned into a slab ([structures.md](structures.md)) |
 | `mid` | str | R | material id; the interface id is `mid1_mid2` |
 | `miller` | 3 int | R | |
 | `formula` | str | — | |
 | `name` | str | — | tells apart homonyms (e.g. C diamond, C graphene) |
-| `bulk_modulus` | float | R with `set_bm = true` | GPa as in TribChem; read only with `set_bm = true` |
+| `bulk_modulus` | float | R with `set_bm = true` | bulk modulus of the material in GPa; read only with `set_bm = true` |
 
-With `set_bm = true` TribChem sets `strain_weight_1` and `strain_weight_2`
-to the two bulk moduli (`FT_StartInterfaceMatch.set_bulk_modulus`),
-replacing any value given in `inter_params`. With `set_bm = false` the
-weights come from `inter_params` (TribChem's default 1:1).
+With `set_bm = true` the workflow sets `strain_weight_1` and
+`strain_weight_2` to the two bulk moduli, replacing any value given in
+`inter_params`. With `set_bm = false` the weights come from `inter_params`
+(default 1:1).
 
-`[interface.inter_params]`: the keys of TribChem's `inter_params`; other
-keys are errors, as in TribChem's `read_default_params`. Missing keys take
-TribChem's defaults (`highput/firetasks/defaults.json`); the values are
-checked by TribChem's `InterfaceMatcher`.
+`[interface.inter_params]`: the parameters of the interface matching; other
+keys are errors. Missing keys take the defaults below, filled by the
+vendored `read_default_params`; the values are checked by the vendored
+`InterfaceMatcher`.
 
-| Key | Type | TribChem default |
+| Key | Type | Default |
 |---|---|---|
 | `max_area` | float | 150 |
 | `interface_distance` | float | 2 |
@@ -245,5 +245,10 @@ checked by TribChem's `InterfaceMatcher`.
 | `strain_weight_1`, `strain_weight_2` | float | 1, 1 |
 | `best_match` | str | `"area"` |
 
-TribChem's interface generation overwrites `max_angle_tol` with 0.4 before
-matching (`highput/firetasks/slabs.py`), whatever its value.
+The interface generation of the workflow overwrites `max_angle_tol` with
+0.4 before matching, whatever its value.
+
+To remove: the bulk moduli replace the weights as in TribChem's
+`FT_StartInterfaceMatch.set_bulk_modulus`; the defaults are those of
+`highput/firetasks/defaults.json`; the forced 0.4 is in
+`highput/firetasks/slabs.py`.

@@ -1,13 +1,20 @@
+# Author: Vito Foderà
+# Created: 2026-10-23
+
 """Reading of CIF, XYZ, extxyz, PWI, POSCAR and pymatgen JSON files.
 
 Every reader keeps the cell matrix, the cartesian positions, the order of the
 atoms, the labels and the per-atom data present in the file (``model.py``),
-and never adds or zeroes data that the file does not give. Libraries:
+and never adds or zeroes data that the file does not give.
+
+Notes
+-----
+Libraries and choices per format:
 
 - CIF: ASE, which keeps the order of the sites; pymatgen's ``CifParser``
   sorts them (a P1 file with Fe, O, Fe is read as Fe, Fe, O). The QE label is
   the element; ``_atom_site_label`` becomes the site property ``cif_label``.
-  Partial occupancies are rejected;
+  Partial occupancies are rejected; the other CIF tags are not kept;
 - XYZ: ASE's plain reader. The format has elements and positions only, so the
   cell must come from the settings (``cell``);
 - extxyz: ASE. ``move_mask`` holds cartesian flags (``ase/io/extxyz.py:492-500``),
@@ -18,12 +25,15 @@ and never adds or zeroes data that the file does not give. Libraries:
   ``starting_magnetization(i)`` stays with the i-th species of
   ``ATOMIC_SPECIES``: ASE and Xsorb look it up by element and turn it into
   initial moments, a different quantity (``model.py``);
-- POSCAR: pymatgen, as TribChem (``Structure.from_file``,
-  ``highput/firetasks/custom_slab.py:120``);
-- JSON: a pymatgen ``Structure`` or ``Slab`` dict, e.g. the ``structure.opt``
-  of a TribChem slab. ``Slab.from_dict`` reorients the lattice and drops the
+- POSCAR: pymatgen's reader, as ``Structure.from_file`` uses it;
+- JSON: a pymatgen ``Structure`` or ``Slab`` dict, e.g. a slab saved with
+  ``Slab.as_dict``. ``Slab.from_dict`` reorients the lattice and drops the
   reconstruction and the labels, so slabs are rebuilt here without
-  ``reorient_lattice`` and checked against the dict.
+  ``reorient_lattice``.
+
+To remove: the POSCAR reader is the one of TribChem's custom-slab Firetask
+(``highput/firetasks/custom_slab.py:120``), and the JSON slabs include the
+``structure.opt`` of TribChem slab documents.
 """
 
 import json
@@ -52,7 +62,24 @@ STRUCTURE_KEYS = {'@module', '@class', '@version', 'charge', 'lattice', 'propert
 
 
 def detect_format(path):
-    """Format of a structure file from its name."""
+    """Format of a structure file from its name.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+
+    Returns
+    -------
+    str
+        One of ``FORMATS``: from the suffix (``.cif``, ``.xyz``, ``.extxyz``,
+        ``.pwi``, ``.json``, ``.vasp``, ``.poscar``) or, for POSCAR, from a
+        name starting with ``POSCAR`` or ``CONTCAR``.
+
+    Raises
+    ------
+    StructureError
+        If the name tells no format.
+    """
     name = Path(path).name
     suffix = Path(path).suffix.lower()
     by_suffix = {'.cif': 'cif', '.xyz': 'xyz', '.extxyz': 'extxyz', '.pwi': 'pwi',
@@ -66,10 +93,32 @@ def detect_format(path):
 
 
 def read_structure(path, format='auto', frame=0, cell=None):
-    """Read one structure; ``frame`` counts from 0 in files with several.
+    """Read one structure from a file.
 
-    ``cell`` (three row vectors in angstrom), if given, replaces the cell of
-    the file, keeping the cartesian positions; it is required for plain XYZ.
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The structure file.
+    format : str, optional
+        One of ``FORMATS``, or ``'auto'`` to take it from the name
+        (``detect_format``).
+    frame : int, optional
+        Structure to read, counted from 0, in files with several (CIF,
+        XYZ, extxyz); must be 0 for the others.
+    cell : array_like, shape (3, 3), optional
+        Row vectors in angstrom that replace the cell of the file, keeping
+        the cartesian positions; required for plain XYZ.
+
+    Returns
+    -------
+    pymatgen.core.structure.Structure
+        A ``Slab`` for a JSON slab.
+
+    Raises
+    ------
+    StructureError
+        If the file cannot be read in that format, holds partial
+        occupancies, or lacks data the format requires (e.g. the cell).
     """
     path = Path(path)
     fmt = detect_format(path) if format == 'auto' else format
@@ -104,7 +153,20 @@ def read_structure(path, format='auto', frame=0, cell=None):
 
 
 def replace_cell(structure, cell):
-    """``structure`` with another cell and the same cartesian positions."""
+    """A structure with another cell and the same cartesian positions.
+
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+        Not a ``Slab``.
+    cell : array_like, shape (3, 3)
+        Three independent row vectors in angstrom.
+
+    Returns
+    -------
+    pymatgen.core.structure.Structure
+        With the labels and properties of ``structure``.
+    """
     if isinstance(structure, Slab):
         raise StructureError('the cell of a JSON slab cannot be replaced')
     matrix = np.asarray(cell, float)
@@ -217,7 +279,27 @@ def _read_pwi(path):
 
 
 def read_json(path):
-    """A pymatgen Structure or Slab from its JSON dict, without losses."""
+    """A pymatgen Structure or Slab from its JSON dict, without losses.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        JSON file with a ``Structure`` or ``Slab`` dict (``as_dict``).
+
+    Returns
+    -------
+    pymatgen.core.structure.Structure or pymatgen.core.surface.Slab
+        A ``Slab`` keeps lattice matrix, fractional coordinates, labels, site
+        and structure properties, ``miller_index``, ``shift``,
+        ``scale_factor``, ``reconstruction``, ``energy`` and
+        ``oriented_unit_cell``; it is built with ``reorient_lattice=False``.
+
+    Raises
+    ------
+    StructureError
+        For another ``@class``, keys that are not restored, a lattice without
+        ``matrix``, or a charged slab.
+    """
     with open(path) as f:
         dct = json.load(f)
     if not isinstance(dct, dict) or dct.get('@class') not in ('Structure', 'Slab'):
@@ -228,8 +310,7 @@ def read_json(path):
         raise StructureError(f'keys not supported in a {dct["@class"]} dict: {", ".join(unknown)}')
     if 'matrix' not in dct['lattice']:
         raise StructureError('the lattice has no matrix: its orientation is unknown (pymatgen '
-                             'would rebuild it with Lattice.from_parameters, as for the custom '
-                             'slabs of TribChem)')
+                             'would rebuild it with Lattice.from_parameters)')
     if dct['@class'] == 'Structure':
         return Structure.from_dict(dct)
     if dct.get('charge') not in (None, 0):

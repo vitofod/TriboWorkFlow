@@ -1,8 +1,14 @@
+# Author: Vito Foderà
+# Created: 2026-10-23
+
 """Data carried by the structures read and written by this package.
 
 A structure is a pymatgen ``Structure`` (a ``Slab`` when it comes from a
-pymatgen JSON slab), with the atoms in the order of the file. Three names are
-kept apart for every atom:
+pymatgen JSON slab), with the atoms in the order of the file.
+
+Notes
+-----
+Three names are kept apart for every atom:
 
 - the element: ``site.specie``;
 - the QE label of the species, as in ``ATOMIC_SPECIES`` and
@@ -16,18 +22,18 @@ Constraints come in two frames, never mixed in one structure:
 - ``if_pos``: pw.x convention, three integers per atom on the *cartesian*
   components (0 fixed, 1 free), ``None`` for an atom without constraints in
   the file. From PWI and extxyz files;
-- ``selective_dynamics``: VASP, pymatgen and TribChem convention, three
-  booleans per atom along the *lattice vectors* (True free), as ASE reads
-  POSCAR flags (``FixScaled``, ``ase/io/vasp.py:311-323``). From POSCAR and
-  JSON files, and from TribChem (``VaspInputSet``,
-  ``highput/utils/vasp_tools.py:542``, ``557``).
+- ``selective_dynamics``: VASP and pymatgen convention, three booleans per
+  atom along the *lattice vectors* (True free), as ASE reads POSCAR flags
+  (``FixScaled``, ``ase/io/vasp.py:311-323``). From POSCAR and JSON files,
+  and from the vendored ``VaspInputSet``, which sets the constraints of each
+  ``calc_type``.
 
 Magnetisation:
 
 - the site property ``magmom`` is an initial magnetic moment per atom in
-  Bohr magnetons, with the meaning of VASP's MAGMOM, of ASE's initial
-  magnetic moments and of TribChem. It is read from extxyz and JSON files and
-  carried for the TribChem code;
+  Bohr magnetons, with the meaning of VASP's MAGMOM and of ASE's initial
+  magnetic moments. It is read from extxyz and JSON files and carried for
+  the vendored workflow code;
 - ``starting_magnetization(i)`` of pw.x is a fraction per species, a
   different quantity. In the inputs it comes from the TOML settings only. The
   values found in a PWI are kept as provenance in

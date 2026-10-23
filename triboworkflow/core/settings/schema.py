@@ -1,24 +1,32 @@
+# Author: Vito Foderà
+# Created: 2026-10-23
+
 """Schema of the TOML settings (schema version 1): one dataclass per table.
 
-The layout follows Xsorb (``xsorb/settings/input_settings.py`` and
-``xsorb/dft_codes/input_settings.py``, CC BY 4.0): dacite fills the
-dataclasses from the TOML tables (``loader.py``). Unlike Xsorb, the checks
-do not run in ``__post_init__`` but in a separate pass over the filled
-dataclasses (``check`` methods, called by ``loader.validate``), so that every
-message carries the full TOML path of the field, list indices included.
+A settings file describes either one calculation (``[structure]``) or the
+interface workflow (``[interface]``), together with the pw.x template
+(``[namelists]``, ``[[atomic_species]]``, ``[k_points]``) and, optionally,
+the execution on HPC (``[execution]``). ``loader.py`` fills the dataclasses
+from the TOML tables with dacite and then runs their ``check`` methods.
 
-A file describes either one calculation (``[structure]``) or the interface
-workflow (``[interface]``). The namelists are passed to ``pw.x`` as given:
-``pw.x`` applies its own defaults to the keys left out and judges the
-values. The checks only cover what the code needs to work: the layout of
-the file, the keys the generator writes itself, and the conventions of the
-project (``ibrav = 0``, angstrom, ``scf`` and ``relax`` only, no Hubbard).
-Values that a step does not use are ignored, as ``pw.x`` ignores keys that
-do not apply.
+The namelists are passed to pw.x as given: pw.x applies its own defaults to
+the keys left out and judges the values. The checks only cover what the code
+needs to work: the layout of the file, the keys the input generator writes
+itself, and the conventions of the project (``ibrav = 0``, angstrom, ``scf``
+and ``relax`` only, no Hubbard corrections). Values that a step does not use
+are ignored, as pw.x ignores keys that do not apply.
 
 Placeholders, i.e. empty strings and ``ecutwfc``/``ecutrho`` equal to 0, are
 accepted when a file is loaded and rejected when an input is generated
 (``Settings.missing_values``, ``Settings.require_complete``).
+
+Notes
+-----
+The layout follows Xsorb (``xsorb/settings/input_settings.py`` and
+``xsorb/dft_codes/input_settings.py``, CC BY 4.0). Unlike Xsorb, the checks
+do not run in ``__post_init__`` but in a separate pass over the filled
+dataclasses, so that every message carries the full TOML path of the field,
+list indices included.
 """
 
 from __future__ import annotations
@@ -63,7 +71,18 @@ KEY_HINTS = {
 
 
 class SettingsError(ValueError):
-    """Invalid settings; ``path`` is the dotted TOML path of the field."""
+    """Invalid settings.
+
+    Parameters
+    ----------
+    path : str
+        Dotted TOML path of the field (e.g. ``structure.cell.vectors``); empty
+        for errors about the whole file.
+    message : str
+        What is wrong.
+    source : pathlib.Path or None, optional
+        Settings file, prefixed to the message when given.
+    """
 
     def __init__(self, path, message, source=None):
         self.path, self.message, self.source = path, message, source
@@ -93,7 +112,18 @@ def _required(path, value, reason):
 
 
 def key_name(key):
-    """Name of a namelist key without index and case: "London_C6(2)" -> "london_c6"."""
+    """Name of a namelist key without index and case.
+
+    Parameters
+    ----------
+    key : str
+        Key as written in the settings, e.g. ``"London_C6(2)"``.
+
+    Returns
+    -------
+    str
+        The lower-case name without the index, e.g. ``"london_c6"``.
+    """
     return key.split('(')[0].strip().lower()
 
 
@@ -101,13 +131,24 @@ def key_name(key):
 
 @dataclass
 class CellParams:
-    """``[structure.cell]``: cell from the structure file or from the settings."""
+    """``[structure.cell]``: cell from the structure file or from the settings.
+
+    Attributes
+    ----------
+    source : {'file', 'config'}
+        Where the cell comes from.
+    units : {'angstrom'}
+        Units of ``vectors``.
+    vectors : list of list of float
+        Three row vectors, read only with ``source = "config"``.
+    """
 
     source: str = 'file'
     units: str = 'angstrom'
     vectors: list[list[float]] = field(default_factory=list)  # read only with source = "config"
 
     def check(self, path):
+        """Validate the table; errors name ``path``."""
         _choice(f'{path}.source', self.source, ('file', 'config'))
         _choice(f'{path}.units', self.units, ('angstrom',))
         if self.source == 'config' and (len(self.vectors) != 3 or any(len(v) != 3 for v in self.vectors)):
@@ -117,12 +158,21 @@ class CellParams:
 
 @dataclass
 class Override:
-    """One entry of ``structure.constraints.overrides``; atoms counted from 1."""
+    """One entry of ``structure.constraints.overrides``.
+
+    Attributes
+    ----------
+    atoms : list of int
+        Atoms, counted from 1 in the order of the structure file.
+    if_pos : list of int
+        The three pw.x ``if_pos`` flags given to those atoms.
+    """
 
     atoms: list[int]
     if_pos: list[int]
 
     def check(self, path):
+        """Validate the entry; errors name ``path``."""
         for atom in self.atoms:
             if atom < 1:
                 raise SettingsError(f'{path}.atoms', f'atoms are counted from 1, got {atom}')
@@ -131,13 +181,24 @@ class Override:
 
 @dataclass
 class ConstraintsParams:
-    """``[structure.constraints]``: precedence override > file > default_if_pos."""
+    """``[structure.constraints]``: precedence override > file > default_if_pos.
+
+    Attributes
+    ----------
+    read_from_file : bool
+        Whether the constraints of the structure file are used.
+    default_if_pos : list of int
+        Flags of the atoms without override and without constraints in the file.
+    overrides : list of Override
+        Flags given to selected atoms; an atom may appear in one entry only.
+    """
 
     read_from_file: bool = True
     default_if_pos: list[int] = field(default_factory=lambda: [1, 1, 1])
     overrides: list[Override] = field(default_factory=list)
 
     def check(self, path):
+        """Validate the table; errors name ``path``."""
         _three(f'{path}.default_if_pos', self.default_if_pos)
         seen = {}
         for i, override in enumerate(self.overrides):
@@ -150,7 +211,23 @@ class ConstraintsParams:
 
 @dataclass
 class StructureParams:
-    """``[structure]``: the structure of the single calculation."""
+    """``[structure]``: the structure of the single calculation.
+
+    Attributes
+    ----------
+    file : str
+        Structure file, relative to the folder of the settings file.
+    format : str
+        ``auto`` or one of the formats of ``core.structures``.
+    frame : int
+        Structure to read, counted from 0, in files with several.
+    xyz_units : {'angstrom'}
+        Units of the coordinates of a plain XYZ file.
+    preserve_atom_order, preserve_species_labels : bool
+        Only ``True``: atom indices and species labels refer to the file.
+    cell : CellParams
+    constraints : ConstraintsParams
+    """
 
     file: str
     format: str = 'auto'
@@ -162,6 +239,7 @@ class StructureParams:
     constraints: ConstraintsParams = field(default_factory=ConstraintsParams)
 
     def check(self, path):
+        """Validate the table; errors name ``path``."""
         _choice(f'{path}.format', self.format, ('auto', 'cif', 'xyz', 'extxyz', 'pwi', 'poscar', 'json'))
         _choice(f'{path}.xyz_units', self.xyz_units, ('angstrom',))
         if not self.preserve_atom_order:
@@ -176,7 +254,15 @@ class StructureParams:
 
 @dataclass
 class Namelists:
-    """``[namelists]``: the pw.x namelists, written as given."""
+    """``[namelists]``: the pw.x namelists, written as given.
+
+    Attributes
+    ----------
+    CONTROL, SYSTEM, ELECTRONS, IONS : dict
+        pw.x keys and values of each namelist; ``IONS`` is written only for
+        ``relax``. Arrays are written one key per element, e.g.
+        ``"london_c6(1)"``.
+    """
 
     CONTROL: dict[str, Any] = field(default_factory=dict)
     SYSTEM: dict[str, Any] = field(default_factory=dict)
@@ -184,13 +270,24 @@ class Namelists:
     IONS: dict[str, Any] = field(default_factory=dict)  # written only for relax
 
     def get(self, namelist, name, default=None):
-        """Value of a key of ``namelist``, whatever its case (no index)."""
+        """Value of a key of a namelist, whatever its case.
+
+        Parameters
+        ----------
+        namelist : str
+            ``CONTROL``, ``SYSTEM``, ``ELECTRONS`` or ``IONS``.
+        name : str
+            Lower-case key name without index.
+        default : optional
+            Returned when the key is not given.
+        """
         for key, value in getattr(self, namelist).items():
             if key_name(key) == name and '(' not in key:
                 return value
         return default
 
     def check(self, path):
+        """Validate the namelists; errors name ``path``."""
         for namelist in NAMELISTS:
             for key, value in getattr(self, namelist).items():
                 if not isinstance(value, (str, int, float)):
@@ -209,7 +306,19 @@ class Namelists:
 
 @dataclass
 class Species:
-    """One ``[[atomic_species]]`` entry; the order of the entries is the pw.x order."""
+    """One ``[[atomic_species]]`` entry; the order of the entries is the pw.x order.
+
+    Attributes
+    ----------
+    label : str
+        Species label as in ``ATOMIC_POSITIONS`` (e.g. ``Fe1``).
+    mass : float
+        Atomic mass in amu.
+    pseudopotential : str
+        UPF file name.
+    starting_magnetization : float or None
+        Written as ``starting_magnetization(i)``, i = position of the entry.
+    """
 
     label: str
     mass: float
@@ -219,16 +328,27 @@ class Species:
 
 @dataclass
 class KPoints:
-    """``[k_points]``: fixed grid, Gamma point, or grid from a density."""
+    """``[k_points]``: fixed grid, Gamma point, or grid from a density.
+
+    Attributes
+    ----------
+    mode : {'automatic', 'gamma', 'kdens'}
+    grid, offset : list of int or None
+        Monkhorst-Pack grid and offsets, with ``mode = "automatic"``.
+    kdens : float or None
+        k-points per 1/angstrom of each reciprocal vector, with ``mode = "kdens"``.
+    gamma_for_unshifted_1x1x1 : bool
+        Whether a final grid 1 1 1 with offset 0 0 0 is written as ``K_POINTS gamma``.
+    """
 
     mode: str
     grid: list[int] | None = None      # mode = "automatic"
     offset: list[int] | None = None    # mode = "automatic"
     kdens: float | None = None         # mode = "kdens"
-    # A final grid 1 1 1 with offset 0 0 0 is written as K_POINTS gamma.
     gamma_for_unshifted_1x1x1: bool = True
 
     def check(self, path):
+        """Validate the table; errors name ``path``."""
         _choice(f'{path}.mode', self.mode, ('automatic', 'gamma', 'kdens'))
         reason = f'with mode = {self.mode!r}'
         if self.mode == 'automatic':
@@ -242,7 +362,16 @@ class KPoints:
 
 @dataclass
 class GenerationParams:
-    """``[generation]``: the input file of the single calculation."""
+    """``[generation]``: the input file of the single calculation.
+
+    Attributes
+    ----------
+    file_prefix : str
+        Name of the generated input file.
+    overwrite : bool
+        Whether an existing file may be replaced.
+    atomic_positions_units, cell_parameters_units : {'angstrom'}
+    """
 
     file_prefix: str = 'input.pwi'
     overwrite: bool = False
@@ -250,6 +379,7 @@ class GenerationParams:
     cell_parameters_units: str = 'angstrom'
 
     def check(self, path):
+        """Validate the table; errors name ``path``."""
         _choice(f'{path}.atomic_positions_units', self.atomic_positions_units, ('angstrom',))
         _choice(f'{path}.cell_parameters_units', self.cell_parameters_units, ('angstrom',))
 
@@ -258,7 +388,21 @@ class GenerationParams:
 
 @dataclass
 class ExecutionParams:
-    """``[execution]``: scheduler, jobscript and groups of calculations."""
+    """``[execution]``: scheduler, jobscript and groups of calculations.
+
+    Attributes
+    ----------
+    scheduler : str
+        One of ``SCHEDULERS``.
+    jobscript : str
+        Jobscript copied for every job, with the launch line added.
+    run_command : str
+        Command up to the input file, e.g. ``mpirun -np 32 pw.x -nk 4``.
+    groups : int
+        Jobs over which the calculations of a step are spread.
+    walltime, polling_interval : int
+        Seconds.
+    """
 
     scheduler: str
     jobscript: str
@@ -268,6 +412,7 @@ class ExecutionParams:
     polling_interval: int
 
     def check(self, path):
+        """Validate the table; errors name ``path``."""
         _choice(f'{path}.scheduler', self.scheduler, SCHEDULERS)
         _positive(f'{path}.groups', self.groups)
         _positive(f'{path}.walltime', self.walltime)
@@ -278,7 +423,21 @@ class ExecutionParams:
 
 @dataclass
 class SlabParams:
-    """One ``[[interface.slabs]]`` entry: the identifiers TribChem uses for a slab."""
+    """One ``[[interface.slabs]]`` entry: a slab and its identifiers.
+
+    Attributes
+    ----------
+    file : str
+        Slab structure, relative to the folder of the settings file.
+    mid : str
+        Material id; the interface id is ``mid1_mid2``.
+    miller : list of int
+        Miller indices of the surface.
+    formula, name : str or None
+        Further identifiers (``name`` tells apart homonyms).
+    bulk_modulus : float or None
+        Bulk modulus of the material in GPa, used with ``set_bm = true``.
+    """
 
     file: str
     mid: str
@@ -288,16 +447,36 @@ class SlabParams:
     bulk_modulus: float | None = None  # used with set_bm = true
 
     def check(self, path):
+        """Validate the entry; errors name ``path``."""
         _three(f'{path}.miller', self.miller)
 
 
 @dataclass
 class InterParams:
-    """``[interface.inter_params]``: the keys of TribChem's ``inter_params``.
+    """``[interface.inter_params]``: parameters of the interface matching.
 
-    Missing keys take TribChem's defaults (``highput/firetasks/defaults.json``),
-    filled by ``read_default_params`` as in ``FT_StartInterfaceMatch``; the
-    values are checked by TribChem's ``InterfaceMatcher``.
+    Missing keys take the defaults of the matching (``given`` returns only the
+    keys set here); the matching itself checks the values.
+
+    Attributes
+    ----------
+    max_area : float or None
+        Largest area of the interface cell.
+    interface_distance : float or None
+        Distance between the two slabs.
+    max_angle_tol, max_length_tol, max_area_ratio_tol : float or None
+        Tolerances of the lattice match.
+    strain_weight_1, strain_weight_2 : float or None
+        Weights of the strain of the two slabs.
+    best_match : str or None
+        Criterion to choose among the matches.
+
+    Notes
+    -----
+    To remove: these are the keys of TribChem's ``inter_params``; the defaults
+    are those of ``highput/firetasks/defaults.json``, filled by the vendored
+    ``read_default_params`` as ``FT_StartInterfaceMatch`` does, and the values
+    are checked by the vendored ``InterfaceMatcher``.
     """
 
     max_area: float | None = None
@@ -310,13 +489,32 @@ class InterParams:
     best_match: str | None = None
 
     def given(self):
-        """The keys set in the settings, as the ``inter_params`` dict of TribChem."""
+        """The keys set in the settings.
+
+        Returns
+        -------
+        dict
+            ``{key: value}`` of the parameters that are not None.
+        """
         return {k: v for k, v in asdict(self).items() if v is not None}
 
 
 @dataclass
 class InterfaceParams:
-    """``[interface]``: inputs of the interface workflow."""
+    """``[interface]``: inputs of the interface workflow.
+
+    Attributes
+    ----------
+    slabs : list of SlabParams
+        Bottom slab, then top slab.
+    set_bm : bool
+        Whether the strain weights are the bulk moduli of the two materials.
+    engine : str
+        Engine of the steps that run calculations.
+    engines : dict
+        Engine per step, overriding ``engine``.
+    inter_params : InterParams
+    """
 
     slabs: list[SlabParams]
     set_bm: bool = True
@@ -325,10 +523,21 @@ class InterfaceParams:
     inter_params: InterParams = field(default_factory=InterParams)
 
     def engine_for(self, step):
-        """Engine of a step that runs calculations."""
+        """Engine of a step that runs calculations.
+
+        Parameters
+        ----------
+        step : str
+            One of ``STEPS_WITH_ENGINE``.
+
+        Returns
+        -------
+        str
+        """
         return self.engines.get(step, self.engine)
 
     def check(self, path):
+        """Validate the table; errors name ``path``."""
         if len(self.slabs) != 2:
             raise SettingsError(f'{path}.slabs', f'give two slabs, bottom then top; got {len(self.slabs)}')
         later = '; MLIP and CP2K engines are not available yet'
@@ -337,7 +546,7 @@ class InterfaceParams:
             _choice(f'{path}.engines', step, STEPS_WITH_ENGINE)
             _choice(f'{path}.engines.{step}', engine, ENGINES, later)
         # With set_bm the strain weights are the bulk moduli of the two
-        # materials (FT_StartInterfaceMatch.set_bulk_modulus).
+        # materials, which replace those of inter_params.
         if self.set_bm:
             for i, slab in enumerate(self.slabs):
                 _required(f'{path}.slabs[{i}].bulk_modulus', slab.bulk_modulus,
@@ -348,7 +557,25 @@ class InterfaceParams:
 
 @dataclass
 class Settings:
-    """The whole settings file."""
+    """The whole settings file.
+
+    Attributes
+    ----------
+    schema_version : int
+        Must equal ``SCHEMA_VERSION``.
+    atomic_species : list of Species
+    k_points : KPoints
+    namelists : Namelists
+    structure : StructureParams or None
+        Given for a single calculation.
+    interface : InterfaceParams or None
+        Given for the interface workflow.
+    generation : GenerationParams or None
+        Used with ``structure``.
+    execution : ExecutionParams or None
+    source : pathlib.Path or None
+        File the settings were read from, set by the loader.
+    """
 
     schema_version: int
     atomic_species: list[Species]
@@ -362,6 +589,7 @@ class Settings:
     source: Path | None = field(default=None, init=False, repr=False, compare=False)
 
     def check(self, path=''):
+        """Validate the checks that involve several tables."""
         if self.schema_version != SCHEMA_VERSION:
             raise SettingsError('schema_version', f'unsupported value {self.schema_version}; '
                                 f'supported: {SCHEMA_VERSION}')
@@ -383,7 +611,13 @@ class Settings:
             seen[species.label] = i
 
     def missing_values(self):
-        """TOML paths of the placeholders: empty strings, ecutwfc/ecutrho equal to 0."""
+        """TOML paths of the placeholders.
+
+        Returns
+        -------
+        list of str
+            Paths of the empty strings and of ``ecutwfc``/``ecutrho`` equal to 0.
+        """
         missing = []
         for path, node in walk(self, children_first=False):
             for f in fields(node):
@@ -397,7 +631,13 @@ class Settings:
         return missing
 
     def require_complete(self):
-        """Raise SettingsError if a placeholder is left: before generating inputs."""
+        """Check, before generating an input, that no placeholder is left.
+
+        Raises
+        ------
+        SettingsError
+            Listing every placeholder.
+        """
         missing = self.missing_values()
         if missing:
             raise SettingsError('', 'fill in before generating an input: ' + ', '.join(missing),
@@ -405,11 +645,27 @@ class Settings:
 
 
 def join(path, name):
+    """Dotted TOML path of ``name`` inside ``path``."""
     return f'{path}.{name}' if path else name
 
 
 def walk(obj, path='', children_first=True):
-    """Yield ``(path, dataclass)`` for ``obj`` and every dataclass inside it."""
+    """Every dataclass inside a dataclass, with its TOML path.
+
+    Parameters
+    ----------
+    obj : dataclass instance
+    path : str, optional
+        TOML path of ``obj``.
+    children_first : bool, optional
+        Whether inner tables come before the table that holds them.
+
+    Yields
+    ------
+    tuple of (str, dataclass instance)
+        ``(path, node)`` for ``obj`` and every dataclass inside it, list items
+        included.
+    """
     if not children_first:
         yield path, obj
     for f in fields(obj):

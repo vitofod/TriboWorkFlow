@@ -1,3 +1,6 @@
+# Author: Vito Foderà
+# Created: 2026-10-23
+#
 # Settings for the interface workflow: complete example.
 #
 # The numbers are illustrative, not recommended values. The namelists and
@@ -20,7 +23,7 @@ file = "slabs/Cu111.extxyz"
 mid = "mp-30"
 formula = "Cu"
 miller = [1, 1, 1]
-bulk_modulus = 140.0               # GPa, as TribChem's bulk modulus.
+bulk_modulus = 140.0               # GPa, bulk modulus of the material.
 
 [[interface.slabs]]
 file = "slabs/Al111.extxyz"
@@ -29,7 +32,7 @@ formula = "Al"
 miller = [1, 1, 1]
 bulk_modulus = 76.0                # GPa
 
-[interface.inter_params]           # Missing keys take TribChem's defaults.
+[interface.inter_params]           # Missing keys take the defaults of the matching.
 max_area = 150.0
 interface_distance = 2.0
 max_length_tol = 0.02
@@ -82,7 +85,7 @@ starting_magnetization = 0.5
 
 [k_points]
 mode = "kdens"                     # Grid from the density, once the cell is known.
-kdens = 7.5                        # As TribChem's kdens: k-points per 1/angstrom of each reciprocal vector.
+kdens = 7.5                        # k-points per 1/angstrom of each reciprocal vector.
 
 [execution]
 scheduler = "slurm"

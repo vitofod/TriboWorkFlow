@@ -1,32 +1,42 @@
-"""Slabs for the workflows: the pymatgen ``Slab`` that TribChem would use.
+# Author: Vito Foderà
+# Created: 2026-10-23
 
-The interface workflow of TribChem reads each slab from the database with
-``Slab.from_dict`` (``highput/firetasks/run.py:1028``, ``1036``) and its code
-needs a ``Slab`` (``check_slab_type``, ``flip_slab``: ``miller_index``,
-``oriented_unit_cell``, ``shift``, ``scale_factor``, ``reconstruction``,
-``site_properties``). Two historic paths are reproduced:
+"""Slabs for the workflows: the pymatgen ``Slab`` the interface workflow uses.
 
-- ``database``: a pymatgen JSON slab, e.g. the ``structure.opt`` of a TribChem
-  document, read back with ``Slab.from_dict`` as in ``run.py:1028``;
-- ``custom_slab``: any other structure file, stored as ``FT_StoreCustomSlab``
-  stores a POSCAR (``highput/firetasks/custom_slab.py:118-270``) and read
-  back with ``Slab.from_dict``.
+The interface matching and the high-symmetry analysis (vendored modules)
+work on pymatgen ``Slab`` objects and use their ``miller_index``,
+``oriented_unit_cell``, ``shift``, ``scale_factor``, ``reconstruction`` and
+site properties. A slab file becomes such a ``Slab`` along one of two paths:
 
-Both rebuild the lattice with ``Lattice.from_parameters``, already in the
-``Slab`` constructor (``reorient_lattice=True``, pymatgen
-``core/surface.py:86``, ``147-158``): c along z, a along x. The custom path
-keeps only ``magmom`` among the site properties (``custom_slab.py:261-263``),
-and both lose the labels. ``workflow_slab`` makes these
-transformations explicit and keeps the structure as read:
+- ``database``: a pymatgen JSON slab, used as stored: ``Slab.from_dict``;
+- ``custom_slab``: any other structure file, turned into a ``Slab`` by
+  ``custom_slab`` (Miller indices from the settings, ``oriented_unit_cell``
+  equal to the structure, ``shift = 0``, ``scale_factor = (1, 1, 1)``, only
+  ``magmom`` among the site properties), stored as a dict without lattice
+  matrix and read back with ``Slab.from_dict``.
+
+Both rebuild the lattice with ``Lattice.from_parameters``, which the ``Slab``
+constructor already does (``reorient_lattice=True``, pymatgen
+``core/surface.py:86``, ``147-158``): c along z, a along x. Both lose the
+labels. ``workflow_slab`` makes these transformations explicit and keeps the
+structure as read:
 
 - the cell must be right-handed with c perpendicular to a and b; any other
-  cell would be mirrored or tilted by ``from_parameters``, and is an error
-  here, where TribChem transforms it;
-- the rotation from the file frame to the slab frame is returned, with the
-  data dropped and added;
-- custom QE labels (e.g. ``Fe1``, ``Fe2``) are an error: TribChem does not
-  carry them, so neither do the workflows for now. This also excludes
-  magnetic cases with several QE species of the same element.
+  cell would be mirrored or tilted by ``from_parameters``, and is an error;
+- the rotation from the frame of the file to that of the slab is returned,
+  with the data dropped and added;
+- QE labels other than the element (e.g. ``Fe1``, ``Fe2``) are an error: the
+  workflow code does not carry them along the chain. This also excludes, for
+  now, magnetic cases with several QE species of the same element.
+
+Notes
+-----
+To remove: the two paths reproduce how TribChem's interface workflow reads
+its slabs from the database (``highput/firetasks/run.py:1028``, ``1036``)
+and how ``FT_StoreCustomSlab`` stores a custom slab
+(``highput/firetasks/custom_slab.py:118-270``). Golden tests compare
+``custom_slab`` with that Firetask. The error for left-handed and tilted
+cells is a deviation: TribChem transforms them.
 """
 
 from dataclasses import dataclass, field
@@ -47,7 +57,26 @@ ROTATION_TOL = 1e-9
 
 @dataclass
 class WorkflowSlab:
-    """A slab read for a workflow: as read, as TribChem uses it, and how they differ."""
+    """A slab read for a workflow: as read, as the workflow uses it, and how they differ.
+
+    Attributes
+    ----------
+    original : pymatgen.core.structure.Structure
+        The structure as read from the file, with all its data.
+    slab : pymatgen.core.surface.Slab
+        The slab given to the workflow.
+    path : {'database', 'custom_slab'}
+        How ``slab`` was obtained (see the module docstring).
+    rotation : numpy.ndarray, shape (3, 3)
+        Proper rotation with ``slab.lattice.matrix = original.lattice.matrix @ rotation``.
+    rotated : bool
+        Whether ``rotation`` differs from the identity.
+    dropped : list of str
+        Data of ``original`` missing from ``slab`` (site properties,
+        ``properties.<key>``, ``reconstruction``).
+    added : list of str
+        Site properties of ``slab`` missing from ``original`` (e.g. ``magmom``).
+    """
 
     original: Structure
     slab: Slab
@@ -58,7 +87,14 @@ class WorkflowSlab:
     added: list[str] = field(default_factory=list)
 
     def provenance(self):
-        """JSON data of the transformation, for the records."""
+        """JSON data of the transformation, for the records.
+
+        Returns
+        -------
+        dict
+            Path, rotation, lattice matrices before and after, data dropped
+            and added.
+        """
         return {'path': self.path, 'rotated': self.rotated,
                 'rotation': self.rotation.tolist(),
                 'original_matrix': self.original.lattice.matrix.tolist(),
@@ -67,7 +103,26 @@ class WorkflowSlab:
 
 
 def read_workflow_slab(path, miller, format='auto'):
-    """``workflow_slab`` of the structure in ``path``."""
+    """Read a slab file for a workflow.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The slab file.
+    miller : sequence of int
+        Miller indices of the surface.
+    format : str, optional
+        As in ``read_structure``.
+
+    Returns
+    -------
+    WorkflowSlab
+
+    Raises
+    ------
+    StructureError
+        As ``read_structure`` and ``workflow_slab``, with the file name.
+    """
     try:
         return workflow_slab(read_structure(path, format), miller)
     except StructureError as error:
@@ -77,13 +132,34 @@ def read_workflow_slab(path, miller, format='auto'):
 
 
 def workflow_slab(structure, miller):
-    """The ``Slab`` TribChem would use for ``structure``, with the checks above."""
+    """The ``Slab`` the workflow uses for a structure, with its checks.
+
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+        As read by ``read_structure``; a ``Slab`` follows the ``database``
+        path, any other structure the ``custom_slab`` path.
+    miller : sequence of int
+        Miller indices of the surface; for a ``Slab`` they must equal its
+        ``miller_index``.
+
+    Returns
+    -------
+    WorkflowSlab
+
+    Raises
+    ------
+    StructureError
+        For QE labels other than the element, a left-handed cell, c not
+        perpendicular to a and b, or Miller indices that differ from those of
+        the slab.
+    """
     miller = [int(m) for m in miller]
     custom = [i + 1 for i, site in enumerate(structure) if site.label != site.species_string]
     if custom:
         labels = sorted({structure[i - 1].label for i in custom})
         raise StructureError(f'QE labels other than the element ({", ".join(labels)}) are not '
-                             'supported in the workflows: TribChem does not carry them')
+                             'supported in the workflows: the workflow code does not carry them')
     check_slab_cell(structure.lattice.matrix)
     if isinstance(structure, Slab):
         if [int(m) for m in structure.miller_index] != miller:
@@ -91,8 +167,8 @@ def workflow_slab(structure, miller):
                                  f'miller_index = {list(structure.miller_index)}')
         path, slab = 'database', Slab.from_dict(structure.as_dict())
     else:
-        # The moments of the file stand for the MAGMOM of the INCAR, the rest
-        # of the structure for the POSCAR, which carries no moments.
+        # The moments of the file are passed apart from the rest of the
+        # structure, which then carries no moments in oriented_unit_cell.
         poscar = structure.copy()
         if MAGMOM in poscar.site_properties:
             poscar.remove_site_property(MAGMOM)
@@ -113,7 +189,19 @@ def workflow_slab(structure, miller):
 
 
 def check_slab_cell(matrix):
-    """StructureError unless the cell is right-handed with c perpendicular to a and b."""
+    """Check that a slab cell keeps its shape in the workflow.
+
+    Parameters
+    ----------
+    matrix : array_like, shape (3, 3)
+        Lattice vectors as rows.
+
+    Raises
+    ------
+    StructureError
+        Unless the cell is right-handed with c perpendicular to a and b
+        (``ORTHOGONALITY_TOL``).
+    """
     a, b, c = np.asarray(matrix, float)
     if np.linalg.det(matrix) <= 0:
         raise StructureError('left-handed cell (a x b points away from c): the slab of the '
@@ -127,16 +215,36 @@ def check_slab_cell(matrix):
 
 
 def custom_slab(structure, miller, magmom=None, reconstructed=None):
-    """The slab of ``FT_StoreCustomSlab`` as ``FT_StartInterfaceMatch`` reads it.
+    """A ``Slab`` built from any structure, as stored and read back by the workflow.
 
-    Port of ``FT_StoreCustomSlab.from_input_files`` (``custom_slab.py:118-130``,
-    ``200-205``, ``229-267``) without the database: ``structure`` replaces the
-    POSCAR and ``magmom`` the MAGMOM of the INCAR (``magmom_from = 'INCAR'``,
-    the default of ``defaults.json:274``); without it the moments are zeros, as
-    with an INCAR without MAGMOM. Then ``Slab.from_dict`` as in ``run.py:1028``.
-    No checks: see ``workflow_slab``.
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+        The slab structure, without moments.
+    miller : list of int
+        Miller indices of the surface.
+    magmom : sequence of float, optional
+        Initial moment of every atom; zeros when not given.
+    reconstructed : str, optional
+        Name of the reconstruction, stored in the dict (``Slab.from_dict``
+        does not read it back).
+
+    Returns
+    -------
+    pymatgen.core.surface.Slab
+        In the orientation of ``Lattice.from_parameters``, with ``magmom`` as
+        its only site property. The cell is not checked: see
+        ``workflow_slab``.
+
+    Notes
+    -----
+    To remove: port of ``FT_StoreCustomSlab.from_input_files`` of TribChem
+    (``highput/firetasks/custom_slab.py:118-130``, ``200-205``, ``229-267``)
+    without the database: ``structure`` replaces the POSCAR and ``magmom`` the
+    MAGMOM of the INCAR (``magmom_from = 'INCAR'``, the default of
+    ``defaults.json:274``). The final ``Slab.from_dict`` is the reading of
+    ``run.py:1028``.
     """
-    # custom_slab.py:121-130
     slab = Slab(
         lattice=structure.lattice,
         species=structure.species,
@@ -148,12 +256,13 @@ def custom_slab(structure, miller, magmom=None, reconstructed=None):
         site_properties=structure.site_properties
     )
 
-    # custom_slab.py:200-205, MAGMOM of the INCAR or zeros
+    # Moments of the file, or zeros.
     if magmom is None:
         magmom = [0] * len(structure)
     slab.add_site_property('magmom', magmom)
 
-    # custom_slab.py:229-267, the "structure.opt" entry of the database
+    # The slab as stored: lattice parameters without matrix, magmom as the
+    # only site property.
     opt = {
         "@class": "Slab",
         "@module": "pymatgen.core.surface",
@@ -192,5 +301,5 @@ def custom_slab(structure, miller, magmom=None, reconstructed=None):
         ]
     }
 
-    # run.py:1028
+    # Read back as the workflow reads a stored slab.
     return Slab.from_dict(opt)

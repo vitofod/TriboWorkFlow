@@ -1,12 +1,22 @@
-"""Read the TOML settings into the dataclasses of ``schema.py``.
+# Author: Vito Foderà
+# Created: 2026-10-23
 
-As in Xsorb (``xsorb/settings/settings.py:78-109``, CC BY 4.0) the file is
-read with tomllib and each table is converted by dacite. Differences:
+"""Reading of the TOML settings into the dataclasses of ``schema.py``.
+
+The file is read with ``tomllib``, every table is converted by dacite into
+its dataclass, and then the ``check`` methods of the schema validate the
+result. Every error is a ``SettingsError`` that names the file and the TOML
+path of the field.
+
+Notes
+-----
+As in Xsorb (``xsorb/settings/settings.py:78-109``, CC BY 4.0) each table is
+converted by dacite. Differences:
 
 - dacite runs with ``strict=True`` on every table of the schema (Xsorb only
-  on ``Structure``); unknown keys are found first by
-  ``_check_unknown_keys``, which gives their full path and the allowed keys.
-  The pw.x namelists are free tables: their keys are those of pw.x;
+  on ``Structure``); unknown keys are found first by ``_check_unknown_keys``,
+  which gives their full path and the allowed keys. The pw.x namelists are
+  free tables: their keys are those of pw.x;
 - in the tables of the schema integers are accepted for real numbers, and
   booleans are not accepted for numbers;
 - after dacite, ``validate`` runs the ``check`` methods of the schema.
@@ -25,7 +35,24 @@ from .schema import KEY_HINTS, SCHEMA_VERSION, Settings, SettingsError, join, wa
 
 
 def load_settings(path):
-    """Read, convert and validate a TOML settings file; return ``Settings``."""
+    """Read, convert and validate a TOML settings file.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The settings file.
+
+    Returns
+    -------
+    Settings
+        With ``source`` set to ``path``.
+
+    Raises
+    ------
+    SettingsError
+        If the file cannot be read, is not valid TOML or does not follow the
+        schema.
+    """
     path = Path(path)
     try:
         with open(path, 'rb') as f:
@@ -43,7 +70,23 @@ def load_settings(path):
 
 
 def settings_from_dict(data):
-    """Convert and validate the dict of a TOML settings file."""
+    """Convert and validate the dict of a TOML settings file.
+
+    Parameters
+    ----------
+    data : dict
+        The settings as read by ``tomllib``.
+
+    Returns
+    -------
+    Settings
+        With ``source`` left to None.
+
+    Raises
+    ------
+    SettingsError
+        If ``data`` does not follow the schema.
+    """
     version = data.get('schema_version')
     if isinstance(version, bool) or version != SCHEMA_VERSION:
         found = 'missing' if version is None else f'unsupported value {version!r}'
@@ -64,7 +107,17 @@ def settings_from_dict(data):
 
 
 def validate(settings):
-    """Run every check of the schema, innermost tables first."""
+    """Run every check of the schema, innermost tables first.
+
+    Parameters
+    ----------
+    settings : Settings
+
+    Raises
+    ------
+    SettingsError
+        At the first check that fails.
+    """
     for path, node in walk(settings):
         if hasattr(node, 'check'):
             node.check(path)

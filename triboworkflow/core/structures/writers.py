@@ -1,19 +1,25 @@
+# Author: Vito Foderà
+# Created: 2026-10-23
+
 """Writing of xyz and extxyz files.
 
 - xyz: plain XYZ, elements and cartesian positions in angstrom only. The
   format has no place for cell, QE labels, constraints or moments: they are
   not written.
-- extxyz: ASE's writer, with cell, ``pbc="T T T"``, ``initial_magmoms``
-  (``magmom``), ``qe_label`` when a label differs from its element, the other
-  per-atom data as extra columns, and the constraints as ``move_mask``, which
-  is cartesian. Flags along the lattice vectors are converted when possible
-  (``constraints.cartesian_if_pos``), otherwise StructureError. Every atom
-  gets its own ``FixCartesian``: ASE writes the atoms left out of a list of
-  ``FixCartesian`` as fixed, and keeps only the first kind of a mixed list
-  (``ase/io/extxyz.py:894-910``). When some atoms had no constraints in
-  the source, the column ``constraint_given`` marks the others, so that
-  ``read_structure`` gives them back as ``None``. The structure properties
-  (e.g. ``qe_species`` of a PWI) are not written.
+- extxyz: cell, ``pbc="T T T"``, ``initial_magmoms`` (``magmom``),
+  ``qe_label`` when a label differs from its element, the other per-atom
+  data as extra columns, and the constraints as ``move_mask``, which is
+  cartesian. Flags along the lattice vectors are converted when possible
+  (``constraints.cartesian_if_pos``), otherwise ``StructureError``. When some
+  atoms had no constraints in the source, the column ``constraint_given``
+  marks the others, so that ``read_structure`` gives them back as ``None``.
+  The structure properties (e.g. ``qe_species`` of a PWI) are not written.
+
+Notes
+-----
+The files are written by ASE. Every atom gets its own ``FixCartesian``:
+ASE 3.26 writes the atoms left out of a list of ``FixCartesian`` as fixed,
+and keeps only the first kind of a mixed list (``ase/io/extxyz.py:894-910``).
 """
 
 from pathlib import Path
@@ -28,7 +34,19 @@ from .model import CONSTRAINT_GIVEN, StructureError
 
 
 def write_structure(structure, path, format='extxyz'):
-    """Write ``structure`` to ``path`` as ``xyz`` or ``extxyz``."""
+    """Write a structure to a file.
+
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+    path : str or pathlib.Path
+    format : {'extxyz', 'xyz'}, optional
+
+    Raises
+    ------
+    StructureError
+        For another format, or data that the format cannot hold.
+    """
     path = Path(path)
     if format == 'xyz':
         atoms = to_atoms(structure)
@@ -41,7 +59,24 @@ def write_structure(structure, path, format='extxyz'):
 
 
 def extxyz_atoms(structure):
-    """The ASE Atoms that ``write_structure`` writes as extxyz."""
+    """The ASE Atoms that ``write_structure`` writes as extxyz.
+
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+
+    Returns
+    -------
+    ase.Atoms
+        With one ``FixCartesian`` per atom when the structure has constraints,
+        and the array ``constraint_given`` when some atoms have none.
+
+    Raises
+    ------
+    StructureError
+        For per-atom data with None or ragged values, or constraints that are
+        not cartesian in this cell.
+    """
     if_pos = cartesian_if_pos(structure)
     atoms = to_atoms(structure)
     atoms.set_constraint()

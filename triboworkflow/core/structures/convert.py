@@ -1,23 +1,31 @@
+# Author: Vito Foderà
+# Created: 2026-10-23
+
 """Conversion between pymatgen structures and ASE Atoms, without losses.
 
-pymatgen's ``AseAtomsAdaptor`` does the conversion of cell, positions,
-magnetic moments, charges and extra arrays. Two things it does not keep, and
-that are done here (pymatgen 2024.6.10, ``pymatgen/io/ase.py``):
+pymatgen's ``AseAtomsAdaptor`` converts cell, positions, magnetic moments,
+charges and extra arrays. This module adds what the adaptor does not keep:
+the constraints in both frames and the QE labels.
 
-- constraints: ``get_atoms`` raises on ``selective_dynamics`` free along only
-  some directions (166-174), and ``get_structure`` keeps ``FixAtoms`` only,
-  dropping ``FixCartesian`` and ``FixScaled`` with a warning (258-271);
-- QE labels, which pymatgen keeps in ``site.label`` and ASE does not have:
-  here they travel as the ASE array ``qe_label``.
+Notes
+-----
+Constraints map as follows (``model.py``):
 
-Constraints map as follows (``model.py``): ``if_pos`` <-> ``FixCartesian``
-(an explicit ``1 1 1`` is a ``FixCartesian`` with nothing fixed, so that it
-stays apart from an atom without constraints), ``selective_dynamics`` <->
-``FixScaled``, ``FixAtoms`` -> fully fixed in the frame of the others. Any
-other ASE constraint, both frames in one Atoms, or an atom in two
-constraints raises ``StructureError``.
+- ``if_pos`` <-> ``FixCartesian``; an explicit ``1 1 1`` is a
+  ``FixCartesian`` with nothing fixed, so that it stays apart from an atom
+  without constraints;
+- ``selective_dynamics`` <-> ``FixScaled``;
+- ``FixAtoms`` -> fully fixed, in the frame of the other constraints.
 
+Any other ASE constraint, both frames in one Atoms, or an atom in two
+constraints raises ``StructureError``. QE labels, which pymatgen keeps in
+``site.label`` and ASE does not have, travel as the ASE array ``qe_label``.
 A ``Slab`` becomes plain Atoms: ASE has no place for the slab metadata.
+
+In pymatgen 2024.6.10 (``pymatgen/io/ase.py``) ``get_atoms`` raises on
+``selective_dynamics`` free along only some directions (166-174), and
+``get_structure`` keeps ``FixAtoms`` only, dropping ``FixCartesian`` and
+``FixScaled`` with a warning (258-271).
 """
 
 from collections import defaultdict
@@ -32,7 +40,22 @@ from .model import CONSTRAINT_KEYS, IF_POS, QE_LABEL, SELECTIVE_DYNAMICS, Struct
 
 
 def to_atoms(structure):
-    """ASE Atoms of a pymatgen structure, with its constraints and QE labels."""
+    """ASE Atoms of a pymatgen structure, with its constraints and QE labels.
+
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+        An ordered structure; a ``Slab`` loses its slab metadata.
+
+    Returns
+    -------
+    ase.Atoms
+
+    Raises
+    ------
+    StructureError
+        For partial occupancies, or ``if_pos`` values other than 0 and 1.
+    """
     if not structure.is_ordered:
         raise StructureError('only ordered structures (no partial occupancies) are supported')
     key, values = file_constraints(structure)
@@ -49,7 +72,21 @@ def to_atoms(structure):
 
 
 def to_structure(atoms):
-    """pymatgen Structure of ASE Atoms, with constraints and QE labels."""
+    """pymatgen Structure of ASE Atoms, with constraints and QE labels.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+
+    Returns
+    -------
+    pymatgen.core.structure.Structure
+
+    Raises
+    ------
+    StructureError
+        For constraints that cannot be represented (see the module notes).
+    """
     work = atoms.copy()
     work.calc = atoms.calc
     key, values = _site_constraints(atoms)

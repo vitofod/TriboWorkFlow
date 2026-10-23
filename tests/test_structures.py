@@ -1,8 +1,18 @@
-"""Structures: readers, ASE <-> pymatgen conversion, writers, constraints and
-the slabs of the workflows (triboworkflow.core.structures).
+# Author: Vito Foderà
+# Created: 2026-10-23
 
-The historic path of the slabs is compared with TribChem in the golden cases
-custom_slab_* (golden_cases.py); here are its checks and records.
+"""Tests of ``triboworkflow.core.structures``.
+
+Readers, ASE <-> pymatgen conversion, writers, constraints and the slabs of
+the workflows, with their checks and records.
+
+Notes
+-----
+To remove: the slab of ``custom_slab`` is compared with TribChem's
+``FT_StoreCustomSlab`` in the golden cases ``custom_slab_*``
+(``golden_cases.py``); the JSON slabs of some tests are those of TribChem's
+matching script, and the calc_type constraints come from the vendored
+``VaspInputSet``.
 """
 
 import contextlib
@@ -214,10 +224,12 @@ def test_pwi_errors(tmp_path, edit, message):
         st.read_structure(write(tmp_path, 'a.pwi', PWI.replace(*edit)))
 
 
-def test_tribchem_pwi_reader_is_not_used(tmp_path):
-    """TribChem's physics/dft/qe.py ReadQEinput needs its own card order; this file
-    (CELL_PARAMETERS first) gives ValueError there (verified in the historic
-    environment), and is read here."""
+def test_pwi_with_cell_parameters_first(tmp_path):
+    """CELL_PARAMETERS before ATOMIC_SPECIES, the usual order, is read.
+
+    To remove: TribChem's physics/dft/qe.py ReadQEinput needs its own card
+    order and gives ValueError on this file (verified in the historic
+    environment)."""
     assert len(st.read_structure(write(tmp_path, 'a.pwi', PWI))) == 4
 
 
@@ -368,10 +380,10 @@ def test_write_unknown_format(tmp_path):
 
 # --- POSCAR -------------------------------------------------------------------
 
-def test_poscar_as_tribchem_reads_it(tmp_path):
+def test_poscar_as_pymatgen_from_file(tmp_path):
     path = poscar(tmp_path)
     s = st.read_structure(path)
-    ref = Structure.from_file(path)  # custom_slab.py:120
+    ref = Structure.from_file(path)
     assert json.dumps(s.as_dict(), default=str) == json.dumps(ref.as_dict(), default=str)
     assert [list(map(bool, f)) for f in s.site_properties['selective_dynamics']] == \
         [[False] * 3, [False] * 3, [True] * 3]
@@ -389,7 +401,7 @@ def slab_fields(slab):
 
 
 @pytest.mark.parametrize('name', sorted(golden_cases.slab_dicts()))
-def test_json_slab_of_tribchem_without_losses(tmp_path, name):
+def test_json_slab_without_losses(tmp_path, name):
     dct = golden_cases.slab_dicts()[name]
     path = write(tmp_path, f'{name}.json', json.dumps(dct))
     slab = st.read_structure(path)
@@ -558,12 +570,12 @@ def test_both_frames_rejected():
 
 
 @pytest.mark.parametrize('calc_type, expected', [
-    ('interface_z_relax', [(0, 0, 1), (0, 0, 1), (1, 1, 1)]),   # H free (vasp_tools.py:550-551)
+    ('interface_z_relax', [(0, 0, 1), (0, 0, 1), (1, 1, 1)]),   # H atoms free
     ('slab_pos_relax', [(1, 1, 1)] * 3),
     ('slab_from_scratch', [(1, 1, 1)] * 3),
 ])
 def test_constraints_of_the_calc_type(calc_type, expected):
-    """In the workflows the constraints are those that TribChem's
+    """In the workflows the constraints are those that the vendored
     VaspInputSet sets for the calc_type, with the H exception."""
     from triboworkflow.vendored.highput.utils.vasp_tools import VaspInputSet
     s = Structure(Lattice.hexagonal(2.556, 25), ['Cu', 'Cu', 'H'],
@@ -607,8 +619,8 @@ def test_slab_constructor_already_reorients():
 @pytest.mark.parametrize('name, message', [
     ('tilted', 'c is not perpendicular to a'), ('lefthanded', 'left-handed cell')])
 def test_workflow_slab_unverified_cells(tmp_path, name, message):
-    """TribChem accepts these cells and transforms them
-    (golden custom_slab_tilted and custom_slab_lefthanded); here an error."""
+    """The custom-slab path mirrors or tilts these cells (golden
+    custom_slab_tilted and custom_slab_lefthanded); workflow_slab refuses them."""
     with pytest.raises(st.StructureError, match=message):
         st.workflow_slab(st.read_structure(poscar(tmp_path, name)), [1, 1, 1])
     golden = golden_cases.read_golden(f'custom_slab_{name}')['slab']['lattice']['matrix']
@@ -632,7 +644,7 @@ def test_workflow_slab_keeps_the_moments_of_the_file(tmp_path):
     ws = st.workflow_slab(s, [1, 0, 0])
     assert ws.slab.site_properties['magmom'] == [2.2, -2.2, 2.2, -2.2]
     assert ws.added == [] and ws.dropped == ['if_pos']
-    assert 'magmom' not in ws.slab.oriented_unit_cell.site_properties  # as the POSCAR of TribChem
+    assert 'magmom' not in ws.slab.oriented_unit_cell.site_properties  # moments passed apart
 
 
 def test_workflow_slab_database_path(tmp_path):
@@ -641,7 +653,7 @@ def test_workflow_slab_database_path(tmp_path):
     ws = st.read_workflow_slab(path, [1, 1, 1])
     assert ws.path == 'database' and not ws.rotated and ws.added == []
     assert json.dumps(ws.slab.as_dict(), default=str) == \
-        json.dumps(Slab.from_dict(copy.deepcopy(dct)).as_dict(), default=str)  # run.py:1028
+        json.dumps(Slab.from_dict(copy.deepcopy(dct)).as_dict(), default=str)
     with pytest.raises(st.StructureError, match='miller_index'):
         st.read_workflow_slab(path, [1, 0, 0])
 

@@ -1,4 +1,12 @@
-"""Reading and writing of atomic structures (data conventions: ``model.py``)."""
+# Author: Vito Foderà
+# Created: 2026-10-22
+
+"""Reading, conversion and writing of atomic structures.
+
+The data carried by a structure (elements, QE labels, constraints, moments)
+are described in ``model.py``; the formats and their limits in
+``docs/structures.md``.
+"""
 
 from .constraints import (AppliedConstraints, calc_type_if_pos, cartesian_if_pos,
                           if_pos_from_lattice_flags, resolve_if_pos)
