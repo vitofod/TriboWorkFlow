@@ -1,5 +1,5 @@
 """Development environment: it matches envs/dev/requirements.lock, which keeps
-the versions of the historic environment except for ASE."""
+the versions of the historic environment except for ASE, and adds dacite."""
 
 import sys
 import tomllib
@@ -26,7 +26,7 @@ def test_dev_lock_aligned_with_historic_lock(read_lock):
     dev, historic = read_lock('dev'), read_lock('historic')
     different = {name: (historic.get(name), version)
                  for name, version in dev.items() if historic.get(name) != version}
-    assert different == {'ase': ('3.23.0', '3.26.0')}
+    assert different == {'ase': ('3.23.0', '3.26.0'), 'dacite': (None, '1.8.1')}
 
 
 def test_pyproject_dependencies_satisfied_by_lock(read_lock):

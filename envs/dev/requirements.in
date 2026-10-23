@@ -9,6 +9,8 @@ scipy==1.13.1
 pymatgen==2024.6.10
 # Same version as Xsorb, whose ASE calculator uses private ASE symbols.
 ase==3.26.0
+# TOML settings into dataclasses, as in Xsorb (which requires >=1.8.1).
+dacite>=1.8.1
 
 pytest
 pip

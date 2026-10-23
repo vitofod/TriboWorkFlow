@@ -1,0 +1,93 @@
+# Settings for the interface workflow: complete example.
+#
+# The numbers are illustrative, not recommended values. The namelists and
+# the species are the template of every pw.x input of the workflow: the
+# namelist keys are written as given, and keys left out take the pw.x
+# defaults. calculation, prefix, outdir, title and restart_mode are set by
+# the code for every calculation and must not be given here.
+# Field reference: docs/configuration.md.
+
+schema_version = 1
+
+[interface]
+engine = "qe"                      # Engine of the steps that run calculations.
+# engines = { pes = "qe" }         # Per-step engine: pes, adhesion, ppes, charge.
+set_bm = true                      # Strain weights = bulk moduli of the two materials.
+
+# Bottom slab first, then top slab.
+[[interface.slabs]]
+file = "slabs/Cu111.extxyz"
+mid = "mp-30"
+formula = "Cu"
+miller = [1, 1, 1]
+bulk_modulus = 140.0               # GPa, as TribChem's bulk modulus.
+
+[[interface.slabs]]
+file = "slabs/Al111.extxyz"
+mid = "mp-134"
+formula = "Al"
+miller = [1, 1, 1]
+bulk_modulus = 76.0                # GPa
+
+[interface.inter_params]           # Missing keys take TribChem's defaults.
+max_area = 150.0
+interface_distance = 2.0
+max_length_tol = 0.02
+max_area_ratio_tol = 0.05
+best_match = "area"
+
+[namelists.CONTROL]
+nstep = 150
+max_seconds = 84600                # Seconds; lower than execution.walltime.
+tstress = false
+tprnfor = true
+pseudo_dir = "/path/to/pseudo"
+disk_io = "low"
+etot_conv_thr = 1.0e-4             # Ry
+forc_conv_thr = 1.0e-3             # Ry/bohr
+
+[namelists.SYSTEM]
+ecutwfc = 50.0                     # Ry
+ecutrho = 400.0                    # Ry
+occupations = "smearing"
+degauss = 0.01                     # Ry
+smearing = "mv"
+nspin = 2
+vdw_corr = "none"
+# Grimme-D2 instead; the other keys are optional, as in pw.x. The index of
+# london_c6 and london_rvdw is the position in [[atomic_species]].
+# vdw_corr = "grimme-d2"
+# london_s6 = 0.75
+# london_rcut = 200.0              # bohr
+# "london_c6(1)" = 159.927         # Ry*bohr^6 (pw.x value for Ar)
+# "london_rvdw(1)" = 3.014         # bohr (pw.x value for Ar)
+
+[namelists.ELECTRONS]
+electron_maxstep = 200
+conv_thr = 1.0e-6                  # Ry
+mixing_mode = "local-TF"
+mixing_beta = 0.3
+
+[[atomic_species]]
+label = "Cu"
+mass = 63.546
+pseudopotential = "Cu.UPF"
+starting_magnetization = 0.5
+
+[[atomic_species]]
+label = "Al"
+mass = 26.982
+pseudopotential = "Al.UPF"
+starting_magnetization = 0.5
+
+[k_points]
+mode = "kdens"                     # Grid from the density, once the cell is known.
+kdens = 7.5                        # As TribChem's kdens: k-points per 1/angstrom of each reciprocal vector.
+
+[execution]
+scheduler = "slurm"
+jobscript = "jobscript.sh"         # Copied for every job, with the launch line added.
+run_command = "mpirun -np 32 pw.x -nk 4"
+groups = 10                        # Jobs over which the calculations of a step are spread.
+walltime = 86400                   # Seconds.
+polling_interval = 1800            # Seconds between two checks of the jobs.

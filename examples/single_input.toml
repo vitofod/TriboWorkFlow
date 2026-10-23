@@ -1,0 +1,91 @@
+# Settings for one pw.x input: template with placeholders.
+#
+# The structure (cell, positions, labels, constraints) comes from an external
+# file; electronic parameters, pseudopotentials and k-points come from this
+# file. The values are those of the reference example; they are not
+# universal pw.x defaults. The namelist keys are written to the input as
+# given, and any pw.x key can be added; keys left out take the pw.x
+# defaults. Empty strings and cutoffs equal to 0.0 are placeholders: the
+# file loads, but no input is generated until they are filled in.
+# Field reference: docs/configuration.md.
+
+schema_version = 1
+
+[structure]
+file = ""                          # TO FILL IN: CIF, XYZ, extxyz, PWI or POSCAR file.
+format = "auto"                    # auto | cif | xyz | extxyz | pwi | poscar
+frame = 0                          # Counted from 0, for files with several structures.
+xyz_units = "angstrom"             # Units of the coordinates of a plain XYZ file.
+preserve_atom_order = true         # Needed by the constraints given by atom index.
+preserve_species_labels = true     # Keeps labels such as Fe1 and Fe2 apart.
+
+[structure.cell]
+source = "file"                    # file | config: cell from the file or from vectors.
+units = "angstrom"
+vectors = []                       # With source = "config": three row vectors.
+# No cell and no vacuum are ever created automatically.
+
+[structure.constraints]
+read_from_file = true              # Read if_pos from the structure file.
+default_if_pos = [1, 1, 1]         # For atoms without constraints in the file.
+overrides = []                     # Atoms counted from 1, e.g.
+# overrides = [ { atoms = [6, 7, 8], if_pos = [0, 0, 0] } ]
+# Precedence: override > constraint read from the file > default_if_pos.
+
+[namelists.CONTROL]
+calculation = "relax"              # relax | scf
+title = "A_title"
+prefix = "A_prefix"
+restart_mode = "from_scratch"      # from_scratch | restart
+nstep = 150                        # For relax.
+outdir = "path/to/output_dir"      # Path on the machine that runs pw.x.
+max_seconds = 84600                # Seconds.
+tstress = false
+tprnfor = true                     # Forces also in scf calculations.
+pseudo_dir = "path/to/PSEUDO"      # Path on the machine that runs pw.x.
+disk_io = "low"                    # none | low | medium | high
+etot_conv_thr = 1.0e-4             # Ry
+forc_conv_thr = 1.0e-3             # Ry/bohr
+
+[namelists.SYSTEM]
+# ibrav = 0, nat and ntyp are written by the generator.
+ecutwfc = 0.0                      # TO FILL IN: Ry, > 0.
+ecutrho = 0.0                      # TO FILL IN: Ry, > 0. No ratio is assumed.
+occupations = "smearing"
+degauss = 0.01                     # Ry
+smearing = "mv"
+nspin = 2                          # Spin-polarised; starting_magnetization per species.
+vdw_corr = "none"                  # E.g. grimme-d2, grimme-d3; see docs/configuration.md.
+
+[namelists.ELECTRONS]
+electron_maxstep = 200
+conv_thr = 1.0e-6                  # Ry
+mixing_mode = "local-TF"           # local-TF | plain
+mixing_beta = 0.3
+diagonalization = "david"
+
+[namelists.IONS]
+ion_dynamics = "bfgs"              # &IONS is written only for relax.
+
+# One entry per species label of the structure. The order of the entries is
+# the order of ATOMIC_SPECIES and of starting_magnetization(i): it is never
+# sorted. To add a species, copy the whole block.
+[[atomic_species]]
+label = ""                         # TO FILL IN: label as in ATOMIC_POSITIONS.
+mass = 12.01                       # amu, > 0.
+pseudopotential = ""               # TO FILL IN: UPF file name.
+starting_magnetization = 0.5       # Written as starting_magnetization(i); never set automatically.
+
+[k_points]
+mode = "automatic"                 # automatic | gamma | kdens
+grid = [8, 8, 1]                   # nk1, nk2, nk3
+offset = [0, 0, 0]                 # sk1, sk2, sk3: each 0 or 1.
+gamma_for_unshifted_1x1x1 = true   # A grid 1 1 1 with offset 0 0 0 is written as K_POINTS gamma.
+
+[generation]
+file_prefix = "input.pwi"          # Name of the generated input file.
+overwrite = false                  # If false, an existing file is an error.
+atomic_positions_units = "angstrom"
+cell_parameters_units = "angstrom"
+
+# Reference: https://www.quantum-espresso.org/Doc/INPUT_PW.html

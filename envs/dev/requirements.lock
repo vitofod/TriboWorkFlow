@@ -158,6 +158,9 @@ cycler==0.12.1 \
     # via
     #   -c envs/dev/historic-constraints.txt
     #   matplotlib
+dacite==1.8.1 \
+    --hash=sha256:cc31ad6fdea1f49962ea42db9421772afe01ac5442380d9a99fcf3d188c61afe
+    # via -r envs/dev/requirements.in
 fonttools==4.53.1 \
     --hash=sha256:02569e9a810f9d11f4ae82c391ebc6fb5730d95a0657d24d754ed7763fb2d122 \
     --hash=sha256:0679a30b59d74b6242909945429dbddb08496935b82f91ea9bf6ad240ec23397 \
