@@ -1,0 +1,595 @@
+"""Golden (characterisation) values of the TribChem physics modules.
+
+Every case calls TribChem code under a root package, 'tribchem' in the
+historic environment or 'triboworkflow.vendored' in the development one,
+with the arguments that the TribChem Firetasks and workflows pass, and
+returns plain JSON data. The golden values are the results obtained in the
+historic environment, stored in tests/golden/<case>.json:
+tests/historic/test_golden.py checks that they are reproduced there and
+tests/test_golden.py that the vendored modules give the same results.
+
+The input data are copies of TribChem files, kept in tests/data/tribchem/
+under their path inside the tribchem package and checked against the source
+manifest (envs/historic/tribchem-source.sha256).
+
+Usage, in the historic environment only:
+    python tests/golden_cases.py [<case> ...]
+writes the golden files of the given cases (default: all of them).
+"""
+
+import ast
+import contextlib
+import copy
+import importlib
+import io
+import json
+import math
+import os
+import re
+import sys
+import tempfile
+import time
+import warnings
+from pathlib import Path
+
+# OpenBLAS results depend on its number of threads at round-off level (PES
+# and RBF values differ between 1, 8 and 12 threads): the golden values are
+# produced and checked with one thread, set before numpy is imported.
+BLAS_THREADS = {'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1'}
+if 'numpy' in sys.modules and any(os.environ.get(k) != v for k, v in BLAS_THREADS.items()):
+    raise RuntimeError(f'numpy was imported before setting {BLAS_THREADS}')
+os.environ.update(BLAS_THREADS)
+
+import numpy as np  # noqa: E402
+
+import vendoring  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / 'tests' / 'data' / 'tribchem'
+GOLDEN = ROOT / 'tests' / 'golden'
+HISTORIC, VENDORED = 'tribchem', 'triboworkflow.vendored'
+
+# Seed set by the cases before every MEP calculation: get_bs_line adds
+# unseeded np.random noise to the starting string (A05).
+SEED = 0
+
+UUID4 = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}')
+
+MATCHING_SCRIPT = 'physics/tribology/tests/test_matching_interfaces.py.py'
+PPES_DATA = 'data/homogeneous/ppes_data'
+
+
+class TribChem:
+    """The TribChem modules under a root package."""
+
+    def __init__(self, root):
+        self.root = root
+
+    def __getitem__(self, module):
+        return importlib.import_module(f'{self.root}.{module}')
+
+
+# =============================================================================
+# Input data
+# =============================================================================
+
+def data_files():
+    """Paths, relative to DATA, of the copied TribChem files."""
+    return sorted(p.relative_to(DATA).as_posix() for p in DATA.rglob('*') if p.is_file())
+
+
+def check_data(rel, manifest, data=DATA):
+    """Problems of <data>/<rel>; an empty list if it equals the TribChem file."""
+    expected = manifest.get('tribchem/' + rel)
+    if expected is None:
+        return [f'tribchem/{rel} is not among the TribChem sources']
+    if vendoring.sha256((Path(data) / rel).read_bytes()) != expected:
+        return ['differs from the original']
+    return []
+
+
+def slab_dicts():
+    """The <name>_dict slabs assigned in the TribChem matching script, read
+    with ast.literal_eval without running the script."""
+    tree = ast.parse((DATA / MATCHING_SCRIPT).read_text())
+    slabs = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id.endswith('_dict')):
+            slabs[node.targets[0].id.removesuffix('_dict')] = ast.literal_eval(node.value)
+    return slabs
+
+
+def load_slab(name):
+    from pymatgen.core.surface import Slab
+    return Slab.from_dict(slab_dicts()[name])
+
+
+# =============================================================================
+# Conversion to JSON data and comparison
+# =============================================================================
+
+def to_data(obj):
+    """Plain JSON data of obj: pymatgen objects through as_dict, arrays as
+    {'ndarray': values, 'dtype': dtype}."""
+    if hasattr(obj, 'as_dict'):
+        return to_data(obj.as_dict())
+    if isinstance(obj, dict):
+        bad = [k for k in obj if not isinstance(k, str)]
+        if bad:
+            raise TypeError(f'dictionary keys that are not strings: {bad!r}')
+        return {k: to_data(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_data(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return {'ndarray': to_data(obj.tolist()), 'dtype': str(obj.dtype)}
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    raise TypeError(f'cannot convert {type(obj).__name__}')
+
+
+def outcome(func, *args, **kwargs):
+    """{'result': data} of func(*args, **kwargs), or {'error': ...} if it raises."""
+    try:
+        return {'result': to_data(func(*args, **kwargs))}
+    except Exception as error:
+        return {'error': type(error).__name__, 'message': str(error)}
+
+
+def strip_uuid(tag):
+    """The tag with its uuid4 replaced by '<uuid4>'; it must contain one."""
+    new, n = UUID4.subn('<uuid4>', tag)
+    if n != 1:
+        raise ValueError(f'tag without exactly one uuid4: {tag!r}')
+    return new
+
+
+def numbers_differ(a, b, tolerance):
+    if a == b or (isinstance(a, float) and isinstance(b, float) and math.isnan(a) and math.isnan(b)):
+        return False
+    if tolerance is None or isinstance(a, bool) or isinstance(b, bool):
+        return True
+    return not math.isclose(a, b, rel_tol=tolerance['rtol'], abs_tol=tolerance['atol'])
+
+
+def compare(expected, actual, tolerance=None, path=''):
+    """Differences between two JSON data trees, as 'path: message' strings.
+
+    Numbers must be equal; with tolerance = {'rtol': ..., 'atol': ...} floats
+    may differ within math.isclose. Integers and floats are told apart.
+    """
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        diffs = [f'{path}/{k}: missing' for k in expected if k not in actual]
+        diffs += [f'{path}/{k}: unexpected' for k in actual if k not in expected]
+        for k in expected:
+            if k in actual:
+                diffs += compare(expected[k], actual[k], tolerance, f'{path}/{k}')
+        return diffs
+    if isinstance(expected, list) and isinstance(actual, list):
+        if len(expected) != len(actual):
+            return [f'{path}: length {len(actual)} instead of {len(expected)}']
+        diffs = []
+        for i, (e, a) in enumerate(zip(expected, actual)):
+            diffs += compare(e, a, tolerance, f'{path}/{i}')
+        return diffs
+    if type(expected) is not type(actual):
+        return [f'{path}: {actual!r} instead of {expected!r}']
+    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+        return [f'{path}: {actual!r} instead of {expected!r}'] \
+            if numbers_differ(expected, actual, tolerance) else []
+    return [] if expected == actual else [f'{path}: {actual!r} instead of {expected!r}']
+
+
+# =============================================================================
+# Parameters of the cases
+# =============================================================================
+
+# test_matching_interfaces.py.py: InterfaceMatcher(slab_2=Ag(111), slab_1=Pt(111), ...).
+SCRIPT_MATCH = {'strain_weight_1': 1, 'strain_weight_2': 1, 'max_area': 100.0,
+                'max_length_tol': 0.01, 'max_angle_tol': 1.5, 'max_area_ratio_tol': 1,
+                'best_match': 'area', 'interface_distance': 'auto'}
+
+# highput/firetasks/defaults.json, 'inter_params', as FT_GetHighSymmetryPts
+# uses them at the first attempt (factor 1): max_angle_tol forced to 0.4
+# (slabs.py:579-582, A02).
+FIRETASK_MATCH = {'max_area': 150, 'interface_distance': 2, 'max_angle_tol': 0.4,
+                  'max_length_tol': 0.02, 'max_area_ratio_tol': 0.05,
+                  'strain_weight_1': 1, 'strain_weight_2': 1, 'best_match': 'area'}
+
+# (slab_1, slab_2, matching parameters)
+PAIRS = {
+    'pt111_ag111': ('pt111', 'ag111', SCRIPT_MATCH),
+    'cu111_al111': ('cu111', 'al111', FIRETASK_MATCH),
+    'cu111_cu111': ('cu111', 'cu111', FIRETASK_MATCH),
+    'cu111_al111_no_match': ('cu111', 'al111', FIRETASK_MATCH | {'max_area': 20}),
+}
+
+# Computational parameters of an interface, with the keys produced by
+# generate_interface_comp_params (manipulate_struct.py).
+COMP_PARAMS = {'functional': 'PBE', 'encut': 400, 'kdens': 6, 'is_metal': True,
+               'use_spin': False, 'vdw': 'dftd2'}
+
+# highput/firetasks/defaults.json, 'StartPPES': shifts and calc_type.
+PPES_SHIFTS = [-0.5, -0.25, 0.0, 0.25, 0.5, 2.5, 3.0, 4.0, 5.0, 7.5]
+PPES_CALC_TYPE = 'slab_from_scratch'
+
+# highput/firetasks/defaults.json, 'CalcShearStrength'; shearstr.py:113-127.
+SHEAR = {'method': 'zerotemp', 'delta': 0.01, 'npts': 101}
+SHEAR_PES = {'replicate_of': (5, 5), 'density': 20, 'tol': 1e-4}
+
+# PES data of physics/tribology/tests: (file, columns, cell, make_pes arguments)
+PES_GRIDS = {
+    # test_pes.py: Ti3C2O2 with replicate_of=(n, n) from the command line
+    'ti3c2o2': ('physics/tribology/tests/Ti3C2O2_pes.txt', slice(None),
+                np.array([[1, 0], [-0.5, np.sqrt(3) / 2]]) * 2.974964365,
+                {'replicate_of': (5, 5), 'orthorombize': False, 'theta': False,
+                 'density': 20, 'tol': 1e-4}),
+    # test_mep.py: phosphorene, rectangular cell (given there as its two sides)
+    'phosphorene': ('physics/tribology/tests/grid.txt', slice(1, None),
+                    np.diag([3.31420142, 4.449501367]),
+                    {'replicate_of': (2, 2), 'orthorombize': False, 'theta': False,
+                     'density': 10, 'tol': 1e-4}),
+    # test_pes.py, commented block: PtSe2, orthorombized and rotated
+    'ptse2': ('physics/tribology/tests/ptse2.txt', slice(None),
+              np.array([[3.7100000381, 0.000000000, 0.000000000],
+                        [-1.8550000191, 3.2129542811, 0.000000000],
+                        [0.00000000000, 0.000000000, 30.000000000]]),
+              {'replicate_of': (3, 3), 'orthorombize': True, 'theta': True,
+               'density': 20, 'tol': 1e-4}),
+}
+
+
+# =============================================================================
+# Building blocks, as in the Firetasks
+# =============================================================================
+
+def match(tc, pair):
+    """FT_GetHighSymmetryPts.generate_interface (slabs.py:584-590), one attempt."""
+    name_1, name_2, params = PAIRS[pair]
+    matcher = tc['physics.tribology.interface_matcher'].InterfaceMatcher(
+        slab_1=load_slab(name_1), slab_2=load_slab(name_2), **params)
+    top_aligned, bot_aligned = matcher.get_centered_slabs()
+    interface = matcher.get_interface()
+    structure = tc['highput.utils.manipulate_struct'].slab_to_structure(interface)
+    return matcher, bot_aligned, top_aligned, interface, structure
+
+
+def high_symmetry(tc, bot_slab, top_slab):
+    """FT_GetHighSymmetryPts.get_hspts (slabs.py:620-676) without the prints."""
+    hsym = tc['physics.tribology.highsym']
+    flipped_top = tc['physics.tribology.interface_matcher'].flip_slab(top_slab)
+    top_hsp_unique, top_hsp_all = hsym.get_slab_hs(flipped_top)
+    bottom_hsp_unique, bottom_hsp_all = hsym.get_slab_hs(bot_slab)
+    cell = bot_slab.lattice.matrix
+    hsp_unique = hsym.get_interface_hs(bottom_hsp_unique, top_hsp_unique, cell)
+    hsp_all = hsym.get_interface_hs(bottom_hsp_all, top_hsp_all, cell)
+    c_hsp_u, c_hsp_a = hsym.fix_hs_dicts(hsp_unique, hsp_all, top_slab, bot_slab)
+    hs = {
+        'bot_unique': hsym.pbc_hs_points(bottom_hsp_unique, cell),
+        'bot_all': hsym.pbc_hs_points(bottom_hsp_all, cell),
+        'top_unique': hsym.pbc_hs_points(top_hsp_unique, cell),
+        'top_all': hsym.pbc_hs_points(top_hsp_all, cell),
+        'inter_unique': c_hsp_u,
+        'inter_all': c_hsp_a}
+    steps = {'top_hsp_unique': top_hsp_unique, 'top_hsp_all': top_hsp_all,
+             'bottom_hsp_unique': bottom_hsp_unique, 'bottom_hsp_all': bottom_hsp_all,
+             'hsp_unique': hsp_unique, 'hsp_all': hsp_all}
+    return hs, steps
+
+
+_HIGH_SYMMETRY = {}
+
+
+def matched_high_symmetry(tc, pair):
+    """Aligned slabs, hs and steps of high_symmetry for a pair. They are
+    computed once per root package and pair, and copies are returned."""
+    key = (tc.root, pair)
+    if key not in _HIGH_SYMMETRY:
+        _, bot_slab, top_slab, _, _ = match(tc, pair)
+        _HIGH_SYMMETRY[key] = (bot_slab, top_slab, *high_symmetry(tc, bot_slab, top_slab))
+    return copy.deepcopy(_HIGH_SYMMETRY[key])
+
+
+def pes_setup(tc, pair):
+    """Aligned slabs and high-symmetry points, as stored by the matching step:
+    the shifts are JSON-sanitised (lists), as read back from the database."""
+    from monty.json import jsanitize
+    bot_slab, top_slab, hs, _ = matched_high_symmetry(tc, pair)
+    return bot_slab, top_slab, jsanitize(hs['inter_unique']), jsanitize(hs['inter_all'])
+
+
+def tag_prefix(pair):
+    """Tag prefix as built in highput/workflows/interface.py:166-167."""
+    name_1, name_2, _ = PAIRS[pair]
+    return f'{name_1[:-3]}(1, 1, 1)_{name_2[:-3]}(1, 1, 1)'
+
+
+def vis_data(vis):
+    return {'class': type(vis).__name__, 'incar': vis.incar, 'kpoints': vis.kpoints}
+
+
+def inputs_data(structures, vis, tags):
+    return {'structures': structures, 'vis': [vis_data(v) for v in vis],
+            'tags': [strip_uuid(t) for t in tags]}
+
+
+def synthetic_energies(hs_unique, cell):
+    """[[label, x, y, E], ...] sorted by E, as FT_ComputePES builds them
+    (pes.py:194-209), with eV and J/m^2 lists. E is a smooth periodic
+    function of the fractional shift, in place of DFT energies."""
+    inverse = np.linalg.inv(np.asarray(cell)[:2, :2])
+    values = []
+    for label, points in hs_unique.items():
+        x, y = points[0][:2]
+        f = np.array([x, y]) @ inverse
+        energy = -0.5 + 0.05 * (np.cos(2 * np.pi * f[0]) + np.cos(2 * np.pi * f[1]))
+        values.append([label, x, y, float(energy)])
+    return sorted(values, key=lambda v: v[3])
+
+
+def run_mep(tc, rbf, cell, **mep_kwargs):
+    """The three MEP and shear strength calculations of FT_CalcShearStrength
+    (shearstr.py:119-130), with np.random seeded before each one."""
+    MEP = tc['physics.tribology.mep'].MEP
+    results = {}
+    for opt in ['bs_line', 'x', 'y']:
+        np.random.seed(SEED)
+        mep = MEP(rbf=rbf, cell=cell)
+        mep_line, mep_data = mep.get_mep(method=SHEAR['method'], optimization=opt, **mep_kwargs)
+        shear_strength, data_ss_xy = mep.get_shear_strenght(
+            delta=SHEAR['delta'], npts=SHEAR['npts'], optimization=opt)
+        results[opt] = {'mep': mep_line, 'mep_data': mep.mep_data,
+                        'bsmep': mep.bsmep, 'bsmep_data': mep.bsmep_data,
+                        'shear_strength': shear_strength, 'data_ss_xy': data_ss_xy}
+    return results
+
+
+def probe_points(cell_2d, n=7):
+    """n x n points spread over the 2D cell, where the interpolants are read."""
+    f = (np.arange(n) + 0.5) / n
+    fx, fy = np.meshgrid(f, f, indexing='ij')
+    return np.column_stack([fx.ravel(), fy.ravel()]) @ np.asarray(cell_2d)[:2, :2]
+
+
+# =============================================================================
+# Cases
+# =============================================================================
+
+def case_matcher(tc, pair):
+    matcher, bot_aligned, top_aligned, interface, structure = match(tc, pair)
+    return {'top_aligned': top_aligned, 'bot_aligned': bot_aligned,
+            'interface': interface, 'interface_structure': structure,
+            'interface_distance': matcher.get_interface_distance()}
+
+
+def case_highsym(tc, pair):
+    _, _, hs, steps = matched_high_symmetry(tc, pair)
+    return {'hs': hs, 'steps': steps}
+
+
+def case_pes_inputs(tc, pair, calc_type):
+    """highput/workflows/interface.py:176-177."""
+    bot_slab, top_slab, shifts, _ = pes_setup(tc, pair)
+    return inputs_data(*tc['highput.utils.manipulate_struct'].generate_pes_inputs(
+        bot_slab, top_slab, shifts, COMP_PARAMS, tag_prefix(pair), calc_type, 2))
+
+
+def case_interface_shifts(tc, pair):
+    """apply_interface_shifts with one shift, as FT_StartPPES (run.py:1409-1410),
+    and with all the unique shifts at once."""
+    ms = tc['highput.utils.manipulate_struct']
+    bot_slab, top_slab, shifts, _ = pes_setup(tc, pair)
+    every = np.vstack([np.array(v)[:, :2] for v in shifts.values()])
+    return {'single': {k: ms.apply_interface_shifts(bot_slab, top_slab, v) for k, v in shifts.items()},
+            'all': ms.apply_interface_shifts(bot_slab, top_slab, every)}
+
+
+def first_interface(tc, pair):
+    """Interface at the first unique shift, as FT_StartPPES builds the
+    interfaces of the PPES (run.py:1409)."""
+    bot_slab, top_slab, shifts, all_shifts = pes_setup(tc, pair)
+    interface = tc['highput.utils.manipulate_struct'].apply_interface_shifts(
+        bot_slab, top_slab, next(iter(shifts.values())))
+    return interface, shifts, all_shifts
+
+
+def case_ppes_inputs(tc, pair):
+    """highput/workflows/interface.py:429-431."""
+    return inputs_data(*tc['highput.utils.manipulate_struct'].generate_ppes_inputs(
+        first_interface(tc, pair)[0], PPES_SHIFTS, COMP_PARAMS, 'middle', tag_prefix(pair),
+        PPES_CALC_TYPE))
+
+
+def case_chargedisp_inputs(tc, pair):
+    """highput/workflows/electronics.py:80 and 92-93."""
+    ms = tc['highput.utils.manipulate_struct']
+    interface = first_interface(tc, pair)[0]
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', UserWarning)
+        inter_fixed = ms.ManipulateStruct(interface).fix_interface(interface)
+    return inputs_data(*ms.generate_chargedisp_inputs(
+        inter_fixed, COMP_PARAMS, tag_prefix(pair), 'zero', 'slab_from_scratch'))
+
+
+def pes_from_hs(tc, pair):
+    """FT_ComputePES.get_data and compute_pes (pes.py:194-236) on synthetic energies."""
+    get_cell_info = tc['physics.base.solidstate'].get_cell_info
+    Converter = tc['physics.base.units'].Converter
+    structure, shifts, all_shifts = first_interface(tc, pair)
+    cell = structure.lattice.matrix
+    sorted_values = synthetic_energies(shifts, cell)
+    area, _ = get_cell_info(structure.lattice.matrix)
+    sorted_values_jm2 = [[s, x, y, Converter.eV_to_Jm2(v, area * 1e-20)]
+                         for s, x, y, v in sorted_values]
+    get_pes = tc['physics.tribology.potensurf'].get_pes
+    _, v_list, data, rbf = get_pes(all_shifts, sorted_values, cell, title=pair, to_fig=None)
+    _, v_list_jm2, data_jm2, rbf_jm2 = get_pes(all_shifts, sorted_values_jm2, cell,
+                                               title=pair, to_fig=None)
+    return cell, {'energies_ev': sorted_values, 'energies_jm2': sorted_values_jm2,
+                  'hs_all_ev': v_list, 'hs_all_jm2': v_list_jm2,
+                  'pes_ev': data, 'pes_jm2': data_jm2,
+                  'rbf_jm2_at_probes': rbf_jm2(probe_points(cell))}
+
+
+def case_get_pes(tc, pair):
+    return pes_from_hs(tc, pair)[1]
+
+
+def case_shear_from_hs(tc, pair):
+    """FT_CalcShearStrength (shearstr.py:110-127) on the PES of case_get_pes."""
+    cell, pes = pes_from_hs(tc, pair)
+    solver = tc['physics.tribology.pes'].PES(np.array(pes['pes_jm2']), cell)
+    solver.make_pes(**SHEAR_PES)
+    return run_mep(tc, solver._rbf, cell)
+
+
+def pes_grid(tc, name):
+    rel, columns, cell, params = PES_GRIDS[name]
+    data = np.genfromtxt(DATA / rel)[:, columns]
+    solver = tc['physics.tribology.pes'].PES(data.copy(), cell)
+    solver.make_pes(**params)
+    return solver, cell
+
+
+def case_pes(tc, name):
+    solver, _ = pes_grid(tc, name)
+    return {'pes': solver.pes, 'cell_2d': solver.cell_2d, 'cell': solver.cell,
+            'rbf_at_probes': solver._rbf(probe_points(solver.cell_2d))}
+
+
+def case_shear(tc, name, pes_params=SHEAR_PES, mep_kwargs={}):
+    """FT_CalcShearStrength (shearstr.py:113-127) on a PES of the test data."""
+    rel, columns, cell, _ = PES_GRIDS[name]
+    data = np.genfromtxt(DATA / rel)[:, columns]
+    solver = tc['physics.tribology.pes'].PES(data, cell)
+    solver.make_pes(**pes_params)
+    return run_mep(tc, solver._rbf, cell, **mep_kwargs)
+
+
+def case_uber(tc):
+    """FT_FitPPES.arrange_data (pes.py:358-360): fit_ppes(values, 'uber') on
+    every PPES of data/homogeneous/ppes_data, with the distances of the files
+    ('absolute') and with the distances minus the one of minimum energy
+    ('relative'), like the shifts from the equilibrium distance that
+    FT_FitPPES receives."""
+    fit_ppes = tc['physics.tribology.ppes'].fit_ppes
+    results = {'absolute': {}, 'relative': {}}
+    for path in sorted((DATA / PPES_DATA).rglob('*.txt')):
+        data = np.loadtxt(path)
+        relative = data.copy()
+        relative[:, 0] -= data[np.argmin(data[:, 1]), 0]
+        key = path.relative_to(DATA / PPES_DATA).as_posix()
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            results['absolute'][key] = outcome(fit_ppes, data.tolist(), 'uber')
+            results['relative'][key] = outcome(fit_ppes, relative.tolist(), 'uber')
+    return results
+
+
+def case_uber0(tc):
+    """fit_ppes(values, 'uber0') on one PPES (A06)."""
+    values = np.loadtxt(DATA / PPES_DATA / 'min' / '111' / 'Cu.txt').tolist()
+    return outcome(tc['physics.tribology.ppes'].fit_ppes, values, 'uber0')
+
+
+CASES = {}
+for _pair in PAIRS:
+    CASES[f'matcher_{_pair}'] = (case_matcher, {'pair': _pair})
+for _pair in ['pt111_ag111', 'cu111_al111', 'cu111_cu111']:
+    CASES[f'highsym_{_pair}'] = (case_highsym, {'pair': _pair})
+CASES['pes_inputs_cu111_al111'] = (case_pes_inputs, {'pair': 'cu111_al111', 'calc_type': 'interface_z_relax'})
+CASES['pes_inputs_cu111_cu111'] = (case_pes_inputs, {'pair': 'cu111_cu111', 'calc_type': 'interface_z_relax'})
+CASES['pes_scf_inputs_cu111_cu111'] = (case_pes_inputs, {'pair': 'cu111_cu111', 'calc_type': 'slab_from_scratch'})
+CASES['interface_shifts_cu111_al111'] = (case_interface_shifts, {'pair': 'cu111_al111'})
+CASES['ppes_inputs_cu111_al111'] = (case_ppes_inputs, {'pair': 'cu111_al111'})
+CASES['chargedisp_inputs_cu111_al111'] = (case_chargedisp_inputs, {'pair': 'cu111_al111'})
+# Not on Cu/Al: its 756 unfolded points, replicated 12 x 12 by get_pes,
+# make the RBF interpolation too large for a test.
+CASES['get_pes_cu111_cu111'] = (case_get_pes, {'pair': 'cu111_cu111'})
+CASES['shear_cu111_cu111'] = (case_shear_from_hs, {'pair': 'cu111_cu111'})
+for _name in PES_GRIDS:
+    CASES[f'pes_{_name}'] = (case_pes, {'name': _name})
+CASES['shear_ti3c2o2'] = (case_shear, {'name': 'ti3c2o2'})
+# Phosphorene with the parameters of test_mep.py: with those of the Firetask
+# its 100 points replicated 5 x 5 give 10000 RBF centres, and the MEP takes hours.
+CASES['shear_phosphorene'] = (case_shear, {
+    'name': 'phosphorene', 'pes_params': PES_GRIDS['phosphorene'][3],
+    'mep_kwargs': {'nstepmax': 1000, 'tol': 1e-6}})
+CASES['uber_ppes_data'] = (case_uber, {})
+CASES['uber0_cu111'] = (case_uber0, {})
+
+
+# =============================================================================
+# Running and storing
+# =============================================================================
+
+def run(name, root, workdir=None):
+    """JSON data of case <name> run with the modules under <root>, in workdir
+    (a temporary folder by default), with stdout discarded."""
+    func, kwargs = CASES[name]
+    if any(os.environ.get(k) != v for k, v in BLAS_THREADS.items()):
+        raise RuntimeError(f'golden cases run with {BLAS_THREADS}')
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(workdir or tmp)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+                warnings.filterwarnings('ignore', 'FigureCanvasAgg is non-interactive')
+                data = to_data(func(TribChem(root), **kwargs))
+        finally:
+            os.chdir(cwd)
+            plt.close('all')
+    return json.loads(json.dumps(data))
+
+
+ENVIRONMENT = GOLDEN / 'environment.json'
+RECORDED = ['numpy', 'scipy', 'pymatgen', 'ase', 'matplotlib', 'monty', 'tribchem']
+
+
+def golden_path(name):
+    return GOLDEN / f'{name}.json'
+
+
+def golden_names():
+    return sorted(p.stem for p in GOLDEN.glob('*.json') if p != ENVIRONMENT)
+
+
+def read_golden(name):
+    return json.loads(golden_path(name).read_text())
+
+
+def write_golden(name, data):
+    golden_path(name).write_text(json.dumps(data, indent=1) + '\n')
+
+
+def environment():
+    from importlib import metadata
+    return {'python': sys.version.split()[0],
+            **{name: metadata.version(name) for name in RECORDED}}
+
+
+def main(argv):
+    names = argv[1:] or list(CASES)
+    unknown = [n for n in names if n not in CASES]
+    if unknown:
+        print(f'unknown cases: {unknown}')
+        return 1
+    importlib.import_module(HISTORIC)  # golden values come from the historic environment only
+    GOLDEN.mkdir(exist_ok=True)
+    ENVIRONMENT.write_text(json.dumps(environment(), indent=1) + '\n')
+    for name in names:
+        start = time.perf_counter()
+        write_golden(name, run(name, HISTORIC))
+        print(f'written  {golden_path(name).relative_to(ROOT)}  '
+              f'({time.perf_counter() - start:.1f} s)', flush=True)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

@@ -55,7 +55,10 @@ Exceptions and additions:
   `tribchem/physics/electronics/charge/analyzer.py` calls with
   `even='avg'`. With 1.13.1 the call works and emits two DeprecationWarnings.
   If the bounds are the versions actually installed, that environment had
-  SciPy 1.14.0 and the charge analyzer could not run in it.
+  SciPy 1.14.0 and the charge analyzer could not run in it. The golden
+  values (none of them involves the charge analyzer) are identical with
+  SciPy 1.14.0: checked in a temporary copy of this environment with only
+  SciPy changed.
 - **`importlib_metadata`**: imported by TribChem's `setup.py`, missing from
   `requirements.txt`.
 - **`wheel`**: TribChem's installation guide builds the environment with
@@ -119,6 +122,35 @@ or call `PES.rbf` with fewer arguments than it takes (`tribology/tests/test_mep.
   (Clang), not the conda-forge one.
 - matplotlib 3.9.1 is yanked on PyPI because of its Windows wheels; the
   manylinux wheels used here are not affected.
+
+## Golden values
+
+`tests/golden_cases.py` runs the TribChem physics modules with the
+arguments the Firetasks pass (interface matching, high-symmetry points,
+the `generate_*_inputs`, PES and RBF, MEP and shear strength, UBER fits)
+and stores the results of the historic environment in
+`tests/golden/<case>.json`. They are written only on purpose, in the
+historic environment:
+
+```bash
+~/.venvs/tribchem-storico/bin/python tests/golden_cases.py [<case> ...]
+```
+
+`tests/historic/test_golden.py` checks that the historic environment
+reproduces them, `tests/test_golden.py` that the vendored modules give the
+same results in the development environment. Numbers are compared exactly.
+
+- **One OpenBLAS thread.** PES and RBF values change at round-off level
+  with the number of OpenBLAS threads (1, 8 and 12 give different results),
+  so `tests/conftest.py` and `golden_cases.py` set
+  `OPENBLAS_NUM_THREADS=OMP_NUM_THREADS=1` before numpy is imported.
+- **Seed.** The MEP starting string gets unseeded `np.random` noise in
+  TribChem; the cases call `np.random.seed(0)` before every MEP.
+- **Tags.** The uuid4 of the calculation tags is replaced by `<uuid4>`.
+- **Inputs.** The data files are copies of TribChem files in
+  `tests/data/tribchem/`, at their path inside the `tribchem` package and
+  checked against `historic/tribchem-source.sha256`.
+- `tests/golden/environment.json` records the versions used.
 
 ## Development environment
 

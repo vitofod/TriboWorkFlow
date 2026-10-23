@@ -24,7 +24,10 @@ TribChem
              triboworkflow/vendored/, whole or limited to the statements
              that need neither MongoDB, FireWorks nor atomate; Firetask
              bodies ported with database and FireWorks calls replaced.
-             ShareAlike applies to these adapted parts.
+             ShareAlike applies to these adapted parts. Data files of
+             TribChem (test PES grids, PPES curves, the slabs of a test
+             script) are copied unchanged into tests/data/tribchem/ as
+             inputs of the golden tests.
 
 Xsorb
   Source:    https://github.com/Enry99/xsorb

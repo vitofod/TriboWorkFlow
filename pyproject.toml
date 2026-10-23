@@ -51,3 +51,9 @@ include = ['triboworkflow*']
 [tool.pytest.ini_options]
 testpaths = ['tests']
 addopts = '-ra'
+# pytest defaults, plus tests/data: TribChem files copied as data, among them
+# a script named test_*.py.
+norecursedirs = ['*.egg', '.*', '_darcs', 'build', 'CVS', 'dist', 'node_modules', 'venv', '{arch}', 'data']
+markers = [
+    "golden: runs a golden case of tests/golden_cases.py (minutes in all; skip with -m 'not golden')",
+]

@@ -1,11 +1,20 @@
-"""Shared fixtures: lock files of envs/ and installed distributions."""
+"""Shared fixtures: lock files of envs/ and installed distributions.
 
-import re
-from importlib import metadata
-from pathlib import Path
+OpenBLAS runs with one thread: its results depend on the number of threads
+at round-off level, and the golden values are compared exactly
+(golden_cases.py). This must happen before numpy is imported.
+"""
 
-import pytest
-from packaging.utils import canonicalize_name
+import os
+
+os.environ.update({'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1'})
+
+import re  # noqa: E402
+from importlib import metadata  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import pytest  # noqa: E402
+from packaging.utils import canonicalize_name  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 ENVS = ROOT / 'envs'
