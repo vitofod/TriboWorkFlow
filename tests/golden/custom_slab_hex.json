@@ -1,0 +1,251 @@
+{
+ "slab": {
+  "@module": "pymatgen.core.surface",
+  "@class": "Slab",
+  "charge": 0,
+  "lattice": {
+   "matrix": [
+    [
+     2.556,
+     0.0,
+     1.5650986093103174e-16
+    ],
+    [
+     -1.278,
+     2.2135609321,
+     1.565098609324622e-16
+    ],
+    [
+     0.0,
+     0.0,
+     25.0
+    ]
+   ],
+   "pbc": [
+    true,
+    true,
+    true
+   ],
+   "a": 2.556,
+   "b": 2.556000000023361,
+   "c": 25.0,
+   "alpha": 90.0,
+   "beta": 90.0,
+   "gamma": 119.99999999969766,
+   "volume": 141.44654356119
+  },
+  "properties": {},
+  "sites": [
+   {
+    "species": [
+     {
+      "element": "Cu",
+      "occu": 1
+     }
+    ],
+    "abc": [
+     0.0,
+     0.0,
+     0.1
+    ],
+    "properties": {
+     "magmom": 0
+    },
+    "label": "Cu",
+    "xyz": [
+     0.0,
+     0.0,
+     2.5
+    ]
+   },
+   {
+    "species": [
+     {
+      "element": "Cu",
+      "occu": 1
+     }
+    ],
+    "abc": [
+     0.3333333333,
+     0.6666666667,
+     0.18
+    ],
+    "properties": {
+     "magmom": 0
+    },
+    "label": "Cu",
+    "xyz": [
+     -1.2780010383295348e-10,
+     1.475707288140452,
+     4.5
+    ]
+   },
+   {
+    "species": [
+     {
+      "element": "Cu",
+      "occu": 1
+     }
+    ],
+    "abc": [
+     0.6666666667,
+     0.3333333333,
+     0.26
+    ],
+    "properties": {
+     "magmom": 0
+    },
+    "label": "Cu",
+    "xyz": [
+     1.2780000001278,
+     0.7378536439595479,
+     6.5
+    ]
+   }
+  ],
+  "oriented_unit_cell": {
+   "@module": "pymatgen.core.structure",
+   "@class": "Structure",
+   "charge": 0,
+   "lattice": {
+    "matrix": [
+     [
+      2.556,
+      0.0,
+      0.0
+     ],
+     [
+      -1.278,
+      2.2135609321,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      25.0
+     ]
+    ],
+    "pbc": [
+     true,
+     true,
+     true
+    ],
+    "a": 2.556,
+    "b": 2.556000000023361,
+    "c": 25.0,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 119.99999999969766,
+    "volume": 141.44654356119
+   },
+   "properties": {},
+   "sites": [
+    {
+     "species": [
+      {
+       "element": "Cu",
+       "occu": 1
+      }
+     ],
+     "abc": [
+      0.0,
+      0.0,
+      0.1
+     ],
+     "properties": {
+      "selective_dynamics": {
+       "ndarray": [
+        false,
+        false,
+        false
+       ],
+       "dtype": "bool"
+      }
+     },
+     "label": "Cu",
+     "xyz": [
+      0.0,
+      0.0,
+      2.5
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "Cu",
+       "occu": 1
+      }
+     ],
+     "abc": [
+      0.3333333333,
+      0.6666666667,
+      0.18
+     ],
+     "properties": {
+      "selective_dynamics": {
+       "ndarray": [
+        false,
+        false,
+        false
+       ],
+       "dtype": "bool"
+      }
+     },
+     "label": "Cu",
+     "xyz": [
+      -1.2780010383295348e-10,
+      1.475707288140452,
+      4.5
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "Cu",
+       "occu": 1
+      }
+     ],
+     "abc": [
+      0.6666666667,
+      0.3333333333,
+      0.26
+     ],
+     "properties": {
+      "selective_dynamics": {
+       "ndarray": [
+        true,
+        true,
+        true
+       ],
+       "dtype": "bool"
+      }
+     },
+     "label": "Cu",
+     "xyz": [
+      1.2780000001278,
+      0.7378536439595479,
+      6.5
+     ]
+    }
+   ]
+  },
+  "miller_index": [
+   1,
+   1,
+   1
+  ],
+  "shift": 0,
+  "scale_factor": [
+   1,
+   1,
+   1
+  ],
+  "reconstruction": null,
+  "energy": null
+ },
+ "labels": [
+  "Cu",
+  "Cu",
+  "Cu"
+ ]
+}

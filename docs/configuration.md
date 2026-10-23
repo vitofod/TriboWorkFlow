@@ -51,12 +51,13 @@ settings.require_complete()                 # SettingsError if placeholders are 
 ## `[structure]` (one calculation)
 
 The structure file gives cell, positions, species labels and constraints;
-everything else comes from the settings.
+everything else comes from the settings. Formats, data read and limits:
+[structures.md](structures.md).
 
 | Key | Type | Default | Allowed / notes |
 |---|---|---|---|
-| `file` | str | R | structure file; `""` is a placeholder |
-| `format` | str | `"auto"` | `auto`, `cif`, `xyz`, `extxyz`, `pwi`, `poscar` |
+| `file` | str | R | structure file, relative to the folder of the settings file; `""` is a placeholder |
+| `format` | str | `"auto"` | `auto`, `cif`, `xyz`, `extxyz`, `pwi`, `poscar`, `json` |
 | `frame` | int | `0` | counted from 0, for files with several structures |
 | `xyz_units` | str | `"angstrom"` | `angstrom` |
 | `preserve_atom_order` | bool | `true` | only `true` |
@@ -73,11 +74,14 @@ everything else comes from the settings.
 No cell and no vacuum are ever created automatically.
 
 `[structure.constraints]`: precedence override > constraint read from the
-file > `default_if_pos`. The `if_pos` values are written as given.
+file > `default_if_pos`, atom by atom. The `if_pos` values are written as
+given. They are cartesian, as in pw.x: POSCAR flags, which are along the
+lattice vectors, are used only when they amount to cartesian flags (e.g.
+`F F T` with c along z); otherwise give those atoms in `overrides`.
 
 | Key | Type | Default | Allowed / notes |
 |---|---|---|---|
-| `read_from_file` | bool | `true` | read `if_pos` from the structure file |
+| `read_from_file` | bool | `true` | read the constraints of the structure file |
 | `default_if_pos` | 3 int | `[1, 1, 1]` | |
 | `overrides` | list | `[]` | `{ atoms = [6, 7, 8], if_pos = [0, 0, 0] }`; atoms counted from 1; an atom may appear in one override only |
 
@@ -214,7 +218,7 @@ Needed only to run on HPC. No value is tied to a specific machine.
 
 | Key | Type | | Notes |
 |---|---|---|---|
-| `file` | str | R | slab structure; `""` is a placeholder |
+| `file` | str | R | slab structure, relative to the folder of the settings file; `""` is a placeholder. A pymatgen JSON slab is used as TribChem reads it from its database, any other file as a TribChem custom slab ([structures.md](structures.md)) |
 | `mid` | str | R | material id; the interface id is `mid1_mid2` |
 | `miller` | 3 int | R | |
 | `formula` | str | — | |

@@ -3,7 +3,9 @@
 Every case calls TribChem code under a root package, 'tribchem' in the
 historic environment or 'triboworkflow.vendored' in the development one,
 with the arguments that the TribChem Firetasks and workflows pass, and
-returns plain JSON data. The golden values are the results obtained in the
+returns plain JSON data. The custom_slab cases instead compare a Firetask that
+is not vendored (FT_StoreCustomSlab) with its port in triboworkflow.core.structures.
+The golden values are the results obtained in the
 historic environment, stored in tests/golden/<case>.json:
 tests/historic/test_golden.py checks that they are reproduced there and
 tests/test_golden.py that the vendored modules give the same results.
@@ -495,6 +497,66 @@ def case_uber0(tc):
     return outcome(tc['physics.tribology.ppes'].fit_ppes, values, 'uber0')
 
 
+# Slabs read from a file as the custom-slab workflow stores them: in the
+# historic environment FT_StoreCustomSlab.from_input_files on POSCAR, KPOINTS
+# and INCAR, then Slab.from_dict as FT_StartInterfaceMatch (run.py:1028); in
+# the development one its port, triboworkflow.core.structures.custom_slab, on
+# the same POSCAR read by read_structure. Cells: hexagonal with a along x,
+# the same rotated by 30 degrees about z, rectangular with opposite moments,
+# c tilted, left-handed; the last two are rejected by workflow_slab.
+CUSTOM_SLAB_MILLER = [1, 1, 1]
+_HEX = np.array([[2.556, 0.0, 0.0], [-1.278, 2.556 * math.sqrt(3) / 2, 0.0], [0.0, 0.0, 25.0]])
+_HEX_FRAC = [[0.0, 0.0, 0.1], [1 / 3, 2 / 3, 0.18], [2 / 3, 1 / 3, 0.26]]
+_ROT30 = np.array([[math.cos(math.pi / 6), math.sin(math.pi / 6), 0.0],
+                   [-math.sin(math.pi / 6), math.cos(math.pi / 6), 0.0], [0.0, 0.0, 1.0]])
+CUSTOM_SLABS = {
+    'hex': {'lattice': _HEX, 'species': ['Cu'], 'counts': [3], 'frac': _HEX_FRAC,
+            'flags': [[False] * 3, [False] * 3, [True] * 3]},
+    'rotated': {'lattice': _HEX @ _ROT30, 'species': ['Cu'], 'counts': [3], 'frac': _HEX_FRAC},
+    'magmom': {'lattice': np.diag([2.87, 4.0588, 20.0]), 'species': ['Fe'], 'counts': [4],
+               'frac': [[0, 0, 0.1], [0.5, 0.5, 0.1], [0, 0.5, 0.17], [0.5, 0, 0.17]],
+               'magmom': [2.5, -2.5, 2.5, -2.5]},
+    'tilted': {'lattice': np.array([[2.556, 0, 0], [-1.278, 2.556 * math.sqrt(3) / 2, 0], [0.5, 0.3, 25.0]]),
+               'species': ['Cu'], 'counts': [3], 'frac': _HEX_FRAC},
+    'lefthanded': {'lattice': np.array([[2.556, 0, 0], [-1.278, -2.556 * math.sqrt(3) / 2, 0], [0, 0, 25.0]]),
+                   'species': ['Cu'], 'counts': [3], 'frac': _HEX_FRAC},
+}
+
+
+def poscar_text(lattice, species, counts, frac, flags=None, **_):
+    """POSCAR with Direct coordinates and, with flags, Selective dynamics."""
+    lines = ['custom slab', '1.0']
+    lines += ['  '.join(f'{x:.10f}' for x in v) for v in lattice]
+    lines += [' '.join(species), ' '.join(map(str, counts))]
+    lines += ['Selective dynamics'] if flags else []
+    lines.append('Direct')
+    for i, coords in enumerate(frac):
+        sd = '  ' + ' '.join('T' if f else 'F' for f in flags[i]) if flags else ''
+        lines.append('  '.join(f'{x:.10f}' for x in coords) + sd)
+    return '\n'.join(lines) + '\n'
+
+
+def case_custom_slab(tc, name):
+    """The Slab that the interface workflow receives for a custom slab."""
+    from pymatgen.core.surface import Slab
+    slab_data = CUSTOM_SLABS[name]
+    Path('POSCAR').write_text(poscar_text(**slab_data))
+    magmom = slab_data.get('magmom')
+    if tc.root == HISTORIC:
+        Path('KPOINTS').write_text('Automatic mesh\n0\nMonkhorst\n8 8 1\n0 0 0\n')
+        incar = 'ENCUT = 400\nISMEAR = 1\nISPIN = 2\n'
+        incar += f'MAGMOM = {" ".join(map(str, magmom))}\n' if magmom else ''
+        Path('INCAR').write_text(incar)
+        params = {'miller': CUSTOM_SLAB_MILLER, 'input_dir': '.', 'reconstructed': None,
+                  'bulk_modulus': None, 'magmom_from': 'INCAR'}
+        store = tc['highput.firetasks.custom_slab'].FT_StoreCustomSlab
+        slab = Slab.from_dict(store.from_input_files(None, params)['structure']['opt'])
+    else:
+        from triboworkflow.core.structures import custom_slab, read_structure
+        slab = custom_slab(read_structure('POSCAR'), CUSTOM_SLAB_MILLER, magmom)
+    return {'slab': slab.as_dict(), 'labels': slab.labels}
+
+
 CASES = {}
 for _pair in PAIRS:
     CASES[f'matcher_{_pair}'] = (case_matcher, {'pair': _pair})
@@ -520,6 +582,8 @@ CASES['shear_phosphorene'] = (case_shear, {
     'mep_kwargs': {'nstepmax': 1000, 'tol': 1e-6}})
 CASES['uber_ppes_data'] = (case_uber, {})
 CASES['uber0_cu111'] = (case_uber0, {})
+for _name in CUSTOM_SLABS:
+    CASES[f'custom_slab_{_name}'] = (case_custom_slab, {'name': _name})
 
 
 # =============================================================================

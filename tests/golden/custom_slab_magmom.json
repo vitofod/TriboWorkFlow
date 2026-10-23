@@ -1,0 +1,267 @@
+{
+ "slab": {
+  "@module": "pymatgen.core.surface",
+  "@class": "Slab",
+  "charge": 0,
+  "lattice": {
+   "matrix": [
+    [
+     2.87,
+     0.0,
+     1.757368156776452e-16
+    ],
+    [
+     6.527048210507531e-16,
+     4.0588,
+     2.4852982141896385e-16
+    ],
+    [
+     0.0,
+     0.0,
+     20.0
+    ]
+   ],
+   "pbc": [
+    true,
+    true,
+    true
+   ],
+   "a": 2.87,
+   "b": 4.0588,
+   "c": 20.0,
+   "alpha": 90.0,
+   "beta": 90.0,
+   "gamma": 90.0,
+   "volume": 232.97512
+  },
+  "properties": {},
+  "sites": [
+   {
+    "species": [
+     {
+      "element": "Fe",
+      "occu": 1
+     }
+    ],
+    "abc": [
+     0.0,
+     0.0,
+     0.1
+    ],
+    "properties": {
+     "magmom": 2.5
+    },
+    "label": "Fe",
+    "xyz": [
+     0.0,
+     0.0,
+     2.0
+    ]
+   },
+   {
+    "species": [
+     {
+      "element": "Fe",
+      "occu": 1
+     }
+    ],
+    "abc": [
+     0.5,
+     0.5,
+     0.1
+    ],
+    "properties": {
+     "magmom": -2.5
+    },
+    "label": "Fe",
+    "xyz": [
+     1.4350000000000003,
+     2.0294,
+     2.0
+    ]
+   },
+   {
+    "species": [
+     {
+      "element": "Fe",
+      "occu": 1
+     }
+    ],
+    "abc": [
+     0.0,
+     0.5,
+     0.17
+    ],
+    "properties": {
+     "magmom": 2.5
+    },
+    "label": "Fe",
+    "xyz": [
+     3.2635241052537656e-16,
+     2.0294,
+     3.4000000000000004
+    ]
+   },
+   {
+    "species": [
+     {
+      "element": "Fe",
+      "occu": 1
+     }
+    ],
+    "abc": [
+     0.5,
+     0.0,
+     0.17
+    ],
+    "properties": {
+     "magmom": -2.5
+    },
+    "label": "Fe",
+    "xyz": [
+     1.435,
+     0.0,
+     3.4000000000000004
+    ]
+   }
+  ],
+  "oriented_unit_cell": {
+   "@module": "pymatgen.core.structure",
+   "@class": "Structure",
+   "charge": 0,
+   "lattice": {
+    "matrix": [
+     [
+      2.87,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      4.0588,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      20.0
+     ]
+    ],
+    "pbc": [
+     true,
+     true,
+     true
+    ],
+    "a": 2.87,
+    "b": 4.0588,
+    "c": 20.0,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0,
+    "volume": 232.97512
+   },
+   "properties": {},
+   "sites": [
+    {
+     "species": [
+      {
+       "element": "Fe",
+       "occu": 1
+      }
+     ],
+     "abc": [
+      0.0,
+      0.0,
+      0.1
+     ],
+     "properties": {},
+     "label": "Fe",
+     "xyz": [
+      0.0,
+      0.0,
+      2.0
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "Fe",
+       "occu": 1
+      }
+     ],
+     "abc": [
+      0.5,
+      0.5,
+      0.1
+     ],
+     "properties": {},
+     "label": "Fe",
+     "xyz": [
+      1.435,
+      2.0294,
+      2.0
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "Fe",
+       "occu": 1
+      }
+     ],
+     "abc": [
+      0.0,
+      0.5,
+      0.17
+     ],
+     "properties": {},
+     "label": "Fe",
+     "xyz": [
+      0.0,
+      2.0294,
+      3.4000000000000004
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "Fe",
+       "occu": 1
+      }
+     ],
+     "abc": [
+      0.5,
+      0.0,
+      0.17
+     ],
+     "properties": {},
+     "label": "Fe",
+     "xyz": [
+      1.435,
+      0.0,
+      3.4000000000000004
+     ]
+    }
+   ]
+  },
+  "miller_index": [
+   1,
+   1,
+   1
+  ],
+  "shift": 0,
+  "scale_factor": [
+   1,
+   1,
+   1
+  ],
+  "reconstruction": null,
+  "energy": null
+ },
+ "labels": [
+  "Fe",
+  "Fe",
+  "Fe",
+  "Fe"
+ ]
+}
