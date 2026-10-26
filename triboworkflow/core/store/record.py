@@ -14,11 +14,12 @@ States are kept apart (``Status``): end of the process, electronic (SCF)
 convergence, geometric convergence and parsing of the output. Each one is
 ``None`` until it is known. A record is complete when the process ended, the
 SCF converged, the geometry converged or does not apply, and the output was
-parsed; a parsed output always leaves its results in the record. The results
-of a record stand for a calculation only if the record is complete, has
-results and its fingerprint equals the one expected (``can_reuse``). Which
-results each kind of calculation must have is checked by the parser of its
-engine.
+parsed; a parsed output always leaves its results in the record. For whoever
+looks at a calculation, ``Status.summary`` sums the states up in one word.
+The results of a record stand for a calculation only if the record is
+complete, has results and its fingerprint equals the one expected
+(``can_reuse``). Which results each kind of calculation must have is checked
+by the parser of its engine.
 
 Notes
 -----
@@ -39,8 +40,9 @@ RECORD_FILE = 'record.json'
 
 PROCESS_STATES = ('pending', 'running', 'ended', 'crashed', 'killed')
 SCF_STATES = ('converged', 'not_converged')
-GEOMETRY_STATES = ('converged', 'max_steps', 'n/a')
+GEOMETRY_STATES = ('converged', 'not_converged', 'max_steps', 'n/a')
 PARSING_STATES = ('ok', 'failed')
+SUMMARY_STATES = ('pending', 'running', 'completed', 'not_converged', 'crashed', 'unknown')
 
 _RECORD_KEYS = ('schema_version', 'calc_id', 'system', 'step', 'label', 'calc_type', 'engine',
                 'energy_model', 'fingerprint', 'status', 'attempts', 'results', 'files')
@@ -143,8 +145,9 @@ class Status:
     scf : str or None, optional
         Electronic convergence: ``'converged'`` or ``'not_converged'``.
     geometry : str or None, optional
-        Geometric convergence: ``'converged'``, ``'max_steps'`` or ``'n/a'``
-        (no relaxation).
+        Geometric convergence: ``'converged'``, ``'not_converged'`` (the run
+        is over without convergence), ``'max_steps'`` or ``'n/a'`` (no
+        relaxation).
     parsing : str or None, optional
         Reading of the output: ``'ok'`` or ``'failed'``.
     """
@@ -168,6 +171,27 @@ class Status:
         (or the geometry does not apply) and the output was parsed."""
         return (self.process == 'ended' and self.scf == 'converged'
                 and self.geometry in ('converged', 'n/a') and self.parsing == 'ok')
+
+    @property
+    def summary(self):
+        """One word for whoever looks at the calculation.
+
+        ``'pending'`` (queued), ``'running'``, ``'completed'`` (ended with
+        the SCF and the geometry converged, or the geometry does not apply),
+        ``'not_converged'`` (ended without convergence, whichever part did
+        not converge), ``'crashed'`` (crashed or killed) or ``'unknown'``
+        (end of the process not known). It describes the calculation, not the
+        reading of its output: ``parsing`` does not enter it. The separate
+        states tell the details.
+        """
+        if self.process is None:
+            return 'unknown'
+        if self.process in ('crashed', 'killed'):
+            return 'crashed'
+        if self.process == 'ended':
+            converged = self.scf == 'converged' and self.geometry in ('converged', 'n/a')
+            return 'completed' if converged else 'not_converged'
+        return self.process
 
 
 @dataclass(frozen=True)

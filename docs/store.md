@@ -59,8 +59,23 @@ States:
 |---|---|
 | `process` | `pending`, `running`, `ended`, `crashed`, `killed` |
 | `scf` | `converged`, `not_converged` |
-| `geometry` | `converged`, `max_steps`, `n/a` (no relaxation) |
+| `geometry` | `converged`, `not_converged` (the run is over without convergence), `max_steps`, `n/a` (no relaxation) |
 | `parsing` | `ok`, `failed` |
+
+For whoever looks at a calculation, `Status.summary` sums the states up in
+one word:
+
+| `summary` | States |
+|---|---|
+| `pending` | `process` `pending` (queued) |
+| `running` | `process` `running` |
+| `completed` | `process` `ended`, `scf` `converged`, `geometry` `converged` or `n/a` |
+| `not_converged` | `process` `ended` otherwise, whichever part did not converge |
+| `crashed` | `process` `crashed` or `killed` |
+| `unknown` | `process` null |
+
+It describes the calculation, not the reading of its output (`parsing` does
+not enter it); the separate states tell the details.
 
 A record is complete when `process` is `ended`, `scf` is `converged`,
 `geometry` is `converged` or `n/a`, and `parsing` is `ok`. `can_reuse(record,

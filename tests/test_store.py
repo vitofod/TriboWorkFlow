@@ -395,7 +395,7 @@ COMPLETE = [('ended', 'converged', 'converged', 'ok'), ('ended', 'converged', 'n
 INCOMPLETE = ([(p, 'converged', 'n/a', 'ok') for p in (None, 'pending', 'running', 'crashed',
                                                        'killed')]
               + [('ended', s, 'n/a', 'ok') for s in (None, 'not_converged')]
-              + [('ended', 'converged', g, 'ok') for g in (None, 'max_steps')]
+              + [('ended', 'converged', g, 'ok') for g in (None, 'not_converged', 'max_steps')]
               + [('ended', 'converged', 'n/a', p) for p in (None, 'failed')])
 
 
@@ -412,6 +412,31 @@ def test_incomplete_record_is_never_reused(states):
     record = make_record(status=store.Status(*states))
     assert not record.is_complete
     assert not store.can_reuse(record, FP_A)
+
+
+SUMMARIES = [((None, None, None, None), 'unknown'),
+             ((None, 'converged', 'converged', None), 'unknown'),
+             (('pending', None, None, None), 'pending'),
+             (('running', 'converged', None, None), 'running'),
+             (('crashed', None, 'not_converged', None), 'crashed'),
+             (('killed', 'converged', None, None), 'crashed'),
+             (('ended', 'converged', 'converged', None), 'completed'),
+             (('ended', 'converged', 'n/a', 'failed'), 'completed'),
+             (('ended', 'not_converged', 'n/a', None), 'not_converged'),
+             (('ended', None, 'n/a', None), 'not_converged'),
+             (('ended', 'converged', 'not_converged', None), 'not_converged'),
+             (('ended', 'converged', 'max_steps', None), 'not_converged'),
+             (('ended', 'converged', None, None), 'not_converged')]
+
+
+@pytest.mark.parametrize('states, summary', SUMMARIES)
+def test_status_summary(states, summary):
+    assert store.Status(*states).summary == summary
+
+
+def test_status_summary_covers_its_values():
+    assert {summary for _, summary in SUMMARIES} == set(store.record.SUMMARY_STATES)
+    assert all(store.Status(*states).summary == 'completed' for states in COMPLETE)
 
 
 def test_missing_record_is_not_reused():
