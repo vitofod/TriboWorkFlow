@@ -1,0 +1,264 @@
+# Author: Vito Foderà
+# Created: 2026-10-27
+
+"""Tests of the layout of a run and of the groups of jobs
+(``triboworkflow.execution.layout``, ``triboworkflow.execution.jobs``).
+
+Submissions run in dry run or with ``subprocess.run`` replaced: no scheduler
+is called.
+"""
+
+import json
+import shlex
+import subprocess
+import tomllib
+from pathlib import Path
+
+import pytest
+
+from triboworkflow.core.guard import NotOnHPCError
+from triboworkflow.core.settings import settings_from_dict
+from triboworkflow.core.store import StoreError
+from triboworkflow.execution import layout
+from triboworkflow.execution import scheduler as scheduler_module
+from triboworkflow.execution.jobs import (JOBSCRIPT_FILE, MANIFEST_FILE, SUBMITTED_FILE, JobError,
+                                          Manifest, jobscript_path, read_manifest, submit_jobs,
+                                          worker_line, write_job)
+from triboworkflow.execution.scheduler import JobScheduler
+
+EXAMPLES = Path(__file__).resolve().parents[1] / 'examples'
+
+
+def example_settings(**execution):
+    """Settings of examples/interface.toml, with keys of [execution] changed."""
+    with open(EXAMPLES / 'interface.toml', 'rb') as f:
+        data = tomllib.load(f)
+    data['execution'].update(execution)
+    return settings_from_dict(data)
+
+
+TEMPLATE = b'#!/bin/bash\n#SBATCH --job-name=pes\n#SBATCH --time=24:00:00\nmodule load qe\n'
+CALCS = (('Cu111_Al111', 'pes_scf/aa'), ('Cu111_Al111', 'pes_scf/ab'), ('Cu111_Ni111', 'pes_scf/aa'))
+
+
+def manifest(**changes):
+    fields = dict(name='pes_scf', scheduler='slurm', run_command='mpirun -np 32 pw.x -nk 4',
+                  walltime=86400, max_seconds_margin=600, calculations=CALCS)
+    fields.update(changes)
+    return Manifest(**fields)
+
+
+@pytest.fixture
+def run_dir(tmp_path):
+    run = tmp_path / 'run'
+    for system, calc_id in CALCS:
+        path = layout.calc_dir(run, system, calc_id)
+        path.mkdir(parents=True)
+        (path / layout.INPUT_FILE).write_text('&CONTROL\n/\n')
+    return run
+
+
+@pytest.fixture
+def jobscript(tmp_path):
+    path = tmp_path / 'user_job.sh'
+    path.write_bytes(TEMPLATE)
+    return path
+
+
+# --- layout ------------------------------------------------------------------------
+
+def test_calc_dir_prefix_and_attempts(tmp_path):
+    path = layout.calc_dir(tmp_path, 'Cu111_Al111', 'pes_scf/aa')
+    assert path == tmp_path / 'systems' / 'Cu111_Al111' / 'pes_scf' / 'aa'
+    assert layout.calc_prefix('pes_scf/aa') == 'pes_scf_aa'
+    assert layout.attempt_dir(path, 2) == path / 'attempts' / '2'
+    assert layout.job_dir(tmp_path, 'pes_scf') == tmp_path / 'jobs' / 'pes_scf'
+
+
+@pytest.mark.parametrize('call', [lambda p: layout.calc_dir(p, 'a/b', 'pes_scf/aa'),
+                                  lambda p: layout.calc_dir(p, 'sys', 'pes_scf'),
+                                  lambda p: layout.job_dir(p, '..')])
+def test_layout_rejects_bad_names(tmp_path, call):
+    with pytest.raises(StoreError):
+        call(tmp_path)
+
+
+@pytest.mark.parametrize('n', [0, -1, 1.0, True])
+def test_attempt_numbers_from_one(tmp_path, n):
+    with pytest.raises(ValueError, match='attempt number'):
+        layout.attempt_dir(tmp_path, n)
+
+
+# --- manifest ----------------------------------------------------------------------
+
+def test_manifest_round_trip(tmp_path):
+    data = manifest().to_dict()
+    assert data['calculations'][0] == {'system': 'Cu111_Al111', 'calc_id': 'pes_scf/aa'}
+    assert Manifest.from_dict(json.loads(json.dumps(data))) == manifest()
+
+
+def test_manifest_from_a_generator():
+    assert manifest(calculations=(c for c in CALCS)) == manifest()
+
+
+def test_manifest_from_the_settings():
+    settings = example_settings(max_seconds_margin=900)
+    built = Manifest.from_execution('pes_scf', CALCS, settings.execution)
+    assert built == manifest(max_seconds_margin=900)
+
+
+@pytest.mark.parametrize('changes, message', [
+    ({'name': 'a/b'}, 'not a valid name'),
+    ({'run_command': ' '}, 'run_command: a non-empty string is required'),
+    ({'walltime': 0}, 'walltime: 0 is not an integer > 0'),
+    ({'walltime': 3600.0}, 'walltime: 3600.0 is not an integer > 0'),
+    ({'max_seconds_margin': 86400}, 'must be < walltime (86400)'),
+    ({'calculations': ()}, 'the group has no calculations'),
+    ({'calculations': ('ab',)}, 'is not a sequence of (system, calc_id)'),
+    ({'calculations': (('sys', 'pes_scf'),)}, 'is not "<step>/<label>"'),
+    ({'calculations': CALCS + (CALCS[0],)}, 'Cu111_Al111/pes_scf/aa is listed twice'),
+])
+def test_manifest_errors(changes, message):
+    with pytest.raises(JobError, match=message.replace('(', r'\(').replace(')', r'\)')):
+        manifest(**changes)
+
+
+@pytest.mark.parametrize('edit, message', [
+    ({'schema_version': 2}, 'schema_version: 2; this version reads 1'),
+    ({'extra': 1}, "unknown 'extra'"),
+    ({'calculations': {}}, 'calculations: a JSON array is required'),
+    ({'calculations': [{'system': 'a'}]}, 'calculations: missing calc_id'),
+])
+def test_manifest_file_errors(edit, message):
+    data = {**manifest().to_dict(), **edit}
+    with pytest.raises(JobError, match=f'^m.json: .*{message}'):
+        Manifest.from_dict(data, source='m.json')
+
+
+# --- jobscript and group directory -----------------------------------------------------
+
+def test_write_job(run_dir, jobscript):
+    path = write_job(run_dir, manifest(), jobscript, python='/opt/venv/bin/python')
+    assert path == run_dir / 'jobs' / 'pes_scf'
+    assert jobscript.read_bytes() == TEMPLATE
+    text = (path / JOBSCRIPT_FILE).read_bytes()
+    assert text.startswith(TEMPLATE)
+    added = text[len(TEMPLATE):].decode()
+    assert added == f'\n{worker_line(path / MANIFEST_FILE, "/opt/venv/bin/python")}\n'
+    words = shlex.split(added)
+    assert words[:3] == ['/opt/venv/bin/python', '-m', 'triboworkflow.execution.worker']
+    assert Path(words[3]) == (path / MANIFEST_FILE).resolve()
+    read, run = read_manifest(path / MANIFEST_FILE)
+    assert read == manifest() and run == run_dir.resolve()
+
+
+def test_worker_line_quotes_the_paths(tmp_path):
+    line = worker_line(tmp_path / 'my jobs' / MANIFEST_FILE, python='/opt/my venv/python')
+    assert shlex.split(line)[0] == '/opt/my venv/python'
+    assert shlex.split(line)[3].endswith('my jobs/manifest.json')
+
+
+def test_jobscript_without_final_newline(run_dir, tmp_path):
+    template = tmp_path / 'job.sh'
+    template.write_bytes(b'#!/bin/bash\nmodule load qe')
+    path = write_job(run_dir, manifest(), template, python='python3')
+    lines = (path / JOBSCRIPT_FILE).read_text().splitlines()
+    assert lines[:2] == ['#!/bin/bash', 'module load qe']
+    assert lines[2].startswith('python3 -m triboworkflow.execution.worker ')
+
+
+def test_write_job_errors(run_dir, jobscript, tmp_path):
+    with pytest.raises(JobError, match='jobscript .* not found'):
+        write_job(run_dir, manifest(), tmp_path / 'missing.sh')
+    (layout.calc_dir(run_dir, *CALCS[1]) / layout.INPUT_FILE).unlink()
+    with pytest.raises(JobError, match='calculations without input.pwi .*Cu111_Al111/pes_scf/ab'):
+        write_job(run_dir, manifest(), jobscript)
+    assert not (run_dir / 'jobs').exists()
+    write_job(run_dir, manifest(calculations=CALCS[:1]), jobscript)
+    with pytest.raises(JobError, match='already exists'):
+        write_job(run_dir, manifest(calculations=CALCS[:1]), jobscript)
+
+
+def test_read_manifest_checks_the_directory(run_dir, jobscript):
+    path = write_job(run_dir, manifest(), jobscript)
+    moved = path.parent / 'other'
+    path.rename(moved)
+    with pytest.raises(JobError, match="manifest of the group 'pes_scf' found in"):
+        read_manifest(moved / MANIFEST_FILE)
+
+
+def test_jobscript_relative_to_the_settings_file():
+    settings = example_settings()
+    assert jobscript_path(settings) == Path('jobscript.sh')
+    settings.source = EXAMPLES / 'interface.toml'
+    assert jobscript_path(settings) == EXAMPLES / 'jobscript.sh'
+    settings.execution.jobscript = '/abs/job.sh'
+    assert jobscript_path(settings) == Path('/abs/job.sh')
+
+
+# --- submission ----------------------------------------------------------------------
+
+def test_dry_run_submits_nothing(run_dir, jobscript, monkeypatch):
+    monkeypatch.setattr(scheduler_module.subprocess, 'run',
+                        lambda *a, **k: pytest.fail('no command may run in a dry run'))
+    path = write_job(run_dir, manifest(), jobscript)
+    scheduler = JobScheduler('slurm', dry_run=True)
+    assert submit_jobs(path, scheduler, 3) == [None, None, None]
+    assert scheduler.commands == [(['sbatch', str(path / JOBSCRIPT_FILE)], None, path)] * 3
+    assert not (path / SUBMITTED_FILE).exists()
+
+
+def test_submitted_ids_are_written(run_dir, jobscript, monkeypatch):
+    ids = iter(['101', '102'])
+
+    def run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=f'Submitted batch job {next(ids)}\n')
+
+    monkeypatch.setattr(scheduler_module.subprocess, 'run', run)
+    path = write_job(run_dir, manifest(), jobscript)
+    assert submit_jobs(path, JobScheduler('slurm'), 2) == ['101', '102']
+    assert json.loads((path / SUBMITTED_FILE).read_text()) == {'job_ids': ['101', '102']}
+
+
+def test_failed_submission_keeps_the_jobs_already_submitted(run_dir, jobscript, monkeypatch):
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) == 2:
+            raise subprocess.CalledProcessError(1, cmd, stderr='QOSMaxSubmitJobPerUserLimit')
+        return subprocess.CompletedProcess(cmd, 0, stdout='Submitted batch job 201\n')
+
+    monkeypatch.setattr(scheduler_module.subprocess, 'run', run)
+    path = write_job(run_dir, manifest(), jobscript)
+    with pytest.raises(scheduler_module.JobSchedulerError, match='QOSMaxSubmitJobPerUserLimit'):
+        submit_jobs(path, JobScheduler('slurm'), 3)
+    assert json.loads((path / SUBMITTED_FILE).read_text()) == {'job_ids': ['201']}
+
+
+def test_submission_away_from_hpc(run_dir, jobscript, monkeypatch):
+    def run(cmd, **kwargs):
+        raise FileNotFoundError(2, 'No such file or directory', cmd[0])
+
+    monkeypatch.setattr(scheduler_module.subprocess, 'run', run)
+    path = write_job(run_dir, manifest(), jobscript)
+    with pytest.raises(NotOnHPCError, match="Command 'sbatch' not found: calculations run only"):
+        submit_jobs(path, JobScheduler('slurm'), 1)
+    assert not (path / SUBMITTED_FILE).exists()
+
+
+@pytest.mark.parametrize('count, submitted', [(1, 1), (3, 3), (8, 3)])
+def test_never_more_jobs_than_calculations(run_dir, jobscript, count, submitted, caplog):
+    path = write_job(run_dir, manifest(), jobscript)
+    scheduler = JobScheduler('slurm', dry_run=True)
+    assert submit_jobs(path, scheduler, count) == [None] * submitted
+    assert len(scheduler.commands) == submitted
+    reduced = 'Group pes_scf: 3 jobs submitted instead of 8, one per calculation'
+    assert (reduced in caplog.text) == (count > submitted)
+
+
+@pytest.mark.parametrize('count', [0, 2.0])
+def test_number_of_jobs(run_dir, jobscript, count):
+    path = write_job(run_dir, manifest(), jobscript)
+    with pytest.raises(JobError, match='number of jobs'):
+        submit_jobs(path, JobScheduler('slurm', dry_run=True), count)

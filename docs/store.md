@@ -38,7 +38,7 @@ MLIP) never run locally.
 
 | Key | Content |
 |---|---|
-| `schema_version` | 1 |
+| `schema_version` | 2 |
 | `calc_id` | `<step>/<label>`: the directory of the calculation within the system |
 | `system`, `step`, `label` | names of the three directories; no `/`, `\`, NUL, `.` or `..` |
 | `calc_type` | kind of calculation, which fixes its constraints |
@@ -46,7 +46,7 @@ MLIP) never run locally.
 | `energy_model` | written by the engine, not empty: pseudopotentials and their digests or the MLIP model, cutoffs, k-points, smearing, spin, vdW |
 | `fingerprint` | `sha256:` and 64 hex digits: digest of the normalized input and of the energy model |
 | `status` | `process`, `scf`, `geometry`, `parsing`, each null until known |
-| `attempts` | `job_id` and `remedies` of each run |
+| `attempts` | one entry per run, numbered from 1 (below) |
 | `results` | results read from the output, or null; never null once `parsing` is `ok` |
 | `files` | `{role: file name}` relative to the calculation directory |
 
@@ -91,8 +91,30 @@ again with the same input, or an output read again, that gives different
 results has a different digest. Writing the same results again keeps it.
 
 A rerun replaces the states and the results of the record; its attempts list
-keeps the job and the remedies of each run. Nothing is deleted when an
-analysis becomes invalid.
+keeps every run. Nothing is deleted when an analysis becomes invalid.
+
+Attempts (`Attempt`). Each field has one source, and stays null until that
+source establishes it:
+
+| Key | Content | Source |
+|---|---|---|
+| `n` | number of the attempt, 1, 2, ... in the order of the list | worker |
+| `job_id` | id of the job, as given by the scheduler; null outside a job | worker |
+| `host` | machine the attempt ran on | worker |
+| `started`, `ended` | ISO 8601 times of the start and of the end of the run | worker |
+| `max_seconds` | time limit given to the engine for this attempt, s | worker |
+| `max_seconds_cap` | upper limit of `max_seconds` in the prepared input; null if none | worker |
+| `input`, `output` | `{"path", "digest"}`: file relative to the calculation directory and its `file_digest` | worker, archiving |
+| `exit_code` | exit status of the command that ran the engine; null if the worker did not see it end | worker |
+| `job_state` | state of the job reported by the scheduler | job manager |
+| `stop_reason` | why the run stopped, read from the output | output |
+| `clean_stop` | whether the engine closed the run, read from the output | output |
+| `status` | `process`, `scf`, `geometry`, `parsing` at the end of the attempt | output, job |
+| `remedies` | parameters changed for this attempt with respect to the input | remedies |
+
+The exit code, the state of the job and the reason of the stop are kept
+apart and never derived from one another; the states of the calculation
+come from the output, and from the job only where the output says nothing.
 
 `check_energy_model(records)` raises an error when the records do not share
 one energy model (engine name and program, and `energy_model`): energies of

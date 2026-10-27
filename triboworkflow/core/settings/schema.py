@@ -395,13 +395,20 @@ class ExecutionParams:
     scheduler : str
         One of ``SCHEDULERS``.
     jobscript : str
-        Jobscript copied for every job, with the launch line added.
+        Jobscript copied for every group of jobs, with the launch line of the
+        worker added; relative to the folder of the settings file.
     run_command : str
         Command up to the input file, e.g. ``mpirun -np 32 pw.x -nk 4``.
     groups : int
-        Jobs over which the calculations of a step are spread.
+        Jobs (one worker each) over which the calculations of a group are
+        spread; never more jobs than calculations are submitted.
     walltime, polling_interval : int
-        Seconds.
+        Seconds. ``walltime`` must match the one of the jobscript.
+    max_seconds_margin : int
+        Seconds kept free at the end of the walltime. Before each run the
+        worker sets ``max_seconds`` to the walltime left minus this margin,
+        capped by the ``max_seconds`` of ``[namelists.CONTROL]`` if given,
+        and takes no more calculations once nothing is left.
     """
 
     scheduler: str
@@ -410,6 +417,7 @@ class ExecutionParams:
     groups: int
     walltime: int
     polling_interval: int
+    max_seconds_margin: int = 600
 
     def check(self, path):
         """Validate the table; errors name ``path``."""
@@ -417,6 +425,11 @@ class ExecutionParams:
         _positive(f'{path}.groups', self.groups)
         _positive(f'{path}.walltime', self.walltime)
         _positive(f'{path}.polling_interval', self.polling_interval)
+        _positive(f'{path}.max_seconds_margin', self.max_seconds_margin)
+        if self.max_seconds_margin >= self.walltime:
+            raise SettingsError(f'{path}.max_seconds_margin',
+                                f'must be < walltime ({self.walltime}), '
+                                f'got {self.max_seconds_margin}')
 
 
 # --- interface workflow -----------------------------------------------------------

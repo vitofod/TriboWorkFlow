@@ -1,0 +1,89 @@
+# Author: Vito Foderà
+# Created: 2026-10-27
+
+"""Directories and file names of a run on HPC.
+
+A run keeps the systems and the jobs that run their calculations::
+
+    <run>/
+    ├── systems/<system>/
+    │   ├── system.json
+    │   └── <step>/<label>/          one directory per calculation
+    │       ├── input.pwi            input prepared for the calculation
+    │       ├── run.pwi              input of the current attempt
+    │       ├── output.pwo           output of the current attempt
+    │       ├── claim                taken by the worker running the attempt
+    │       ├── record.json
+    │       ├── OUT/                 outdir of pw.x
+    │       └── attempts/<n>/        run.pwi and output.pwo of attempt n
+    └── jobs/<name>/                 one group of jobs
+        ├── manifest.json            calculations of the group and how to run them
+        ├── jobscript.sh             jobscript submitted for each job
+        └── submitted.json           ids of the submitted jobs
+
+pw.x runs inside the calculation directory, so that the relative ``outdir``
+of every calculation is its own ``OUT/``. The ``prefix`` is made of step and
+label. ``input.pwi`` is never changed after preparation: each attempt runs
+``run.pwi``, a copy with the time limit of the job written in it.
+"""
+
+from pathlib import Path
+
+from triboworkflow.core.store.record import RECORD_FILE, check_name, split_calc_id
+
+SYSTEMS_DIR = 'systems'
+JOBS_DIR = 'jobs'
+
+INPUT_FILE = 'input.pwi'
+RUN_INPUT_FILE = 'run.pwi'
+OUTPUT_FILE = 'output.pwo'
+CLAIM_FILE = 'claim'
+OUTDIR = 'OUT'
+ATTEMPTS_DIR = 'attempts'
+
+__all__ = ['ATTEMPTS_DIR', 'CLAIM_FILE', 'INPUT_FILE', 'JOBS_DIR', 'OUTDIR', 'OUTPUT_FILE',
+           'RECORD_FILE', 'RUN_INPUT_FILE', 'SYSTEMS_DIR', 'attempt_dir', 'calc_dir',
+           'calc_prefix', 'job_dir', 'system_dir']
+
+
+def system_dir(run_dir, system):
+    """Directory of a system: ``<run>/systems/<system>``."""
+    return Path(run_dir) / SYSTEMS_DIR / check_name(system, 'system')
+
+
+def calc_dir(run_dir, system, calc_id):
+    """Directory of a calculation: ``<run>/systems/<system>/<step>/<label>``.
+
+    Parameters
+    ----------
+    run_dir : path-like
+        Directory of the run.
+    system : str
+        Name of the system.
+    calc_id : str
+        ``<step>/<label>``.
+    """
+    step, label = split_calc_id(calc_id)
+    return system_dir(run_dir, system) / step / label
+
+
+def calc_prefix(calc_id):
+    """``prefix`` of pw.x for a calculation: ``<step>_<label>``.
+
+    Each calculation also has its own ``outdir`` (``OUTDIR``, relative to
+    its directory), so the prefix only makes the files recognizable.
+    """
+    step, label = split_calc_id(calc_id)
+    return f'{step}_{label}'
+
+
+def attempt_dir(calc_path, n):
+    """Archive of attempt ``n`` (counted from 1) of a calculation: ``attempts/<n>``."""
+    if type(n) is not int or n < 1:
+        raise ValueError(f'attempt number: {n!r} is not an integer >= 1')
+    return Path(calc_path) / ATTEMPTS_DIR / str(n)
+
+
+def job_dir(run_dir, name):
+    """Directory of a group of jobs: ``<run>/jobs/<name>``."""
+    return Path(run_dir) / JOBS_DIR / check_name(name, 'job name')

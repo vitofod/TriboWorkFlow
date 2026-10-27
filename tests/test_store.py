@@ -280,15 +280,41 @@ def test_check_fingerprint_rejects(value):
 
 # -- records -------------------------------------------------------------------
 
+DIGEST = 'sha256:' + 'b' * 64
+
+
+def full_attempt(n=1, **changes):
+    fields = dict(n=n, job_id='4521.server', host='node01', started='2026-10-27T10:00:00+00:00',
+                  ended='2026-10-27T12:00:00+00:00', max_seconds=85000, max_seconds_cap=84600.0,
+                  input=store.AttemptFile(f'attempts/{n}/run.pwi', DIGEST),
+                  output=store.AttemptFile(f'attempts/{n}/output.pwo', None),
+                  exit_code=255, job_state='killed', stop_reason='max_seconds', clean_stop=True,
+                  status=store.Status('ended', 'not_converged', 'not_converged'),
+                  remedies={'mixing_beta': 0.3})
+    fields.update(changes)
+    return store.Attempt(**fields)
+
+
 def test_record_round_trip(system_dir):
-    record = make_record(attempts=(store.Attempt('4521', {'mixing_beta': 0.3}),))
+    record = make_record(attempts=(full_attempt(1), store.Attempt(2, job_id='4522')))
     path = store.write_record(system_dir, record)
     assert path == system_dir / 'pes_scf' / 'aa' / 'record.json'
     data = read_json(path)
     assert list(data) == ['schema_version', 'calc_id', 'system', 'step', 'label', 'calc_type',
                           'engine', 'energy_model', 'fingerprint', 'status', 'attempts',
                           'results', 'files']
-    assert data['calc_id'] == 'pes_scf/aa' and data['schema_version'] == 1
+    assert data['calc_id'] == 'pes_scf/aa' and data['schema_version'] == 2
+    assert list(data['attempts'][0]) == ['n', 'job_id', 'host', 'started', 'ended',
+                                         'max_seconds', 'max_seconds_cap', 'input', 'output',
+                                         'exit_code', 'job_state', 'stop_reason', 'clean_stop',
+                                         'status', 'remedies']
+    assert data['attempts'][0]['input'] == {'path': 'attempts/1/run.pwi', 'digest': DIGEST}
+    assert data['attempts'][1] == {
+        'n': 2, 'job_id': '4522', 'host': None, 'started': None, 'ended': None,
+        'max_seconds': None, 'max_seconds_cap': None, 'input': None, 'output': None,
+        'exit_code': None, 'job_state': None, 'stop_reason': None, 'clean_stop': None,
+        'status': {'process': None, 'scf': None, 'geometry': None, 'parsing': None},
+        'remedies': {}}
     assert store.read_record(system_dir, 'pes_scf/aa') == record
     store.write_record(system_dir, make_record(step='adhesion', label='top_slab'))
     assert [r.calc_id for r in store.iter_records(system_dir)] == ['adhesion/top_slab',
@@ -331,10 +357,66 @@ def test_record_holds_copies():
     assert record.results['output']['energy'] == -10.5
 
 
+@pytest.mark.parametrize('changes, message', [
+    ({'n': 0}, 'attempts.n: 0 is not an integer >= 1'),
+    ({'n': True}, 'attempts.n: True'),
+    ({'job_id': ''}, 'attempts.job_id: a non-empty string'),
+    ({'job_id': 4521}, 'attempts.job_id: a non-empty string'),
+    ({'started': '27/10/2026'}, 'attempts.started: .* not an ISO 8601 time'),
+    ({'ended': 1}, 'attempts.ended: 1 is not an ISO 8601 time'),
+    ({'max_seconds': math.inf}, 'attempts.max_seconds: a finite number'),
+    ({'max_seconds_cap': '84600'}, 'attempts.max_seconds_cap: a finite number'),
+    ({'max_seconds': True}, 'attempts.max_seconds: a finite number'),
+    ({'input': 'run.pwi'}, 'attempts.input: an AttemptFile or None'),
+    ({'exit_code': 2.0}, 'attempts.exit_code: an integer or null'),
+    ({'exit_code': False}, 'attempts.exit_code: an integer or null'),
+    ({'clean_stop': 1}, 'attempts.clean_stop: true, false or null'),
+    ({'status': None}, 'attempts.status: a Status is required'),
+    ({'remedies': []}, 'attempts.remedies: a JSON object'),
+])
+def test_attempt_rejects(changes, message):
+    with pytest.raises(StoreError, match=message):
+        full_attempt(**changes)
+
+
+@pytest.mark.parametrize('path, digest, message', [
+    ('/tmp/output.pwo', None, 'not a relative path inside'),
+    ('../output.pwo', None, 'not a relative path inside'),
+    ('attempts\\1\\output.pwo', None, 'not a relative path inside'),
+    ('output.pwo', 'sha256:xyz', 'attempts.file.digest'),
+])
+def test_attempt_file_rejects(path, digest, message):
+    with pytest.raises(StoreError, match=message):
+        store.AttemptFile(path, digest)
+
+
+def test_attempts_numbered_in_order():
+    make_record(attempts=(store.Attempt(1), store.Attempt(2)))
+    for attempts in ((store.Attempt(2),), (store.Attempt(1), store.Attempt(1)),
+                     (store.Attempt(2), store.Attempt(1))):
+        with pytest.raises(StoreError, match='not 1, 2, ... in order'):
+            make_record(attempts=attempts)
+
+
+def test_attempt_holds_a_copy_of_the_remedies():
+    remedies = {'mixing_beta': 0.3}
+    attempt = store.Attempt(1, remedies=remedies)
+    remedies['mixing_beta'] = 0.1
+    assert attempt.remedies == {'mixing_beta': 0.3}
+
+
+def with_attempt(data, change):
+    """Put in ``data`` one attempt changed by ``change``."""
+    attempt = full_attempt().to_dict()
+    change(attempt)
+    data['attempts'] = [attempt]
+
+
 INVALID_RECORDS = [
     ('unknown key', lambda d: d.update(extra=1)),
     ('missing key', lambda d: d.pop('files')),
-    ('schema version', lambda d: d.update(schema_version=2)),
+    ('schema version 1', lambda d: d.update(schema_version=1)),
+    ('schema version 3', lambda d: d.update(schema_version=3)),
     ('schema version bool', lambda d: d.update(schema_version=True)),
     ('calc_id', lambda d: d.update(calc_id='pes_scf/ab')),
     ('step with slash', lambda d: d.update(step='pes/scf', calc_id='pes/scf/aa')),
@@ -352,6 +434,10 @@ INVALID_RECORDS = [
     ('engine name', lambda d: d['engine'].update(name='')),
     ('attempt keys', lambda d: d.update(attempts=[{'job_id': '1'}])),
     ('attempts type', lambda d: d.update(attempts={})),
+    ('attempt status keys', lambda d: with_attempt(d, lambda a: a['status'].pop('parsing'))),
+    ('attempt file keys', lambda d: with_attempt(d, lambda a: a.update(input={'path': 'x'}))),
+    ('attempt number', lambda d: with_attempt(d, lambda a: a.update(n=2))),
+    ('attempt unknown key', lambda d: with_attempt(d, lambda a: a.update(pid=12))),
     ('results type', lambda d: d.update(results=[1])),
     ('absolute file', lambda d: d['files'].update(output='/tmp/output.pwo')),
     ('file outside', lambda d: d['files'].update(output='../output.pwo')),

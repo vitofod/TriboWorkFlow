@@ -215,6 +215,11 @@ def test_strain_weights_without_bulk_moduli():
     assert (params['strain_weight_1'], params['strain_weight_2']) == (1.0, 2.0)
 
 
+def test_max_seconds_margin_default():
+    settings = settings_from_dict(edited(WORKFLOW, {'execution.max_seconds_margin': DELETE}))
+    assert settings.execution.max_seconds_margin == 600
+
+
 def test_engine_per_step():
     settings = settings_from_dict(edited(WORKFLOW, {'interface.engines': {'ppes': 'qe'}}))
     assert settings.interface.engine_for('ppes') == 'qe'
@@ -335,6 +340,11 @@ ERRORS = [
     ('groups', W, {'execution.groups': 0}, 'execution.groups', 'must be > 0'),
     ('walltime', W, {'execution.walltime': 0}, 'execution.walltime', 'must be > 0'),
     ('polling', W, {'execution.polling_interval': -5}, 'execution.polling_interval', 'must be > 0'),
+    ('margin-0', W, {'execution.max_seconds_margin': 0}, 'execution.max_seconds_margin', 'must be > 0'),
+    ('margin-walltime', W, {'execution.max_seconds_margin': 86400}, 'execution.max_seconds_margin',
+     'must be < walltime (86400), got 86400'),
+    ('margin-float', W, {'execution.max_seconds_margin': 600.0}, 'execution.max_seconds_margin',
+     'expected int, got 600.0'),
     # [interface]
     ('one-slab', W, {'interface.slabs': WORKFLOW['interface']['slabs'][:1]}, 'interface.slabs',
      'give two slabs, bottom then top; got 1'),

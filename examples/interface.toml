@@ -41,7 +41,7 @@ best_match = "area"
 
 [namelists.CONTROL]
 nstep = 150
-max_seconds = 84600                # Seconds; lower than execution.walltime.
+max_seconds = 84600                # Seconds; upper limit of the value set from the walltime left.
 tstress = false
 tprnfor = true
 pseudo_dir = "/path/to/pseudo"
@@ -89,8 +89,9 @@ kdens = 7.5                        # k-points per 1/angstrom of each reciprocal 
 
 [execution]
 scheduler = "slurm"
-jobscript = "jobscript.sh"         # Copied for every job, with the launch line added.
+jobscript = "jobscript.sh"         # Relative to this file; copied with the worker line added.
 run_command = "mpirun -np 32 pw.x -nk 4"
-groups = 10                        # Jobs over which the calculations of a step are spread.
-walltime = 86400                   # Seconds.
+groups = 10                        # Jobs (workers); never more than the calculations.
+walltime = 86400                   # Seconds, as in the jobscript.
 polling_interval = 1800            # Seconds between two checks of the jobs.
+max_seconds_margin = 600           # Seconds kept free at the end of the walltime.

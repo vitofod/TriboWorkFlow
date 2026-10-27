@@ -21,6 +21,11 @@ complete, has results and its fingerprint equals the one expected
 (``can_reuse``). Which results each kind of calculation must have is checked
 by the parser of its engine.
 
+The states and the results describe the last run. Each run is also kept as
+an ``Attempt``: where and when it ran, the time limit, the input and the
+output with their digests, the exit code, the state of the job, the reason
+of the stop and the states at its end.
+
 Notes
 -----
 The engine version is recorded. Whether a different version prevents reuse
@@ -28,14 +33,16 @@ is not decided yet, so ``can_reuse`` does not look at it.
 """
 
 import copy
+import math
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .atomic import StoreError, check_json_value, read_json, write_json
 from .fingerprint import canonical_json, check_fingerprint, content_digest
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 RECORD_FILE = 'record.json'
 
 PROCESS_STATES = ('pending', 'running', 'ended', 'crashed', 'killed')
@@ -46,6 +53,10 @@ SUMMARY_STATES = ('pending', 'running', 'completed', 'not_converged', 'crashed',
 
 _RECORD_KEYS = ('schema_version', 'calc_id', 'system', 'step', 'label', 'calc_type', 'engine',
                 'energy_model', 'fingerprint', 'status', 'attempts', 'results', 'files')
+_STATUS_KEYS = ('process', 'scf', 'geometry', 'parsing')
+_ATTEMPT_KEYS = ('n', 'job_id', 'host', 'started', 'ended', 'max_seconds', 'max_seconds_cap',
+                 'input', 'output', 'exit_code', 'job_state', 'stop_reason', 'clean_stop',
+                 'status', 'remedies')
 
 
 def check_name(value, where):
@@ -93,6 +104,20 @@ def _text(value, where):
     if not isinstance(value, str) or not value:
         raise StoreError(f'{where}: a non-empty string is required, not {value!r}')
     return value
+
+
+def _optional_text(value, where):
+    return None if value is None else _text(value, where)
+
+
+def _relative_file(name, where):
+    """Check a path relative to the calculation directory and inside it."""
+    if (not isinstance(name, str) or not name or PurePosixPath(name).is_absolute()
+            or PureWindowsPath(name).is_absolute() or '..' in PurePosixPath(name).parts
+            or '\\' in name):
+        raise StoreError(f'{where}: {name!r} is not a relative path inside the calculation '
+                         'directory')
+    return name
 
 
 def check_keys(value, keys, where):
@@ -194,27 +219,167 @@ class Status:
         return self.process
 
 
+def _status_dict(status):
+    return {'process': status.process, 'scf': status.scf, 'geometry': status.geometry,
+            'parsing': status.parsing}
+
+
+@dataclass(frozen=True)
+class AttemptFile:
+    """A file of an attempt.
+
+    Parameters
+    ----------
+    path : str
+        Path relative to the calculation directory (e.g. ``'output.pwo'``,
+        or ``'attempts/1/output.pwo'`` once archived).
+    digest : str or None, optional
+        ``file_digest`` of its bytes; None until computed.
+    """
+
+    path: str
+    digest: str | None = None
+
+    def __post_init__(self):
+        _relative_file(self.path, 'attempts.file.path')
+        if self.digest is not None:
+            check_fingerprint(self.digest, 'attempts.file.digest')
+
+    def to_dict(self):
+        """JSON object of the file."""
+        return {'path': self.path, 'digest': self.digest}
+
+    @classmethod
+    def from_dict(cls, data):
+        """File from its JSON object, or None from null."""
+        if data is None:
+            return None
+        return cls(**check_keys(data, ('path', 'digest'), 'attempts.file'))
+
+
+def _time(value, where):
+    if value is None:
+        return None
+    try:
+        datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise StoreError(f'{where}: {value!r} is not an ISO 8601 time') from None
+    return value
+
+
+def _seconds(value, where):
+    if value is None:
+        return None
+    if type(value) not in (int, float) or not math.isfinite(value):
+        raise StoreError(f'{where}: a finite number of seconds is required, not {value!r}')
+    return value
+
+
 @dataclass(frozen=True)
 class Attempt:
     """One run of a calculation.
 
+    The fields that nothing has established yet stay None. Each one has a
+    single source: the worker that ran the attempt (host, times, time limit,
+    files, exit code), the scheduler (state of the job), the output of the
+    engine (stop reason, clean stop, states).
+
     Parameters
     ----------
-    job_id : str
-        Identifier of the job given by the scheduler.
+    n : int
+        Number of the attempt, counted from 1.
+    job_id : str or None, optional
+        Id of the job, as given by the scheduler; None outside a job.
+    host : str or None, optional
+        Machine the attempt ran on.
+    started, ended : str or None, optional
+        ISO 8601 times of the start and of the end of the run.
+    max_seconds : int or float or None, optional
+        Time limit given to the engine for this attempt, in seconds.
+    max_seconds_cap : int or float or None, optional
+        Upper limit of ``max_seconds`` written in the prepared input; None if
+        the input has none.
+    input, output : AttemptFile or None, optional
+        Input run and output written by the attempt.
+    exit_code : int or None, optional
+        Exit status of the command that ran the engine, as seen by the
+        worker; None when the worker did not see the command end.
+    job_state : str or None, optional
+        State of the job as reported by the scheduler.
+    stop_reason : str or None, optional
+        Why the run stopped, as read from the output.
+    clean_stop : bool or None, optional
+        Whether the engine closed the run, as read from the output.
+    status : Status, optional
+        States of the calculation at the end of this attempt.
     remedies : dict, optional
         Parameters changed for this attempt with respect to the input.
     """
 
-    job_id: str
+    n: int
+    job_id: str | None = None
+    host: str | None = None
+    started: str | None = None
+    ended: str | None = None
+    max_seconds: float | None = None
+    max_seconds_cap: float | None = None
+    input: AttemptFile | None = None
+    output: AttemptFile | None = None
+    exit_code: int | None = None
+    job_state: str | None = None
+    stop_reason: str | None = None
+    clean_stop: bool | None = None
+    status: Status = field(default_factory=Status)
     remedies: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        _text(self.job_id, 'attempts.job_id')
+        if type(self.n) is not int or self.n < 1:
+            raise StoreError(f'attempts.n: {self.n!r} is not an integer >= 1')
+        _optional_text(self.job_id, 'attempts.job_id')
+        _optional_text(self.host, 'attempts.host')
+        _time(self.started, 'attempts.started')
+        _time(self.ended, 'attempts.ended')
+        _seconds(self.max_seconds, 'attempts.max_seconds')
+        _seconds(self.max_seconds_cap, 'attempts.max_seconds_cap')
+        for name in ('input', 'output'):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, AttemptFile):
+                raise StoreError(f'attempts.{name}: an AttemptFile or None is required')
+        if self.exit_code is not None and type(self.exit_code) is not int:
+            raise StoreError(f'attempts.exit_code: an integer or null is required, '
+                             f'not {self.exit_code!r}')
+        _optional_text(self.job_state, 'attempts.job_state')
+        _optional_text(self.stop_reason, 'attempts.stop_reason')
+        if self.clean_stop is not None and type(self.clean_stop) is not bool:
+            raise StoreError(f'attempts.clean_stop: true, false or null is required, '
+                             f'not {self.clean_stop!r}')
+        if not isinstance(self.status, Status):
+            raise StoreError('attempts.status: a Status is required')
         if not isinstance(self.remedies, dict):
             raise StoreError('attempts.remedies: a JSON object is required')
         check_json_value(self.remedies, 'attempts.remedies')
         object.__setattr__(self, 'remedies', copy.deepcopy(self.remedies))
+
+    def to_dict(self):
+        """JSON object of the attempt, with the keys in the order of the file."""
+        return {'n': self.n, 'job_id': self.job_id, 'host': self.host,
+                'started': self.started, 'ended': self.ended,
+                'max_seconds': self.max_seconds, 'max_seconds_cap': self.max_seconds_cap,
+                'input': None if self.input is None else self.input.to_dict(),
+                'output': None if self.output is None else self.output.to_dict(),
+                'exit_code': self.exit_code, 'job_state': self.job_state,
+                'stop_reason': self.stop_reason, 'clean_stop': self.clean_stop,
+                'status': _status_dict(self.status), 'remedies': copy.deepcopy(self.remedies)}
+
+    @classmethod
+    def from_dict(cls, data):
+        """Attempt from its JSON object, with exactly the keys of ``to_dict``."""
+        check_keys(data, _ATTEMPT_KEYS, 'attempts')
+        fields = dict(data)
+        fields['input'] = AttemptFile.from_dict(data['input'])
+        fields['output'] = AttemptFile.from_dict(data['output'])
+        fields['status'] = Status(**check_keys(data['status'], _STATUS_KEYS, 'attempts.status'))
+        return cls(**fields)
 
 
 @dataclass(frozen=True)
@@ -243,7 +408,7 @@ class Record:
     status : Status, optional
         States; all None by default.
     attempts : tuple of Attempt, optional
-        Runs made so far.
+        Runs made so far, numbered 1, 2, ... in order.
     results : dict or None, optional
         Results read from the output; None until read.
     files : dict, optional
@@ -285,6 +450,9 @@ class Record:
         attempts = tuple(self.attempts)
         if not all(isinstance(a, Attempt) for a in attempts):
             raise StoreError('attempts: a sequence of Attempt is required')
+        numbers = [a.n for a in attempts]
+        if numbers != list(range(1, len(attempts) + 1)):
+            raise StoreError(f'attempts: numbered {numbers}, not 1, 2, ... in order')
         if self.results is not None:
             if not isinstance(self.results, dict):
                 raise StoreError('results: a JSON object or null is required')
@@ -296,11 +464,7 @@ class Record:
             raise StoreError('files: a JSON object is required')
         for role, name in self.files.items():
             _text(role, 'files')
-            if (not isinstance(name, str) or not name or PurePosixPath(name).is_absolute()
-                    or PureWindowsPath(name).is_absolute() or '..' in PurePosixPath(name).parts
-                    or '\\' in name):
-                raise StoreError(f'files[{role!r}]: {name!r} is not a relative path inside the '
-                                 'calculation directory')
+            _relative_file(name, f'files[{role!r}]')
         object.__setattr__(self, 'energy_model', copy.deepcopy(self.energy_model))
         object.__setattr__(self, 'attempts', attempts)
         object.__setattr__(self, 'results', copy.deepcopy(self.results))
@@ -338,10 +502,8 @@ class Record:
                        'version': self.engine.version},
             'energy_model': copy.deepcopy(self.energy_model),
             'fingerprint': self.fingerprint,
-            'status': {'process': self.status.process, 'scf': self.status.scf,
-                       'geometry': self.status.geometry, 'parsing': self.status.parsing},
-            'attempts': [{'job_id': a.job_id, 'remedies': copy.deepcopy(a.remedies)}
-                         for a in self.attempts],
+            'status': _status_dict(self.status),
+            'attempts': [a.to_dict() for a in self.attempts],
             'results': copy.deepcopy(self.results),
             'files': dict(self.files),
         }
@@ -370,11 +532,10 @@ class Record:
                 raise StoreError(f'schema_version: {version!r}; this version reads '
                                  f'{SCHEMA_VERSION}')
             engine = check_keys(data['engine'], ('name', 'program', 'version'), 'engine')
-            status = check_keys(data['status'], ('process', 'scf', 'geometry', 'parsing'), 'status')
+            status = check_keys(data['status'], _STATUS_KEYS, 'status')
             if not isinstance(data['attempts'], list):
                 raise StoreError('attempts: a JSON array is required')
-            attempts = [Attempt(**check_keys(a, ('job_id', 'remedies'), 'attempts'))
-                        for a in data['attempts']]
+            attempts = [Attempt.from_dict(a) for a in data['attempts']]
             record = cls(system=data['system'], step=data['step'], label=data['label'],
                          calc_type=data['calc_type'], engine=Engine(**engine),
                          energy_model=data['energy_model'], fingerprint=data['fingerprint'],

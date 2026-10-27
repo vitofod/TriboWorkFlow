@@ -199,11 +199,22 @@ Needed only to run on HPC. No value is tied to a specific machine.
 | Key | Type | | Notes |
 |---|---|---|---|
 | `scheduler` | str | R | `slurm`, `pbs`, `torque`, `lsf`, `sge`, `htcondor`, `condor` (the names of Xsorb) |
-| `jobscript` | str | R | user jobscript, copied for every job with the launch line added |
+| `jobscript` | str | R | user jobscript, relative to the folder of the settings file; copied for every group of jobs with the launch line of the worker added, never changed |
 | `run_command` | str | R | command up to the input file, e.g. `mpirun -np 32 pw.x -nk 4` |
-| `groups` | int | R | > 0, jobs over which the calculations of a step are spread |
-| `walltime` | int | R | > 0 s, walltime of each job |
+| `groups` | int | R | > 0, jobs (workers) over which the calculations of a group are spread: 1 runs them one after the other, one per calculation runs them all at once; never more jobs than calculations are submitted |
+| `walltime` | int | R | > 0 s, walltime of each job; keep it equal to the one of the jobscript |
 | `polling_interval` | int | R | > 0 s, time between two checks of the jobs |
+| `max_seconds_margin` | int | `600` | > 0 s and < `walltime`, time kept free at the end of the walltime |
+
+Before each run the worker writes `max_seconds` in the input it runs:
+`walltime` minus the time since the worker started minus
+`max_seconds_margin`, capped by the
+`max_seconds` of `[namelists.CONTROL]` when given. pw.x then stops in time to
+write its restart files. When nothing is left, the worker takes no more
+calculations. The margin must cover the time between two checks of pw.x, the
+writing of the restart files and the commands of the jobscript that run
+before the worker; 600 s is a starting value. Both values are recorded with
+each run.
 
 ## `[interface]` (interface workflow)
 
