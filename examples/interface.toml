@@ -95,3 +95,4 @@ groups = 10                        # Jobs (workers); never more than the calcula
 walltime = 86400                   # Seconds, as in the jobscript.
 polling_interval = 1800            # Seconds between two checks of the jobs.
 max_seconds_margin = 600           # Seconds kept free at the end of the walltime.
+job_report_wait = 3600             # Seconds a submitted job may stay unreported by the scheduler.

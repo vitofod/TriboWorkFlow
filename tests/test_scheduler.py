@@ -4,29 +4,38 @@
 """Tests of the batch scheduler commands (``triboworkflow.execution.scheduler``).
 
 No scheduler is called: ``subprocess.run`` is replaced by a fake that records
-the commands and returns synthetic outputs. The job listings are shaped on the
-columns that the parser reads.
+the commands and returns synthetic outputs. The column listings are shaped on
+the columns that the parser reads; the listings of named attributes and the
+states of single jobs on the formats of the manuals of Slurm, OpenPBS, Torque
+and HTCondor.
 """
 
+import json
 import subprocess
 
 import pytest
 
 from triboworkflow.execution import scheduler as scheduler_module
-from triboworkflow.execution.scheduler import JobScheduler, JobSchedulerError
+from triboworkflow.execution.scheduler import (JobScheduler, JobSchedulerError, JobState,
+                                               JobSubmissionError)
 
 
 class FakeRun:
-    """Replacement of ``subprocess.run``: records the calls, returns ``stdout`` or raises ``error``."""
+    """Replacement of ``subprocess.run``: records the calls, returns ``stdout`` or raises ``error``.
+
+    ``stdout`` may be a list: one output per call, in order.
+    """
 
     def __init__(self, stdout='', error=None):
+        self.outputs = list(stdout) if isinstance(stdout, list) else None
         self.stdout, self.error, self.calls = stdout, error, []
 
     def __call__(self, cmd, **kwargs):
         self.calls.append((cmd, kwargs))
         if self.error is not None:
             raise self.error
-        return subprocess.CompletedProcess(cmd, 0, stdout=self.stdout, stderr='')
+        stdout = self.outputs.pop(0) if self.outputs is not None else self.stdout
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr='')
 
 
 @pytest.fixture
@@ -154,6 +163,32 @@ def test_timed_out_command(fake_run, jobscript):
         JobScheduler('slurm', timeout=5).submit_job(str(jobscript))
 
 
+# Failures of a submission command: False if no job was created, None if one may have been.
+@pytest.mark.parametrize('error, stdout, accepted', [
+    (subprocess.CalledProcessError(1, ['sbatch'], output='', stderr='invalid partition\n'),
+     '', False),
+    (subprocess.CalledProcessError(1, ['sbatch'], output='Submitted batch job 77\n', stderr='x'),
+     '', None),
+    (subprocess.TimeoutExpired(['sbatch'], 5), '', None),
+    (OSError('connection reset'), '', None),
+    (None, 'sbatch: queued somewhere', None),
+])
+def test_submission_outcome(fake_run, jobscript, error, stdout, accepted):
+    fake_run(stdout, error=error)
+    with pytest.raises(JobSubmissionError) as raised:
+        JobScheduler('slurm').submit_job(str(jobscript))
+    assert raised.value.accepted is accepted
+
+
+def test_nothing_run_is_not_a_failed_submission(fake_run, jobscript, tmp_path):
+    # A missing command or jobscript: nothing was submitted, and no JobSubmissionError.
+    fake_run(error=FileNotFoundError(2, 'No such file or directory', 'sbatch'))
+    for path in (str(jobscript), str(tmp_path / 'missing.sh')):
+        with pytest.raises(JobSchedulerError) as raised:
+            JobScheduler('slurm').submit_job(path)
+        assert not isinstance(raised.value, JobSubmissionError)
+
+
 # --- cancellation --------------------------------------------------------------------
 
 def test_cancel(fake_run):
@@ -178,22 +213,14 @@ def test_cancel_rejects_bad_ids(fake_run, job_id, message):
 
 # --- job listings ---------------------------------------------------------------------
 
-# Output, running, queued, active. Lines whose first column is not a job id
-# (headers, the array task 126_1, the HTCondor id 57.0) are skipped. The
-# lines of pbs and htcondor are shaped on the columns the parser reads, not on
-# the outputs of their commands (see DOCUMENTED below).
+# Output, running, queued, active of the column listings. Lines whose first
+# column is not a job id (headers, the array task 126_1) are skipped.
 LISTINGS = {
     'slurm': ('123 normal job1 vito R 1:00 1 node01\n'
               '124 normal job2 vito PD 0:00 1 (Priority)\n'
               '125 normal job3 vito CG 2:00 1 node02\n'
               '126_1 normal arr vito R 1:00 1 node03\n',
               ['123', '125'], ['124'], ['123', '124', '125']),
-    'pbs': ('Job id Name User Time Use S Queue\n'
-            '---------------- ---- ---- -------- - -----\n'
-            '4567.server vito batch job1 1234 R 01:00\n'
-            '4568.server vito batch job2 -- Q --\n'
-            '4569.server vito batch job3 1235 F 02:00\n',
-            ['4567'], ['4568'], ['4567', '4568']),
     'lsf': ('JOBID USER STAT QUEUE FROM_HOST EXEC_HOST JOB_NAME SUBMIT_TIME\n'
             '789 vito RUN normal login1 node1 job1 Oct 27 10:00\n'
             '790 vito PEND normal login1 job2 Oct 27 10:01\n'
@@ -203,79 +230,112 @@ LISTINGS = {
             '321 0.5 job1 vito r 10/27/2026 10:00:00 all.q@node1 1\n'
             '322 0.0 job2 vito qw 10/27/2026 10:01:00 1\n',
             ['321'], ['322'], ['321', '322']),
-    'htcondor': ('ID OWNER SUBMITTED RUN_TIME ST PRI SIZE CMD\n'
-                 '55 vito 10/27 10:00 0+00:01:00 R 0 0.0 job.sh\n'
-                 '56 vito 10/27 10:01 0+00:00:00 I 0 0.0 job.sh\n'
-                 '57.0 vito 10/27 10:02 0+00:00:00 I 0 0.0 job.sh\n',
-                 ['55'], ['56'], ['55', '56']),
 }
-READABLE = ('slurm', 'lsf', 'sge')
 
-# Listings shaped on the documented output formats, each with one running and
-# one queued job: the alternative format of ``qstat -u`` (PBS, Torque), the
-# default grouped output of ``condor_q`` and the one of ``condor_q -nobatch``.
+
+def pbs_json(jobs):
+    """Output of ``qstat -f -F json`` (OpenPBS) for (id, owner, job_state) of each job."""
+    return json.dumps({
+        'timestamp': 1793180400, 'pbs_version': '23.06.06', 'pbs_server': 'server',
+        'Jobs': {job_id: {'Job_Name': 'job', 'Job_Owner': owner, 'job_state': state,
+                          'queue': 'workq'} for job_id, owner, state in jobs}}, indent=4)
+
+
+def qstat_full(jobs):
+    """Output of ``qstat -f -1`` (Torque) for (id, owner, job_state) of each job."""
+    return ''.join(f'Job Id: {job_id}\n    Job_Name = job\n    Job_Owner = {owner}\n'
+                   f'    job_state = {state}\n    queue = batch\n\n'
+                   for job_id, owner, state in jobs)
+
+
+# Listings of named attributes, shaped on the formats of the manuals: a
+# running, a queued, a held and a finished job of the user and a running job
+# of another user (PBS, Torque); for HTCondor ``condor_q vito -af:j JobStatus``
+# with a running cluster of two processes.
+OWN = [('4567.server', 'vito@login1', 'R'), ('4568.server', 'vito@login1', 'Q'),
+       ('4569.server', 'vito@login1', 'H'), ('4571.server', 'elisa@login1', 'R')]
+CONDOR_AF = '591.0 2\n592.0 1\n593.0 5\n594.0 2\n594.1 2\n'
+NAMED = {
+    'pbs': (pbs_json(OWN + [('4570.server', 'vito@login1', 'F')]),
+            ['4567'], ['4568'], ['4567', '4568', '4569']),
+    'torque': (qstat_full(OWN + [('4570.server', 'vito@login1', 'C')]),
+               ['4567'], ['4568'], ['4567', '4568', '4569']),
+    'htcondor': (CONDOR_AF, ['591', '594'], ['592', '593'], ['591', '592', '593', '594']),
+    'condor': (CONDOR_AF, ['591', '594'], ['592', '593'], ['591', '592', '593', '594']),
+}
+ALL_LISTINGS = {**LISTINGS, **NAMED}
+
+
+@pytest.mark.parametrize('name', ALL_LISTINGS)
+def test_running_and_queued(fake_run, name):
+    output, running, queued, _ = ALL_LISTINGS[name]
+    fake_run(output)
+    assert JobScheduler(name).get_lists_of_running_and_queued_job_ids() == (running, queued)
+
+
+@pytest.mark.parametrize('name', ALL_LISTINGS)
+def test_active_jobs(fake_run, name):
+    output, _, _, active = ALL_LISTINGS[name]
+    fake_run(output)
+    assert JobScheduler(name).get_active_job_ids() == active
+
+
+@pytest.mark.parametrize('name, cmd', [
+    ('pbs', ['qstat', '-f', '-F', 'json']),
+    ('torque', ['qstat', '-f', '-1']),
+    ('htcondor', ['condor_q', 'vito', '-af:j', 'JobStatus']),
+])
+def test_listing_commands_of_named_attributes(fake_run, name, cmd):
+    run = fake_run(NAMED[name][0])
+    JobScheduler(name).get_active_job_ids()
+    assert run.calls[0][0] == cmd
+
+
+# The formats read by Xsorb: the alternative format of ``qstat -u`` (PBS,
+# Torque) and the default grouped output of ``condor_q``, each with a running
+# and a queued job.
 QSTAT_U = ('server.example:\n'
            '                                                            Req\'d  Req\'d   Elap\n'
            'Job ID          Username Queue    Jobname    SessID NDS TSK Memory Time  S Time\n'
            '--------------- -------- -------- ---------- ------ --- --- ------ ----- - -----\n'
            '1234.server     vito     workq    job1        12345   1   4    --  01:00 R 00:10\n'
            '1235.server     vito     workq    job2          --    1   4    --  01:00 Q   --\n')
-DOCUMENTED = {
-    'pbs': QSTAT_U,
-    'torque': QSTAT_U,
-    'htcondor': ('-- Schedd: submit.example : <127.0.0.1:9618> @ 10/27/26 10:00:00\n'
-                 'OWNER BATCH_NAME    SUBMITTED   DONE   RUN    IDLE  TOTAL JOB_IDS\n'
-                 'vito  ID: 591      10/27 10:00      _      1      1      2 591.0-1\n'
-                 '\n'
-                 'Total for query: 2 jobs; 0 completed, 0 removed, 1 idle, 1 running, 0 held, '
-                 '0 suspended\n'),
-    'condor': (' ID      OWNER            SUBMITTED     RUN_TIME ST PRI SIZE CMD\n'
-               ' 591.0   vito           10/27 10:00   0+00:01:00 R  0    0.0 job.sh\n'
-               ' 591.1   vito           10/27 10:00   0+00:00:00 I  0    0.0 job.sh\n'),
-}
+CONDOR_Q_BATCH = ('-- Schedd: submit.example : <127.0.0.1:9618> @ 10/27/26 10:00:00\n'
+                  'OWNER BATCH_NAME    SUBMITTED   DONE   RUN    IDLE  TOTAL JOB_IDS\n'
+                  'vito  ID: 591      10/27 10:00      _      1      1      2 591.0-1\n')
 
 
-@pytest.mark.parametrize('name', READABLE)
-def test_running_and_queued(fake_run, name):
-    output, running, queued, _ = LISTINGS[name]
+@pytest.mark.parametrize('name, output', [
+    ('pbs', QSTAT_U), ('torque', QSTAT_U), ('htcondor', CONDOR_Q_BATCH),
+    ('pbs', ''), ('pbs', '[]'),
+    ('pbs', pbs_json([('4567.server', 'vito@login1', 'R')]).replace('Job_Owner', 'owner')),
+    ('torque', qstat_full([('4567.server', 'vito@login1', 'R')]).replace('job_state', 'state')),
+])
+def test_unexpected_listings_raise(fake_run, name, output):
+    # A listing that cannot be read is never an empty queue.
     fake_run(output)
-    assert JobScheduler(name).get_lists_of_running_and_queued_job_ids() == (running, queued)
-
-
-@pytest.mark.parametrize('name', READABLE)
-def test_active_jobs(fake_run, name):
-    output, _, _, active = LISTINGS[name]
-    fake_run(output)
-    assert JobScheduler(name).get_active_job_ids() == active
-
-
-@pytest.mark.parametrize('name', LISTINGS)
-def test_parser_reads_its_columns(name):
-    output, running, queued, active = LISTINGS[name]
-    scheduler = JobScheduler(name)
-    assert scheduler._split_running_and_queued(output) == (running, queued)
-    assert scheduler._extract_active_job_ids(output) == active
-
-
-@pytest.mark.parametrize('name', DOCUMENTED)
-def test_documented_outputs_are_not_read(name):
-    # A running and a queued job, and the lists come out empty.
-    scheduler = JobScheduler(name)
-    assert scheduler._split_running_and_queued(DOCUMENTED[name]) == ([], [])
-    assert scheduler._extract_active_job_ids(DOCUMENTED[name]) == []
-
-
-@pytest.mark.parametrize('name', ['pbs', 'torque', 'htcondor', 'condor'])
-def test_unreadable_listings_raise(fake_run, name):
-    run = fake_run(DOCUMENTED[name])
     scheduler = JobScheduler(name)
     for listing in (scheduler.get_active_job_ids,
                     scheduler.get_lists_of_running_and_queued_job_ids):
-        with pytest.raises(JobSchedulerError, match=f'The job listing of {name} cannot be read'):
+        with pytest.raises(JobSchedulerError):
             listing()
+
+
+@pytest.mark.parametrize('name, output', [
+    ('pbs', json.dumps({'timestamp': 1793180400, 'pbs_version': '23.06.06',
+                        'pbs_server': 'server'})),
+    ('torque', ''), ('htcondor', ''),
+])
+def test_listings_without_jobs(fake_run, name, output):
+    fake_run(output)
+    assert JobScheduler(name).get_lists_of_running_and_queued_job_ids() == ([], [])
+
+
+def test_dry_run_listings_are_empty(fake_run):
+    run = fake_run(error=AssertionError('no command may run in a dry run'))
+    for name in ('pbs', 'torque', 'htcondor'):
+        assert JobScheduler(name, dry_run=True).get_active_job_ids() == []
     assert run.calls == []
-    with pytest.raises(JobSchedulerError, match='cannot be read'):
-        JobScheduler(name, dry_run=True).get_active_job_ids()
 
 
 def test_custom_running_and_queued_raise(fake_run, monkeypatch):
@@ -292,7 +352,7 @@ def test_custom_running_and_queued_raise(fake_run, monkeypatch):
 @pytest.mark.parametrize('name, cmd', [
     ('slurm', ['squeue', '-h', '-u', 'vito', '-t', 'RUNNING,PENDING,CONFIGURING']),
     ('lsf', ['bjobs', '-u', 'vito']),
-    ('sge', ['qstat', '-u', 'vito', '-s', 'r,qw']),
+    ('sge', ['qstat', '-u', 'vito']),
 ])
 def test_listing_command_with_the_user_name(fake_run, name, cmd):
     run = fake_run()
@@ -319,16 +379,218 @@ def test_listing_failure_is_raised(fake_run):
     ('torque', '4567', '4567'),
     ('slurm', '123', '123'),
     ('lsf', '789', '789'),
+    ('htcondor', '591', '591'),
+    ('htcondor', '591.0', '591'),
 ])
 def test_job_key_matches_the_listings(name, job_id, key):
     assert JobScheduler(name).job_key(job_id) == key
 
 
-def test_submitted_pbs_job_matches_the_parsed_listing(fake_run, jobscript):
-    fake_run('4567.server\n')
-    scheduler = JobScheduler('pbs')
+@pytest.mark.parametrize('name, submitted', [
+    ('pbs', '4567.server\n'), ('torque', '4567.server\n'),
+    ('htcondor', '1 job(s) submitted to cluster 591.\n'),
+])
+def test_submitted_job_matches_the_parsed_listing(fake_run, jobscript, name, submitted):
+    fake_run([submitted, NAMED[name][0]])
+    scheduler = JobScheduler(name)
     job_id = scheduler.submit_job(str(jobscript))
-    assert scheduler.job_key(job_id) in scheduler._extract_active_job_ids(LISTINGS['pbs'][0])
+    assert scheduler.job_key(job_id) in scheduler.get_active_job_ids()
+
+
+# --- state of one job --------------------------------------------------------------
+
+SACCT = ['sacct', '-X', '-n', '-o', 'State%30', '-j', '123']
+
+
+@pytest.mark.parametrize('state, active', [
+    ('PENDING', True), ('RUNNING', True), ('REQUEUED', True), ('RESIZING', True),
+    ('SUSPENDED', True), ('CONFIGURING', True), ('COMPLETING', True), ('EXPEDITING', True),
+    ('UPDATE_DB', True),
+    ('COMPLETED', False), ('FAILED', False), ('TIMEOUT', False), ('NODE_FAIL', False),
+    ('BOOT_FAIL', False), ('PREEMPTED', False), ('DEADLINE', False), ('CANCELLED', False),
+    ('OUT_OF_MEMORY', False), ('CANCELLED by 1000', False),
+    # Cut by the column width: the part before '+' is classified only if it is
+    # a whole name, never by its prefix.
+    ('CANCELLED+', False), ('OUT_OF_ME+', None), ('PEND+', None),
+    # Flags not kept active by SCS, and a federation state: not known.
+    ('REQUEUE_HOLD', None), ('SPECIAL_EXIT', None), ('STOPPED', None), ('REVOKED', None),
+])
+def test_slurm_state(fake_run, state, active):
+    run = fake_run(f'{state:>10} \n')
+    assert JobScheduler('slurm').get_job_state('123') == JobState('123', state, active)
+    assert [call[0] for call in run.calls] == [SACCT]
+
+
+def test_slurm_job_without_record(fake_run):
+    fake_run('')
+    assert JobScheduler('slurm').get_job_state('123') == JobState('123', None, None)
+
+
+def test_slurm_more_records_raise(fake_run):
+    fake_run('  RUNNING \n COMPLETED \n')
+    with pytest.raises(JobSchedulerError, match='More than one record for job 123'):
+        JobScheduler('slurm').get_job_state('123')
+
+
+@pytest.mark.parametrize('name, state, active', [
+    *[('pbs', s, True) for s in 'BEHQRSTUW'], ('pbs', 'F', False),
+    ('pbs', 'M', None), ('pbs', 'X', None),
+    *[('torque', s, True) for s in 'EHQRSTW'], ('torque', 'C', False), ('torque', 'F', None),
+])
+def test_pbs_and_torque_state(fake_run, name, state, active):
+    output = (pbs_json if name == 'pbs' else qstat_full)([('4570.server', 'vito@login1', state)])
+    run = fake_run(output)
+    assert JobScheduler(name).get_job_state('4570.server') == \
+        JobState('4570.server', state, active, held=state == 'H')
+    expected = (['qstat', '-f', '-F', 'json', '-x', '4570.server'] if name == 'pbs'
+                else ['qstat', '-f', '-1', '4570.server'])
+    assert [call[0] for call in run.calls] == [expected]
+
+
+@pytest.mark.parametrize('name, output', [
+    ('pbs', pbs_json([('4571.server', 'vito@login1', 'R')])),
+    ('torque', ''),
+])
+def test_pbs_and_torque_job_not_in_the_output(fake_run, name, output):
+    fake_run(output)
+    assert JobScheduler(name).get_job_state('4570.server') == JobState('4570.server', None, None)
+
+
+def test_job_unknown_to_the_server_raises(fake_run):
+    # qstat exits with an error for a job the server no longer knows.
+    fake_run(error=subprocess.CalledProcessError(153, ['qstat'], stderr='qstat: Unknown Job Id'))
+    with pytest.raises(JobSchedulerError, match='return code 153'):
+        JobScheduler('torque').get_job_state('4570.server')
+
+
+CONDOR_Q = ['condor_q', '591', '-af:j', 'JobStatus']
+CONDOR_HISTORY = ['condor_history', '591', '-af:j', 'JobStatus']
+
+
+@pytest.mark.parametrize('outputs, state, active, held, commands', [
+    (['591.0 2\n'], '2', True, False, [CONDOR_Q]),
+    # On hold: still in the queue, waiting for an intervention.
+    (['591.0 5\n'], '5', True, True, [CONDOR_Q]),
+    (['591.0 4\n'], '4', False, False, [CONDOR_Q]),
+    (['', '591.0 4\n'], '4', False, False, [CONDOR_Q, CONDOR_HISTORY]),
+    (['', '591.0 3\n'], '3', False, False, [CONDOR_Q, CONDOR_HISTORY]),
+    (['', ''], None, None, False, [CONDOR_Q, CONDOR_HISTORY]),
+    (['591.0 4\n591.1 2\n'], '4,2', True, False, [CONDOR_Q]),
+    (['591.0 2\n591.1 5\n'], '2,5', True, True, [CONDOR_Q]),
+    (['', '591.1 3\n591.0 4\n'], '3,4', False, False, [CONDOR_Q, CONDOR_HISTORY]),
+    (['591.0 4\n591.1 9\n'], '4,9', None, False, [CONDOR_Q]),
+])
+def test_htcondor_state(fake_run, outputs, state, active, held, commands):
+    run = fake_run(outputs)
+    assert JobScheduler('htcondor').get_job_state('591') == JobState('591', state, active, held)
+    assert [call[0] for call in run.calls] == commands
+
+
+@pytest.mark.parametrize('name, state, held', [
+    ('htcondor', '5', True), ('condor', '5', True), ('htcondor', '1', False),
+    ('htcondor', None, False), ('slurm', 'PENDING', False), ('slurm', 'REQUEUE_HOLD', False),
+    ('pbs', 'H', True), ('pbs', 'Q', False), ('torque', 'H', True), ('torque', 'W', False),
+    ('sge', 'hqw', True), ('sge', 'hRwq', True), ('sge', 'qw', False), ('sge', 'r', False),
+])
+def test_held_states(name, state, held):
+    assert JobScheduler(name).is_held(state) is held
+
+
+@pytest.mark.parametrize('name, output', [
+    ('pbs', json.dumps({'Jobs': {'4570.server': {'Job_Owner': 'vito@login1', 'job_state': 'H',
+                                                 'Hold_Types': 'u'}}})),
+    ('torque', 'Job Id: 4570.server\n    Job_Owner = vito@login1\n    job_state = H\n'
+               '    Hold_Types = u\n'),
+])
+def test_pbs_and_torque_hold_types_kept_as_printed(fake_run, name, output):
+    # Hold_Types is reported as printed, not interpreted: the reason is to be checked.
+    fake_run(output)
+    assert JobScheduler(name).get_job_state('4570.server') == \
+        JobState('4570.server', 'H', True, True, None, 'u')
+
+
+SGE_HELD = ('job-ID prior name user state submit/start at queue slots\n'
+            '322 0.0 job2 vito hqw 10/27/2026 10:01:00 1\n')
+SGE_HOLD_LINE = '322 0.0 job2 vito hqw 10/27/2026 10:01:00 1\n'
+
+
+@pytest.mark.parametrize('listed_by, reason, detail', [
+    (['hj'], 'dependency', 'hj'),
+    (['hd'], 'dependency', 'hd'),
+    (['ha'], 'start_time', 'ha'),
+    (['hu'], 'intervention', 'hu'),
+    (['hs', 'hj'], 'intervention', 'hs,hj'),
+    ([], None, None),
+])
+def test_sge_hold_reason(fake_run, listed_by, reason, detail):
+    types = ['hu', 'ho', 'hs', 'hd', 'hj', 'ha']
+    run = fake_run([SGE_HELD] + [SGE_HOLD_LINE if t in listed_by else '' for t in types])
+    assert JobScheduler('sge').get_job_state('322') == \
+        JobState('322', 'hqw', True, True, reason, detail)
+    assert [call[0] for call in run.calls[1:]] == \
+        [['qstat', '-u', 'vito', '-s', t] for t in types]
+
+
+def test_sge_job_not_held_needs_no_hold_listing(fake_run):
+    run = fake_run(LISTINGS['sge'][0])
+    assert JobScheduler('sge').get_job_state('322') == JobState('322', 'qw', True)
+    assert len(run.calls) == 1
+
+
+@pytest.mark.parametrize('name, state, final', [
+    ('slurm', 'COMPLETED', True), ('slurm', 'CANCELLED+', True), ('slurm', 'PREEMPTED', False),
+    ('slurm', 'RUNNING', False), ('slurm', 'OUT_OF_ME+', False), ('slurm', None, False),
+    ('pbs', 'F', True), ('torque', 'C', True), ('htcondor', '4,3', True), ('htcondor', '4,2', False),
+])
+def test_final_states(name, state, final):
+    assert JobScheduler(name).is_final(state) is final
+
+
+def test_htcondor_unexpected_line_raises(fake_run):
+    fake_run(['591.0 2 extra\n'])
+    with pytest.raises(JobSchedulerError, match='Unexpected line in the output of HTCondor'):
+        JobScheduler('htcondor').get_job_state('591')
+
+
+@pytest.mark.parametrize('name, job_id, state, active', [
+    ('lsf', '789', 'RUN', True), ('lsf', '790', 'PEND', True),
+    ('lsf', '791', 'DONE', None), ('lsf', '999', None, None),
+    ('sge', '321', 'r', True), ('sge', '322', 'qw', True), ('sge', '999', None, None),
+])
+def test_lsf_and_sge_state_from_the_listing(fake_run, name, job_id, state, active):
+    # No history: a job missing from the listing of active jobs is not known.
+    fake_run(LISTINGS[name][0])
+    assert JobScheduler(name).get_job_state(job_id) == JobState(job_id, state, active)
+
+
+def test_custom_state_raises(fake_run, monkeypatch):
+    monkeypatch.setattr(scheduler_module, 'SCHEDULER_CONFIG', dict(scheduler_module.SCHEDULER_CONFIG))
+    scheduler = JobScheduler({'submit': ['mysub'], 'cancel': ['mydel'], 'id_regex': r'(\d+)',
+                              'id_format': r'^\d+$', 'list_active_jobs': ['myq']})
+    run = fake_run('42 vito R\n')
+    with pytest.raises(JobSchedulerError, match='not known for a custom scheduler'):
+        scheduler.get_job_state('42')
+    assert run.calls == []
+
+
+def test_state_command_failure_raises(fake_run):
+    fake_run(error=FileNotFoundError(2, 'No such file or directory', 'sacct'))
+    with pytest.raises(JobSchedulerError, match="Command 'sacct' not found"):
+        JobScheduler('slurm').get_job_state('123')
+
+
+@pytest.mark.parametrize('name, commands', [
+    ('slurm', [SACCT]),
+    ('pbs', [['qstat', '-f', '-F', 'json', '-x', '123']]),
+    ('htcondor', [['condor_q', '123', '-af:j', 'JobStatus'],
+                  ['condor_history', '123', '-af:j', 'JobStatus']]),
+])
+def test_dry_run_state_is_not_known(fake_run, name, commands):
+    run = fake_run(error=AssertionError('no command may run in a dry run'))
+    scheduler = JobScheduler(name, dry_run=True)
+    assert scheduler.get_job_state('123') == JobState('123', None, None)
+    assert [command[0] for command in scheduler.commands] == commands
+    assert run.calls == []
 
 
 # --- dry run -----------------------------------------------------------------------

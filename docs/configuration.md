@@ -205,6 +205,7 @@ Needed only to run on HPC. No value is tied to a specific machine.
 | `walltime` | int | R | > 0 s, walltime of each job; keep it equal to the one of the jobscript |
 | `polling_interval` | int | R | > 0 s, time between two checks of the jobs |
 | `max_seconds_margin` | int | `600` | > 0 s and < `walltime`, time kept free at the end of the walltime |
+| `job_report_wait` | int | `3600` | > 0 s, time after its submission during which a job that the scheduler does not report is still waited for; after that it needs attention, and it is never submitted again automatically |
 
 Before each run the worker writes `max_seconds` in the input it runs:
 `walltime` minus the time since the worker started minus

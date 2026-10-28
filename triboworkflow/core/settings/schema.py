@@ -409,6 +409,10 @@ class ExecutionParams:
         worker sets ``max_seconds`` to the walltime left minus this margin,
         capped by the ``max_seconds`` of ``[namelists.CONTROL]`` if given,
         and takes no more calculations once nothing is left.
+    job_report_wait : int
+        Seconds after its submission during which a job that the scheduler
+        does not report is still waited for; after that it needs attention,
+        and it is never submitted again automatically.
     """
 
     scheduler: str
@@ -418,6 +422,7 @@ class ExecutionParams:
     walltime: int
     polling_interval: int
     max_seconds_margin: int = 600
+    job_report_wait: int = 3600
 
     def check(self, path):
         """Validate the table; errors name ``path``."""
@@ -426,6 +431,7 @@ class ExecutionParams:
         _positive(f'{path}.walltime', self.walltime)
         _positive(f'{path}.polling_interval', self.polling_interval)
         _positive(f'{path}.max_seconds_margin', self.max_seconds_margin)
+        _positive(f'{path}.job_report_wait', self.job_report_wait)
         if self.max_seconds_margin >= self.walltime:
             raise SettingsError(f'{path}.max_seconds_margin',
                                 f'must be < walltime ({self.walltime}), '

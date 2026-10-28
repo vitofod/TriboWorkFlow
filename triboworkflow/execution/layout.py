@@ -16,10 +16,11 @@ A run keeps the systems and the jobs that run their calculations::
     │       ├── record.json
     │       ├── OUT/                 outdir of pw.x
     │       └── attempts/<n>/        run.pwi and output.pwo of attempt n
-    └── jobs/<name>/                 one group of jobs
-        ├── manifest.json            calculations of the group and how to run them
-        ├── jobscript.sh             jobscript submitted for each job
-        └── submitted.json           ids of the submitted jobs
+    ├── jobs/<name>/                 one group of jobs
+    │   ├── manifest.json            calculations of the group and how to run them
+    │   ├── jobscript.sh             jobscript submitted for each job
+    │   └── submitted.json           ids of the submitted jobs
+    └── jobs.json                    registry of the job manager: jobs asked, states
 
 pw.x runs inside the calculation directory, so that the relative ``outdir``
 of every calculation is its own ``OUT/``. The ``prefix`` is made of step and
@@ -33,6 +34,7 @@ from triboworkflow.core.store.record import RECORD_FILE, check_name, split_calc_
 
 SYSTEMS_DIR = 'systems'
 JOBS_DIR = 'jobs'
+JOBS_REGISTRY_FILE = 'jobs.json'
 
 INPUT_FILE = 'input.pwi'
 RUN_INPUT_FILE = 'run.pwi'
@@ -41,7 +43,8 @@ CLAIM_FILE = 'claim'
 OUTDIR = 'OUT'
 ATTEMPTS_DIR = 'attempts'
 
-__all__ = ['ATTEMPTS_DIR', 'CLAIM_FILE', 'INPUT_FILE', 'JOBS_DIR', 'OUTDIR', 'OUTPUT_FILE',
+__all__ = ['ATTEMPTS_DIR', 'CLAIM_FILE', 'INPUT_FILE', 'JOBS_DIR', 'JOBS_REGISTRY_FILE',
+           'OUTDIR', 'OUTPUT_FILE',
            'RECORD_FILE', 'RUN_INPUT_FILE', 'SYSTEMS_DIR', 'attempt_dir', 'calc_dir',
            'calc_prefix', 'job_dir', 'system_dir']
 
