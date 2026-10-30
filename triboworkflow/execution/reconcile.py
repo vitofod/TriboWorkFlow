@@ -273,6 +273,61 @@ def launch_index(groups):
     return index
 
 
+class LaunchError(ValueError):
+    """The launch of an attempt that the manifests do not give for certain."""
+
+
+def _only_launch(entries):
+    """The launch listed by every ``(group, Launch)`` of ``entries`` if they agree, else None."""
+    distinct = {json.dumps(launch.remedies(), sort_keys=True) for _, launch in entries}
+    return entries[0][1] if len(distinct) == 1 else None
+
+
+def launch_for(run_dir, system, calc_id, n, group=None):
+    """Launch of attempt ``n`` of a calculation, from the manifests of the groups.
+
+    Parameters
+    ----------
+    run_dir : path-like
+        Directory of the run.
+    system, calc_id : str
+        The calculation.
+    n : int
+        Number of the attempt.
+    group : str or None, optional
+        Group whose launch is taken; by default the launch that every group
+        listing the attempt gives (the same kind, level and values).
+
+    Returns
+    -------
+    triboworkflow.execution.jobs.Launch
+
+    Raises
+    ------
+    LaunchError
+        If no group lists the attempt, ``group`` does not list it, or the
+        groups that list it give different launches: the message lists them,
+        with kind and level, to choose one.
+    """
+    entries = launch_index(read_groups(run_dir)).get((system, calc_id), {}).get(n, [])
+    where = f'attempt {n} of {system}/{calc_id}'
+    if not entries:
+        raise LaunchError(f'no group lists {where}: its launch is not known')
+    if group is not None:
+        for name, launch in entries:
+            if name == group:
+                return launch
+        raise LaunchError(f'group {group} does not list {where}; groups that list it: '
+                          f'{", ".join(name for name, _ in entries)}')
+    launch = _only_launch(entries)
+    if launch is None:
+        listed = ', '.join(f'{name} ({launch.kind}, level {launch.level})'
+                           for name, launch in entries)
+        raise LaunchError(f'the groups that list {where} give different launches: {listed}; '
+                          'choose one with --group')
+    return launch
+
+
 class Reconciler:
     """Reconciliation of the calculations of a run.
 
@@ -565,8 +620,7 @@ class Reconciler:
         for name, launch in entries:
             if job is not None and name == job['group']:
                 return launch
-        distinct = {json.dumps(launch.remedies(), sort_keys=True) for _, launch in entries}
-        return entries[0][1] if len(distinct) == 1 else None
+        return _only_launch(entries) if entries else None
 
 
 def _maker(system, calc_id, attempts, released):

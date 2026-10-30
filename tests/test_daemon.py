@@ -25,6 +25,7 @@ import pytest
 from triboworkflow.core.guard import NotOnHPCError, require_scheduler
 from triboworkflow.execution import daemon
 from triboworkflow.execution.daemon import DaemonError, start, status, stop
+from triboworkflow.execution.lock import LOCK_FILE, RunLock, RunLockError, holder
 
 posix_only = pytest.mark.skipif(os.name != 'posix', reason='signals and sessions are POSIX only')
 
@@ -238,6 +239,71 @@ def test_pid_file_of_another_host_is_never_touched(run_dir):
     with pytest.raises(DaemonError, match='nothing to stop: .* written on host login02'):
         stop(run_dir)
     assert json.loads((run_dir / daemon.PID_FILE).read_text())['host'] == 'login02'
+
+
+# --- arguments of the factory and lock of the run --------------------------------------------
+
+@posix_only
+def test_factory_arguments_reach_the_background_process(run_dir):
+    started = start(run_dir, FACTORY, 'slurm', factory_args=('10',))
+    assert started.running is True, report(run_dir)
+    content = json.loads((run_dir / daemon.PID_FILE).read_text())
+    assert content['command'].endswith(f'serve {run_dir.resolve()} {FACTORY} {content["token"]} '
+                                       '10'), report(run_dir)
+    assert json.loads((run_dir / 'factory_args.json').read_text()) == ['10'], report(run_dir)
+    assert stop(run_dir, timeout=20) is True, report(run_dir)
+
+
+def test_start_refused_while_a_command_holds_the_run(run_dir):
+    with RunLock(run_dir, 'triboworkflow relaunch pes_scf/aa'):
+        with pytest.raises(DaemonError, match='not started: the run is in use by triboworkflow '
+                                              'relaunch pes_scf/aa'):
+            start(run_dir, FACTORY, 'slurm')
+        assert not (run_dir / daemon.PID_FILE).exists()
+        assert holder(run_dir)['command'] == 'triboworkflow relaunch pes_scf/aa'
+    assert not (run_dir / 'passes').exists()
+
+
+@posix_only
+def test_background_process_refused_if_the_run_is_taken(run_dir, monkeypatch):
+    other = {'pid': os.getpid(), 'host': socket.gethostname(), 'since': '2026-10-30T10:00:00+01:00',
+             'command': 'triboworkflow retry pes', 'token': 'other'}
+
+    class Usurper(subprocess.Popen):
+        """Another command takes the run between start() and the adoption of its lock."""
+
+        def __init__(self, *args, **kwargs):
+            (run_dir / LOCK_FILE).write_text(json.dumps(other))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, 'Popen', Usurper)
+    with pytest.raises(DaemonError, match='exited with code 1 at its start'):
+        start(run_dir, FACTORY, 'slurm')
+    assert not (run_dir / daemon.PID_FILE).exists(), report(run_dir)
+    assert json.loads((run_dir / LOCK_FILE).read_text()) == other, report(run_dir)
+    assert 'not the one of this start' in read(run_dir / daemon.LOG_FILE), report(run_dir)
+    assert not (run_dir / 'passes').exists(), report(run_dir)
+
+
+@posix_only
+def test_daemon_holds_the_run_while_it_runs(run_dir):
+    started = start(run_dir, FACTORY, 'slurm')
+    found = holder(run_dir)
+    assert (found['pid'], found['command'], found['stale']) == (started.pid, 'orchestrator',
+                                                                False), report(run_dir)
+    with pytest.raises(RunLockError, match='the run is in use by orchestrator'):
+        RunLock(run_dir, 'triboworkflow retry pes').acquire()
+    assert stop(run_dir, timeout=20) is True, report(run_dir)
+    assert holder(run_dir) is None, report(run_dir)
+
+
+@posix_only
+@pytest.mark.parametrize('factory, timeout', [('daemon_fake:broken', 120), ('daemon_fake:slow', 0.5)])
+def test_failed_start_leaves_the_run_free(run_dir, factory, timeout):
+    (run_dir / 'delay').write_text('30')
+    with pytest.raises(DaemonError):
+        start(run_dir, factory, 'slurm', timeout=timeout)
+    assert holder(run_dir) is None and not (run_dir / daemon.PID_FILE).exists(), report(run_dir)
 
 
 def test_pid_not_yet_written(run_dir):

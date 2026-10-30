@@ -26,11 +26,19 @@ its process runs cannot be seen from here. A pid that now belongs to another
 program (its command line, where the system shows it, does not run this
 module) counts as a process that no longer runs.
 
+The orchestrator holds the lock of the run (``lock.py``) for its whole life,
+so that no command changes the run while it runs. ``start`` takes the lock
+right after creating the pid file, with the same token, and before the
+process starts: a run held by a command is refused, and no command gets in
+between. The background process adopts the lock before loading anything of
+the run, and removes it at the end. A start that fails leaves neither file.
+
 The orchestrator is built in the background process by a factory, given as
-``"module:function"`` and called with the directory of the run; it returns
-an object with the ``run`` method of ``Orchestrator``. Before anything
-starts, the submission command of the scheduler is looked for
-(``require_scheduler``): away from the HPC machine nothing starts.
+``"module:function"`` and called with the directory of the run and the
+arguments given to ``start`` (``factory_args``, written in the command of the
+process); it returns an object with the ``run`` method of ``Orchestrator``.
+Before anything starts, the submission command of the scheduler is looked
+for (``require_scheduler``): away from the HPC machine nothing starts.
 
 The handler of SIGTERM only records the request (``StopRequest``). Python
 runs it in the main thread between two instructions, also while that thread
@@ -66,6 +74,7 @@ from pathlib import Path
 
 from triboworkflow.core.guard import require_scheduler
 from triboworkflow.core.store.atomic import write_json
+from triboworkflow.execution.lock import RunLock, RunLockError
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +189,8 @@ def status(run_dir):
                         message=f'not running: pid {pid} of {path} no longer runs on {host}')
 
 
-def start(run_dir, factory, scheduler, python=None, timeout=START_TIMEOUT, poll=0.05):
+def start(run_dir, factory, scheduler, factory_args=(), python=None, timeout=START_TIMEOUT,
+          poll=0.05):
     """Start the orchestrator of a run in the background.
 
     Parameters
@@ -191,6 +201,9 @@ def start(run_dir, factory, scheduler, python=None, timeout=START_TIMEOUT, poll=
         ``"module:function"`` building the orchestrator from the directory.
     scheduler : str
         Scheduler of ``[execution]``, whose submission command must be found.
+    factory_args : sequence of str, optional
+        Arguments given to the factory after the directory, written in the
+        command of the background process.
     python : str or None, optional
         Interpreter of the background process; the one running this code by
         default.
@@ -212,15 +225,17 @@ def start(run_dir, factory, scheduler, python=None, timeout=START_TIMEOUT, poll=
     NotOnHPCError
         If the submission command of the scheduler is not found.
     DaemonError
-        If an orchestrator of the run may be running, or the process started
-        exited with an error or did not confirm its start in time.
+        If an orchestrator of the run may be running, another command holds
+        the run, or the process started exited with an error or did not
+        confirm its start in time.
     """
     require_scheduler(scheduler)
     run_dir = Path(run_dir).resolve()
     path = run_dir / PID_FILE
     log_path = run_dir / LOG_FILE
     token = secrets.token_hex(8)
-    command = [python or sys.executable, '-m', MODULE, 'serve', str(run_dir), factory, token]
+    command = [python or sys.executable, '-m', MODULE, 'serve', str(run_dir), factory, token,
+               *map(str, factory_args)]
     shown = ' '.join(shlex.quote(part) for part in command)
     owner = {'pid': None, 'host': socket.gethostname(), 'since': _now(), 'command': shown,
              'token': token}
@@ -238,12 +253,21 @@ def start(run_dir, factory, scheduler, python=None, timeout=START_TIMEOUT, poll=
         raise DaemonError(f'orchestrator not started: {path} was created again meanwhile')
     with os.fdopen(fd, 'w', encoding='utf-8') as fh:
         fh.write(json.dumps(owner) + '\n')
+    # The run is taken before the process starts, with the token of this
+    # start, so that no command gets in between; the process adopts the lock.
+    lock = RunLock(run_dir, 'orchestrator', token)
+    try:
+        lock.acquire()
+    except RunLockError as error:
+        path.unlink(missing_ok=True)
+        raise DaemonError(f'orchestrator not started: {error}') from None
     try:
         with open(log_path, 'ab') as log:
             process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log,
                                        stderr=subprocess.STDOUT, cwd=run_dir,
                                        start_new_session=True)
     except BaseException:
+        lock.release()
         path.unlink(missing_ok=True)
         raise
     deadline = time.monotonic() + timeout
@@ -257,10 +281,12 @@ def start(run_dir, factory, scheduler, python=None, timeout=START_TIMEOUT, poll=
             process.kill()
             process.wait()
             _remove_own(path, token)
+            lock.release()
             raise DaemonError(f'orchestrator not started: pid {process.pid} did not confirm its '
                               f'start within {timeout} s and was killed; see {log_path}')
         time.sleep(poll)
     _remove_own(path, token)
+    lock.release()
     if process.returncode != 0:
         raise DaemonError(f'orchestrator not running: pid {process.pid} exited with code '
                           f'{process.returncode} at its start; see {log_path}')
@@ -366,25 +392,34 @@ def load_factory(factory):
     return getattr(importlib.import_module(module), name)
 
 
-def serve(run_dir, factory, token):
+def serve(run_dir, factory, token, factory_args=()):
     """Body of the background process: run the orchestrator until it is done or stopped.
 
-    SIGTERM is handled first; then the orchestrator is built and the pid of
-    this process written in the pid file, which confirms the start to
-    ``start``. The pid file is removed at the end, if it still holds ``token``.
+    SIGTERM is handled first; then the lock of the run created by ``start``
+    with ``token`` is adopted, before anything of the run is loaded, and held
+    until the end; then the orchestrator is built, by the factory called with
+    the directory and ``factory_args``, and the pid of this process written
+    in the pid file, which confirms the start to ``start``. The pid file and
+    the lock are removed at the end, if they still hold ``token``.
 
     Raises
     ------
     DaemonError
-        If the pid file does not hold ``token``: it is not the one of this
-        start, and the orchestrator does not run.
+        If the lock or the pid file does not hold ``token``: they are not the
+        ones of this start, and the orchestrator does not run.
     """
     run_dir = Path(run_dir)
     path = run_dir / PID_FILE
     request = StopRequest()
     signal.signal(signal.SIGTERM, request.request)
+    lock = None
     try:
-        orchestrator = load_factory(factory)(run_dir)
+        try:
+            lock = RunLock.adopt(run_dir, token)
+        except RunLockError as error:
+            raise DaemonError(f'the lock of the run is not the one of this start ({error}): the '
+                              'orchestrator does not run') from None
+        orchestrator = load_factory(factory)(run_dir, *factory_args)
         data = _read(path)
         if not isinstance(data, dict) or data.get('token') != token:
             raise DaemonError(f'{path} is not the one of this start: the orchestrator does not '
@@ -396,19 +431,25 @@ def serve(run_dir, factory, token):
         return report
     finally:
         _remove_own(path, token)
+        if lock is not None:
+            lock.release()
 
 
 def main(argv=None):
-    """Entry point of the background process: ``python -m ... serve <run> <factory> <token>``."""
+    """Entry point of the background process.
+
+    ``python -m triboworkflow.execution.daemon serve <run> <factory> <token> [arg ...]``.
+    """
     parser = argparse.ArgumentParser(description='Orchestrator of a run in the background.')
     sub = parser.add_subparsers(dest='action', required=True)
     serve_parser = sub.add_parser('serve', help='run the orchestrator (started by start())')
     serve_parser.add_argument('run_dir')
     serve_parser.add_argument('factory', help='"module:function" building the orchestrator')
     serve_parser.add_argument('token', help='token of the pid file written by start()')
+    serve_parser.add_argument('factory_args', nargs='*', help='arguments of the factory')
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-    serve(args.run_dir, args.factory, args.token)
+    serve(args.run_dir, args.factory, args.token, args.factory_args)
     return 0
 
 

@@ -219,9 +219,9 @@ Needed only to run on HPC. No value is tied to a specific machine.
 | `scheduler` | str | R | `slurm`, `pbs`, `torque`, `lsf`, `sge`, `htcondor`, `condor` (the names of Xsorb) |
 | `jobscript` | str | R | user jobscript, relative to the folder of the settings file; copied for every group of jobs with the launch line of the worker added, never changed |
 | `run_command` | str | R | command up to the input file, e.g. `mpirun -np 32 pw.x -nk 4` |
-| `groups` | int | R | > 0, jobs (workers) over which the calculations of a group are spread: 1 runs them one after the other, one per calculation runs them all at once; never more jobs than calculations are submitted |
 | `walltime` | int | R | > 0 s, walltime of each job; keep it equal to the one of the jobscript |
 | `polling_interval` | int | R | > 0 s, time between two checks of the jobs |
+| `groups` | int | none | > 0, jobs (workers) over which the calculations of a group are spread: 1 runs them one after the other, one per calculation runs them all at once; never more jobs than calculations are submitted. When left out, give it on the command line (`--groups`); in a terminal the command asks for it, elsewhere it stops with an error |
 | `max_seconds_margin` | int | `600` | > 0 s and < `walltime`, time kept free at the end of the walltime |
 | `job_report_wait` | int | `3600` | > 0 s, time after its submission during which a job that the scheduler does not report is still waited for; after that it needs attention, and it is never submitted again automatically |
 
@@ -240,6 +240,7 @@ each run.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `slabs` | list | R | two `[[interface.slabs]]` entries: bottom slab, then top slab |
+| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `plotpes`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides |
 | `set_bm` | bool | `true` | strain weights from the bulk moduli of the two materials |
 | `engine` | str | `"qe"` | engine of the steps that run calculations |
 | `engines` | table | `{}` | per-step engine for `pes`, `adhesion`, `ppes`, `charge`; only `qe` for now |

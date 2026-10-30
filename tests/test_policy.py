@@ -336,6 +336,22 @@ def test_manual_relaunch_after_a_group_without_progress(run):
     assert manual_launch(run.reconciler(), SYSTEM, calc_id) == Launch.initial(SYSTEM, calc_id)
 
 
+def test_manual_relaunch_with_a_group_not_needed(run):
+    calc_id, job_id = started(run, 'CANCELLED by 1000')
+    with pytest.raises(PolicyError, match='group g1 not used: the launch is known'):
+        manual_launch(run.reconciler(), SYSTEM, calc_id, group='g1')
+
+
+def test_manual_relaunch_takes_the_only_launch_of_the_groups(run):
+    calc_id, job_id = started(run, 'CANCELLED by 1000')
+    record = run.record(calc_id)  # attempt 1 recorded without its launch
+    store.write_record(run.sdir, store.Record(**{
+        **record.__dict__, 'attempts': (store.Attempt(**{**record.attempts[0].__dict__,
+                                                         'remedies': {}}),)}))
+    assert manual_launch(run.reconciler(), SYSTEM, calc_id) == Launch(SYSTEM, calc_id, 2,
+                                                                     'manual', 1)
+
+
 @pytest.mark.parametrize('case, message', [
     ('completed', 'is completed: nothing to run again'),
     ('new', 'was never launched'),

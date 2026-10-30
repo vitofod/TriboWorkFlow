@@ -17,7 +17,8 @@ from triboworkflow.core import store
 from triboworkflow.execution import layout
 from triboworkflow.execution.archive import archive_attempt
 from triboworkflow.execution.jobs import Launch
-from triboworkflow.execution.reconcile import CalcState, Reconciler, attempt_outcome
+from triboworkflow.execution.reconcile import (CalcState, LaunchError, Reconciler,
+                                               attempt_outcome, launch_for)
 from triboworkflow.execution.scheduler import JobScheduler, JobSchedulerError
 
 
@@ -364,6 +365,36 @@ def test_job_not_followed_by_the_manager(run):
     run.slurm.states['4242'] = 'TIMEOUT'
     assert run.reconcile(calc_id).state == 'unchanged'
     assert '4242' not in run.manager.jobs
+
+
+# --- launch of an attempt from the manifests ---------------------------------------------
+
+def test_launch_for_the_only_launch(run):
+    calc_id = run.calc()
+    launch = Launch(SYSTEM, calc_id, 2, 'unchanged', 1)
+    run.group('g1', launch)
+    run.group('g2', launch)  # listed again, the same launch
+    assert launch_for(run.dir, SYSTEM, calc_id, 2) == launch
+
+
+def test_launch_for_different_launches_needs_a_group(run):
+    calc_id = run.calc()
+    unchanged, manual = (Launch(SYSTEM, calc_id, 2, kind, 1) for kind in ('unchanged', 'manual'))
+    run.group('g1', unchanged)
+    run.group('g2', manual)
+    with pytest.raises(LaunchError, match=r'different launches: g1 \(unchanged, level 1\), '
+                                          r'g2 \(manual, level 1\); choose one with --group'):
+        launch_for(run.dir, SYSTEM, calc_id, 2)
+    assert launch_for(run.dir, SYSTEM, calc_id, 2, group='g2') == manual
+    with pytest.raises(LaunchError, match='group g3 does not list attempt 2 .*: g1, g2'):
+        launch_for(run.dir, SYSTEM, calc_id, 2, group='g3')
+
+
+def test_launch_for_without_groups(run):
+    calc_id = run.calc()
+    with pytest.raises(LaunchError, match=f'no group lists attempt 1 of {SYSTEM}/{calc_id}: its '
+                                          'launch is not known'):
+        launch_for(run.dir, SYSTEM, calc_id, 1)
 
 
 # --- released calculations ----------------------------------------------------------------

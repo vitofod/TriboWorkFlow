@@ -12,6 +12,7 @@ yet written in the inputs, so a relaunch above level 1 is not submitted.
 
 ```
 <run>/
+├── config.toml                  settings of the run (configuration.md, cli.md)
 ├── systems/<system>/
 │   ├── system.json
 │   └── <step>/<label>/          one directory per calculation
@@ -29,7 +30,9 @@ yet written in the inputs, so a relaunch above level 1 is not submitted.
 ├── jobs.json                    registry of the job manager
 ├── orchestrator.json            steps of each system
 ├── orchestrator.pid             orchestrator running in the background
-└── orchestrator.log             its output
+├── orchestrator.log             its output
+├── run.lock                     held by the process that changes the run
+└── cli.log                      log of the commands that changed the run
 ```
 
 pw.x runs inside the calculation directory, so the relative `outdir = 'OUT'`
@@ -199,6 +202,14 @@ is removed last. An interrupted archiving is completed by running it again.
 An attempt still recorded as `running` is not archived; `OUT/` is not
 touched. An attempt is archived only when it is relaunched.
 
+An empty claim (a worker that stopped right after creating it) gets the
+number the worker would have used, the attempts in the record plus one, and
+the attempt is added to the record with its end unknown. It also gets its
+launch when one is given (`archive_attempt(..., launch=)`), so that it can
+be relaunched at its level: `Orchestrator.release_claim`, asked by the user
+once the worker is surely over, takes it from the groups that list the
+attempt (`reconcile.launch_for`).
+
 ## Reconciliation
 
 Before anything new is submitted, each calculation is brought up to date
@@ -280,6 +291,14 @@ allowed only when the worker of the last attempt is surely over (no claim,
 or the run of the job of the claim over), at the level of the last attempt
 and with its input; the count of the unchanged relaunches starts again.
 
+**Launch of an attempt not recorded.** An attempt added to the record by the
+code (an empty claim released, or a claim whose worker stopped before writing
+the attempt) takes its launch from the groups that list it
+(`reconcile.launch_for`): the launch they all give, or, when they give
+different ones, the one of the group the user chooses (`--group`); when no
+group lists it the launch is not known and nothing is relaunched. The level
+is never assigned by default.
+
 ## Orchestrator
 
 `execution/orchestrator.py` takes the steps of each system forward along the
@@ -291,17 +310,26 @@ Each pass:
 2. registers the groups written and not registered;
 3. for each system, goes through the requested steps in the order of the
    graph, the order given deciding only between steps that are ready. A
-   step whose dependency failed or is blocked is **blocked**; one whose
-   dependency is not completed is **waiting**; the steps of a system run one
-   at a time. A step starts by checking its entries (already done and
-   current: **completed** without running) and the entries it reads
-   (`check_prerequisites`: missing or stale, **blocked** with what is
-   missing, nothing computed again), then prepares its calculations. A
-   **running** step is reconciled and decided; the launches go, after the
-   archiving of the last attempt, in a new group `<system>.<step>.<k>`. When
-   every calculation is completed the step analyses them and is
-   **completed**; when what is left needs the user it has **failed**, with
-   the calculations and why;
+   **completed** step is asked again whether its entries are done and
+   current (`Step.done`): one no longer current is **waiting** again, and is
+   evaluated again in the same pass. A step whose dependency failed or is
+   blocked is **blocked**; one whose dependency is not completed is
+   **waiting**; the steps of a system run one at a time. A step starts by
+   checking its entries (already done and current: **completed** without
+   running) and the entries it reads (`check_prerequisites`: missing or
+   stale, **blocked** with what is missing, nothing computed again), then
+   prepares its calculations. Right after the preparation, and before a
+   **running** step is followed, the calculations prepared are compared with
+   those the settings give now (`Step.plan`: `calc_id` and fingerprint): one
+   missing, one no longer given or a fingerprint that differs makes the step
+   **failed** until `retry`, and none of its calculations is used; this is
+   checked before the cycle of the job manager, so that the jobs still
+   missing from the groups of such a step are not submitted. A running
+   step is reconciled and decided; the launches go, after the archiving of
+   the last attempt, in a new group `<system>.<step>.<k>`. When every
+   calculation is completed the step analyses them and is **completed**;
+   when what is left needs the user it has **failed**, with the
+   calculations and why;
 4. saves the steps in `orchestrator.json`.
 
 A failure blocks only the descendants: the other branches go on, and the
@@ -312,28 +340,60 @@ until `retry`. After a restart, or a pass interrupted at any point, the next
 pass recovers the jobs, reconciles the attempts and only then submits,
 without duplicates.
 
+The three phases of a step can also be run one at a time, with the same
+state: `prepare_step` (as the start in a pass, without the scheduler),
+`submit_step` (a cycle of the jobs, then the step followed and its launches
+submitted, without the analysis) and `analyse_step` (the analysis, decided
+from the files alone: each calculation must have a claim, if any, of its last
+attempt, no group listing a next attempt, and its last attempt ended
+completed; never the scheduler). Phases run by hand and passes take turns on
+a run. A relaunch by hand (`Orchestrator.relaunch`) is refused, with nothing
+written, when the settings changed since its step was prepared.
+
+## Lock of the run
+
+The state of a run is in files read once and written back whole
+(`orchestrator.json`, `jobs.json`, the groups, the attempts archived and the
+calculations prepared). Every command of the command line that changes the
+run, and the orchestrator in the background for its whole life, holds
+`<run>/run.lock` (`execution/lock.py`) before reading anything: a second
+holder is refused and told who holds the run. The lock is created with
+`O_EXCL` and holds the pid, the host, the time, the command and a token; a
+holder removes it only while it still holds its token. A lock left by a
+process gone from this host is replaced with a warning, one of another host
+or one that cannot be read is never touched. Whether `O_EXCL` excludes
+processes on different nodes of the shared filesystem is checked on each new
+machine (`locks` of `tests/hpc/hpc_check.py`).
+
 ## In the background
 
 `execution/daemon.py` runs the orchestrator on the login node, as SCS does:
 
-- `start(run_dir, factory, scheduler)` checks that the submission command of
-  the scheduler is found, creates `orchestrator.pid` with `O_EXCL` (host,
-  time, command and a token of the start, no pid yet) and starts the
-  orchestrator in a new session, its output in `orchestrator.log`. The
-  process handles SIGTERM, builds the orchestrator and then writes its own
-  pid in the file, if the file still holds its token. `start` returns once
-  that pid is written; a process that exits first, or does not write it
-  within `timeout` seconds (120 by default, then it is killed), leaves no pid
-  file, and `start` raises an error naming the log, unless it exited with
-  code 0 (nothing left to do);
+- `start(run_dir, factory, scheduler, factory_args)` checks that the
+  submission command of the scheduler is found, creates `orchestrator.pid`
+  with `O_EXCL` (host, time, command and a token of the start, no pid yet),
+  takes the lock of the run with the same token (a run held by a command is
+  refused, and the pid file removed) and starts the orchestrator in a new
+  session, its output in `orchestrator.log`. The process handles SIGTERM,
+  adopts the lock before reading anything of the run, builds the
+  orchestrator with the factory (`"module:function"`, called with the
+  directory and `factory_args`, written in its command) and then writes its
+  own pid in the file, if the file still holds its token. `start` returns
+  once that pid is written; a process that exits first, or does not write it
+  within `timeout` seconds (120 by default, then it is killed), leaves
+  neither the pid file nor the lock, and `start` raises an error naming the
+  log, unless it exited with code 0 (nothing left to do);
 - `status(run_dir)` tells whether it runs; a pid file of another host is
   never touched, one of a process gone is replaced at the next start;
 - `stop(run_dir)` sends SIGTERM: the orchestrator ends its pass, saves its
   state and exits. The jobs submitted go on. The handler of the signal only
   records the request, so it cannot block the process whatever it is doing;
-  between two passes the orchestrator checks it every 0.2 s.
+  between two passes the orchestrator checks it every 0.2 s. The lock of the
+  run is removed when the process exits.
 
-The commands of the command line come with the CLI.
+The commands of the command line (`triboworkflow start`, `stop`, `status`,
+the phases of a step and the actions of the user) are described in
+`cli.md`.
 
 ## Checking a new machine
 

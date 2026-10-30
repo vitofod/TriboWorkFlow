@@ -16,7 +16,8 @@ import pytest
 
 from triboworkflow.core.settings import (Settings, SettingsError, load_settings,
                                          settings_from_dict, validate)
-from triboworkflow.core.settings.schema import InterParams, key_name
+from triboworkflow.core.settings.schema import INTERFACE_STEPS, InterParams, key_name
+from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
 from triboworkflow.vendored.highput.utils.tasktools import read_default_params
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -247,6 +248,41 @@ def test_job_report_wait_default():
 def test_engine_per_step():
     settings = settings_from_dict(edited(WORKFLOW, {'interface.engines': {'ppes': 'qe'}}))
     assert settings.interface.engine_for('ppes') == 'qe'
+
+
+# --- steps and groups ---------------------------------------------------------------
+
+def test_interface_steps_required():
+    with pytest.raises(SettingsError, match=r'interface\.steps'):
+        settings_from_dict(edited(WORKFLOW, {'interface.steps': DELETE}))
+
+
+def test_interface_steps_kept_in_the_given_order():
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.steps': ['adhesion', 'match']}))
+    assert settings.interface.steps == ['adhesion', 'match']
+
+
+@pytest.mark.parametrize('steps, message', [
+    (['match', 'shearstr'], "interface.steps.*'shearstr'.*match, pes, plotpes, shear, adhesion, ppes, charge"),
+    (['pes', 'pes'], r'interface\.steps.*repeated.*pes'),
+    ([], r'interface\.steps.*at least one'),
+])
+def test_interface_steps_errors(steps, message):
+    with pytest.raises(SettingsError, match=message):
+        settings_from_dict(edited(WORKFLOW, {'interface.steps': steps}))
+
+
+def test_interface_steps_match_the_graph():
+    assert INTERFACE_STEPS == tuple(INTERFACE_GRAPH)
+
+
+def test_groups_optional():
+    assert settings_from_dict(edited(WORKFLOW, {'execution.groups': DELETE})).execution.groups is None
+
+
+def test_groups_positive_when_given():
+    with pytest.raises(SettingsError, match=r'execution\.groups'):
+        settings_from_dict(edited(WORKFLOW, {'execution.groups': 0}))
 
 
 # --- inter_params of the interface matching -----------------------------------------

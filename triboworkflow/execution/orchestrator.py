@@ -15,6 +15,9 @@ entries of ``pes`` and ``match``. A pass (``Orchestrator.run_pass``):
 3. for each system, goes through the requested steps in the order of the
    graph, the order given deciding only between steps that are both ready:
 
+   - a completed step is asked again whether its entries are done and
+     current (``Step.done``): one no longer current goes back to waiting and
+     is evaluated again in the same pass;
    - a step whose requested dependency failed or is blocked is ``blocked``;
      one whose dependency is not completed yet is ``waiting``;
    - a ready step starts only when no other step of the system is running,
@@ -24,6 +27,11 @@ entries of ``pes`` and ``match``. A pass (``Orchestrator.run_pass``):
      ``check_prerequisites`` checks the entries it reads, and a missing or
      stale one makes it ``blocked`` with what is missing, nothing being
      computed again; then ``Step.prepare`` writes its calculations;
+   - right after the preparation, and before a running step is followed,
+     the calculations prepared are compared with those the settings give now
+     (``Step.plan``: ``calc_id`` and fingerprint): a calculation missing, one
+     no longer given, or a fingerprint that differs makes the step
+     ``failed`` until ``retry``, and none of its calculations is used;
    - a running step is followed: its calculations are reconciled
      (``reconcile.py``) and decided (``policy.py``); the launches go, after
      the archiving of the last attempt, in a new group of jobs, registered
@@ -49,6 +57,13 @@ point is completed by the next one: an attempt archived without its group is
 decided again, a group written and not registered is registered, a group
 registered and not submitted is submitted.
 
+The three phases of a step can also be run one at a time, on one step, with
+the same state: ``prepare_step`` (as the start in a pass, without the
+scheduler), ``submit_step`` (a cycle of the jobs, then the step followed and
+its launches submitted, without the analysis) and ``analyse_step`` (the
+analysis, decided from the files alone: records, claims and manifests, never
+the scheduler). Phases run by hand and passes take turns on a run.
+
 A launch above level 1 of the remedies is decided and not submitted, since
 this version does not write its values in the input: its calculation is
 reported as needing the user.
@@ -68,15 +83,16 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from triboworkflow.core.store import PrerequisiteError, check_prerequisites, read_system
+from triboworkflow.core.store import (PrerequisiteError, check_prerequisites, read_record,
+                                      read_system)
 from triboworkflow.core.store.atomic import read_json, write_json
 from triboworkflow.core.store.record import check_keys
 
-from .archive import ArchiveError, archive_attempt
+from .archive import ArchiveError, archive_attempt, read_claim
 from .jobs import MANIFEST_FILE, SUBMITTED_FILE, Manifest, write_job
-from .layout import JOBS_DIR, system_dir
+from .layout import CLAIM_FILE, JOBS_DIR, calc_dir, system_dir
 from .policy import decide, manual_launch
-from .reconcile import Reconciler
+from .reconcile import LaunchError, Reconciler, launch_for, launch_index, read_groups
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +142,11 @@ class Step:
     name = None
 
     def done(self, run_dir, system):
-        """Whether the entries of the step are written and current (``is_done``)."""
+        """Whether the entries of the step are written and current (``is_done``).
+
+        Asked also of a completed step, at every pass and by every command:
+        one no longer current runs again.
+        """
         return False
 
     def expected(self, run_dir, system):
@@ -136,11 +156,22 @@ class Step:
         """
         return {}
 
+    def plan(self, run_dir, system):
+        """Calculations that the settings give now: ``{calc_id: fingerprint}``.
+
+        Nothing is written. Before a step is followed, submitted or analysed,
+        and right after ``prepare``, the calculations prepared are compared
+        with this plan; a step of analysis returns an empty dict.
+        """
+        return {}
+
     def prepare(self, run_dir, system):
         """Write the calculations of the step and return their ``calc_id``.
 
         Inputs and records already prepared and current are kept as they
-        are. A step of analysis only returns an empty list.
+        are. A calculation whose record has a fingerprint other than the one
+        of ``plan`` is never overwritten: ``prepare`` raises an error listing
+        those calculations. A step of analysis only returns an empty list.
         """
         return []
 
@@ -329,7 +360,8 @@ class Orchestrator:
         NotOnHPCError
             If the commands of the scheduler are not found.
         """
-        self.manager.cycle()
+        held = self._held_back()
+        self.manager.cycle(held)
         self._register_written_groups()
         reconciler = Reconciler(self.run_dir, self.manager, self.execution.polling_interval)
         written = []
@@ -337,7 +369,7 @@ class Orchestrator:
             for name in self.order:
                 written += self._step(reconciler, system, name)
         if written:
-            self.manager.submit()
+            self.manager.submit(held)
         self._save()
         return self.report(written)
 
@@ -372,6 +404,26 @@ class Orchestrator:
             if stop and stop():
                 return report
 
+    def _held_back(self):
+        """Groups not to submit: those of the steps whose settings changed since the preparation.
+
+        Each running step is checked first (``_prepared_current``), so that
+        the jobs still missing from its groups are not submitted by the cycle
+        of the job manager; a step already failed for that keeps its groups
+        held back until ``retry``.
+        """
+        held = set()
+        for system in self.systems:
+            for name in self.order:
+                entry = self.entry(system, name)
+                if entry['status'] == 'running' and entry['calculations'] is not None:
+                    self._prepared_current(system, name, entry)
+                if (entry['error'] or '').startswith('StalePreparation'):
+                    prefix = f'{system}.{name}.'
+                    held.update(group for group in self.manager.groups
+                                if group.startswith(prefix))
+        return held
+
     def _register_written_groups(self):
         """Register the groups written and neither registered nor submitted."""
         root = self.run_dir / JOBS_DIR
@@ -386,7 +438,7 @@ class Orchestrator:
     def _step(self, reconciler, system, name):
         """Advance one step of one system; the names of the groups written."""
         entry = self.entry(system, name)
-        if entry['status'] == 'completed':
+        if self._still_completed(system, name, entry):
             return []
         if entry['error'] is not None:
             self._set(entry, 'failed', entry['reason'])
@@ -433,16 +485,88 @@ class Orchestrator:
             self._fail(entry, 'preparing', error)
             return False
         self._set(entry, 'running', None, calculations=calculations)
+        current = self._prepared_current(system, name, entry)
         self._save()
-        return True
+        return current
 
     def _fail(self, entry, doing, error):
         logger.error('Step failed while %s: %s', doing, error)
         self._set(entry, 'failed', f'error while {doing}: {error}',
                   error=f'{type(error).__name__}: {error}')
 
-    def _follow(self, reconciler, system, name, entry):
-        """Reconcile, decide and relaunch the calculations of a running step."""
+    def _still_completed(self, system, name, entry):
+        """Whether a completed step is still done and current (``Step.done``).
+
+        A completed step no longer current goes back to waiting, with nothing
+        prepared, and is evaluated again; an error of ``done`` fails it.
+        """
+        if entry['status'] != 'completed':
+            return False
+        try:
+            if self.steps[name].done(self.run_dir, system):
+                return True
+        except Exception as error:
+            self._fail(entry, 'checking', error)
+            return False
+        self._set(entry, 'waiting', 'entries no longer current', calculations=None, calcs={},
+                  attention=[])
+        return False
+
+    def _stale(self, system, name, entry):
+        """Differences between the plan of a step and its calculations prepared.
+
+        Returns
+        -------
+        list of str
+            ``'<calc_id>: <reason>'`` for each calculation of the plan not
+            prepared, each one prepared and no longer in the plan, and each
+            record whose fingerprint differs from the plan. A record that
+            cannot be read is left to the reconciliation.
+        """
+        plan = self.steps[name].plan(self.run_dir, system)
+        prepared = list(entry['calculations'])
+        sdir = system_dir(self.run_dir, system)
+        found = [f'{calc_id}: in the settings, not prepared'
+                 for calc_id in plan if calc_id not in prepared]
+        for calc_id in prepared:
+            if calc_id not in plan:
+                found.append(f'{calc_id}: prepared, no longer in the settings')
+                continue
+            try:
+                record = read_record(sdir, calc_id)
+            except (OSError, ValueError):
+                continue
+            if record.fingerprint != plan[calc_id]:
+                found.append(f'{calc_id}: fingerprint differs from the settings')
+        return found
+
+    def _prepared_current(self, system, name, entry):
+        """Whether the calculations prepared still match the settings (``_stale``).
+
+        If not, the step has failed until ``retry`` and none of them is used.
+        """
+        try:
+            found = self._stale(system, name, entry)
+        except Exception as error:
+            self._fail(entry, 'checking the calculations', error)
+            return False
+        if found:
+            differences = '; '.join(found)
+            logger.error('%s/%s: settings changed since the preparation: %s', system, name,
+                         differences)
+            self._set(entry, 'failed', f'settings changed since the preparation: {differences}',
+                      error=f'StalePreparation: {differences}')
+            return False
+        return True
+
+    def _follow(self, reconciler, system, name, entry, analyse=True):
+        """Reconcile, decide and relaunch the calculations of a running step.
+
+        With ``analyse`` False, a step whose calculations are all completed
+        stays running, to be analysed by ``analyse_step``.
+        """
+        if not self._prepared_current(system, name, entry):
+            return []
         states = reconciler.reconcile([(system, calc_id) for calc_id in entry['calculations']])
         calcs, attention, launches = Counter(), [], []
 
@@ -475,7 +599,9 @@ class Orchestrator:
                 note('launched', state, decision.reason)
         written = [self._write_group(system, name, launches)] if launches else []
         entry.update(calcs=dict(calcs), attention=attention)
-        if calcs['completed'] == len(states):
+        if calcs['completed'] == len(states) and not analyse:
+            self._set(entry, 'running', 'calculations completed: run analyse')
+        elif calcs['completed'] == len(states):
             try:
                 self.steps[name].analyse(self.run_dir, system, list(entry['calculations']))
             except Exception as error:
@@ -506,12 +632,174 @@ class Orchestrator:
             if root.is_dir() else []
         return f'{prefix}{max(taken, default=0) + 1}'
 
+    # --- phases of one step ------------------------------------------------------
+
+    def prepare_step(self, system, name):
+        """Prepare one step, as a pass would start it, without the scheduler.
+
+        A completed step still current, a step already prepared and a step
+        failed for an error of its own are left as they are.
+
+        Returns
+        -------
+        StepReport
+        """
+        entry = self.entry(system, name)
+        if (not self._still_completed(system, name, entry) and entry['error'] is None
+                and entry['calculations'] is None):
+            self._start(system, name, entry)
+        self._save()
+        return self.step_report(system, name)
+
+    def submit_step(self, system, name):
+        """Submit the calculations of a prepared step: one pass on that step, without analysis.
+
+        The jobs of the run are recovered and asked for first
+        (``JobManager.cycle``); the calculations are then reconciled and
+        launched as in a pass. When they are all completed the step stays
+        running, with that reason, until ``analyse_step``.
+
+        Returns
+        -------
+        report : StepReport
+        written : list of str
+            Groups of jobs written.
+
+        Raises
+        ------
+        OrchestratorError
+            If the step is not running (not prepared, completed or failed).
+        NotOnHPCError
+            If the commands of the scheduler are not found.
+        """
+        entry = self.entry(system, name)
+        if entry['status'] != 'running':
+            raise OrchestratorError(f'{system}/{name} is {entry["status"]}: only a prepared step '
+                                    f'is submitted; run "prepare {name}" first')
+        held = self._held_back()
+        self.manager.cycle(held)
+        self._register_written_groups()
+        reconciler = Reconciler(self.run_dir, self.manager, self.execution.polling_interval)
+        written = self._follow(reconciler, system, name, entry, analyse=False)
+        if written:
+            self.manager.submit(held)
+        self._save()
+        return self.step_report(system, name), written
+
+    def analyse_step(self, system, name):
+        """Analyse a step from the files of its calculations, without the scheduler.
+
+        A step without calculations is started (``Step.done``, prerequisites,
+        ``prepare``) and analysed. A step with calculations must be prepared;
+        each calculation must be done according to its files alone
+        (``_not_done``), otherwise nothing changes and the error says, for each
+        one, what is missing.
+
+        Returns
+        -------
+        StepReport
+
+        Raises
+        ------
+        OrchestratorError
+            If the step is not prepared, or a calculation is not done
+            according to its files.
+        """
+        entry = self.entry(system, name)
+        if self._still_completed(system, name, entry) or entry['error'] is not None:
+            self._save()
+            return self.step_report(system, name)
+        if entry['calculations'] is None:
+            try:
+                planned = self.steps[name].plan(self.run_dir, system)
+            except Exception as error:
+                raise OrchestratorError(f'{system}/{name}: its calculations are not known: '
+                                        f'{error}') from error
+            if planned:
+                raise OrchestratorError(f'{system}/{name} is not prepared: run "prepare {name}" '
+                                        f'and "submit {name}" first')
+            if not self._start(system, name, entry):
+                self._save()
+                return self.step_report(system, name)
+        elif not self._prepared_current(system, name, entry):
+            self._save()
+            return self.step_report(system, name)
+        missing = self._not_done(system, entry['calculations'])
+        if missing:
+            raise OrchestratorError(
+                f'{system}/{name} not analysed: calculations not done according to their files: '
+                f'{"; ".join(missing)}. The end of a job is read from the scheduler on the HPC '
+                f'machine, by "submit {name}" or by the orchestrator')
+        try:
+            self.steps[name].analyse(self.run_dir, system, list(entry['calculations']))
+        except Exception as error:
+            self._fail(entry, 'analysing', error)
+        else:
+            self._set(entry, 'completed')
+        self._save()
+        return self.step_report(system, name)
+
+    def _not_done(self, system, calc_ids):
+        """``'<calc_id>: <what is missing>'`` for each calculation not done according to its files.
+
+        Done: the record has attempts, any claim is the one of the last
+        attempt, no group lists a next attempt, the last attempt is not
+        recorded as running and ended completed (``Status.summary``). Only
+        files are read: claims, records and manifests.
+        """
+        sdir = system_dir(self.run_dir, system)
+        launches = launch_index(read_groups(self.run_dir))
+        missing = []
+        for calc_id in calc_ids:
+            try:
+                record = read_record(sdir, calc_id)
+            except (OSError, ValueError) as error:
+                missing.append(f'{calc_id}: record not read: {error}')
+                continue
+            k = len(record.attempts)
+            claim_path = calc_dir(self.run_dir, system, calc_id) / CLAIM_FILE
+            claim = read_claim(claim_path) if claim_path.exists() else False
+            listed = [group for group, _ in launches.get((system, calc_id), {}).get(k + 1, [])]
+            if claim is None:
+                why = 'empty claim: a worker is taking the calculation, or stopped right after'
+            elif claim and claim['n'] != k:
+                why = f'claim of attempt {claim["n"]}, the record has {k} attempts'
+            elif listed:
+                why = f'attempt {k + 1} listed in group {", ".join(listed)}, not taken yet'
+            elif not k:
+                why = 'never run'
+            elif record.attempts[-1].status.process == 'running':
+                why = f'attempt {k} recorded as running: its job may still run'
+            elif record.attempts[-1].status.summary != 'completed':
+                why = f'attempt {k} {record.attempts[-1].status.summary}'
+            else:
+                continue
+            missing.append(f'{calc_id}: {why}')
+        return missing
+
     # --- actions of the user -----------------------------------------------------
 
-    def relaunch(self, system, calc_id):
+    def _step_of(self, system, calc_id):
+        """Name of the step that prepared a calculation."""
+        name = next((step for step in self.order
+                     if calc_id in (self.entry(system, step)['calculations'] or ())), None)
+        if name is None:
+            raise OrchestratorError(f'{system}/{calc_id} is not a calculation of a step of the '
+                                    'run')
+        return name
+
+    def relaunch(self, system, calc_id, group=None):
         """Relaunch a calculation by hand (``policy.manual_launch``) in a new group.
 
         The step of the calculation is followed again at the next pass.
+
+        Parameters
+        ----------
+        system, calc_id : str
+            The calculation.
+        group : str or None, optional
+            Group whose launch of the last attempt is taken, when the record
+            does not have it and the groups listing it give different ones.
 
         Returns
         -------
@@ -521,26 +809,77 @@ class Orchestrator:
         Raises
         ------
         PolicyError
-            If its worker may still run, or there is nothing to run again.
+            If its worker may still run, there is nothing to run again, or
+            the launch of the last attempt is not known.
         OrchestratorError
-            If no step of the system has the calculation.
+            If no step of the system has the calculation, or the settings
+            changed since its step was prepared; nothing is written.
         """
-        name = next((step for step in self.order
-                     if calc_id in (self.entry(system, step)['calculations'] or ())), None)
-        if name is None:
-            raise OrchestratorError(f'{system}/{calc_id} is not a calculation of a step of the '
-                                    'run')
-        self.manager.cycle()
-        reconciler = Reconciler(self.run_dir, self.manager, self.execution.polling_interval)
-        launch = manual_launch(reconciler, system, calc_id)
-        archive_attempt(self.run_dir, system, calc_id)  # nothing to do if already archived
-        group = self._write_group(system, name, [launch])
-        self.manager.submit()
+        name = self._step_of(system, calc_id)
         entry = self.entry(system, name)
+        found = self._stale(system, name, entry)
+        if found:
+            raise OrchestratorError(f'{system}/{name}: settings changed since the preparation: '
+                                    f'{"; ".join(found)}; nothing relaunched')
+        held = self._held_back()
+        self.manager.cycle(held)
+        reconciler = Reconciler(self.run_dir, self.manager, self.execution.polling_interval)
+        launch = manual_launch(reconciler, system, calc_id, group)
+        archive_attempt(self.run_dir, system, calc_id)  # nothing to do if already archived
+        written = self._write_group(system, name, [launch])
+        self.manager.submit(held)
         if entry['status'] == 'failed' and entry['error'] is None:
             self._set(entry, 'running', 'relaunched by hand')
         self._save()
-        return group
+        return written
+
+    def release_claim(self, system, calc_id, group=None):
+        """Archive the attempt of an empty claim, once the user knows its worker is over.
+
+        An empty claim is left by a worker that stopped right after creating
+        it, and stays uncertain: nothing tells whether that worker runs. The
+        attempt gets the number the worker would have used, the attempts in
+        the record plus one, and its launch from the groups that list it
+        (``launch_for``); its process stays unknown, so the calculation then
+        needs the user and is relaunched with ``relaunch``. The scheduler is
+        not asked.
+
+        Parameters
+        ----------
+        system, calc_id : str
+            The calculation.
+        group : str or None, optional
+            Group whose launch is taken when the groups listing the attempt
+            give different ones.
+
+        Returns
+        -------
+        int
+            Number of the attempt archived.
+
+        Raises
+        ------
+        OrchestratorError
+            If no step of the system has the calculation, it has no claim or
+            its claim is not empty, or the launch of the attempt is not known.
+        """
+        self._step_of(system, calc_id)
+        path = calc_dir(self.run_dir, system, calc_id) / CLAIM_FILE
+        where = f'{system}/{calc_id}'
+        if not path.is_file():
+            raise OrchestratorError(f'{where}: no claim to release')
+        if path.stat().st_size != 0:
+            raise OrchestratorError(f'{where}: the claim is not empty; its job tells when its '
+                                    'worker is over, and the reconciliation follows it')
+        n = len(read_record(system_dir(self.run_dir, system), calc_id).attempts) + 1
+        try:
+            launch = launch_for(self.run_dir, system, calc_id, n, group)
+        except LaunchError as error:
+            raise OrchestratorError(f'{where}: {error}') from None
+        archive_attempt(self.run_dir, system, calc_id, launch=launch)
+        logger.info('%s: empty claim released as attempt %d (%s, level %d)', where, n,
+                    launch.kind, launch.level)
+        return n
 
     def retry(self, system, step):
         """Let a step failed for an error of its own start again at the next pass."""
@@ -550,12 +889,15 @@ class Orchestrator:
 
     # --- report ------------------------------------------------------------------
 
+    def step_report(self, system, name):
+        """``StepReport`` of the current state of one step."""
+        entry = self.entry(system, name)
+        return StepReport(system, name, entry['status'], entry['reason'], dict(entry['calcs']),
+                          list(entry['attention']))
+
     def report(self, submitted=()):
         """``Report`` of the current state."""
-        steps = [StepReport(system, name, entry['status'], entry['reason'], dict(entry['calcs']),
-                            list(entry['attention']))
-                 for system in self.systems for name in self.order
-                 for entry in (self.entry(system, name),)]
+        steps = [self.step_report(system, name) for system in self.systems for name in self.order]
         return Report(steps, self.manager.summary(), list(submitted))
 
     @staticmethod

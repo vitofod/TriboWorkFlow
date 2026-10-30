@@ -66,6 +66,7 @@ from triboworkflow.engines.qe.status import read_pw_status
 from .archive import read_claim
 from .jobs import LAUNCH_KINDS, JobError, Launch
 from .layout import CLAIM_FILE, INPUT_FILE, calc_dir, system_dir
+from .reconcile import LaunchError, launch_for
 from .worker import read_input
 
 ACTIONS = ('launch', 'wait', 'done', 'manual', 'uncertain')
@@ -260,7 +261,7 @@ def decide(run_dir, state):
         return make('manual', reason=f'{state.reason}; no relaunch decided: {error}')
 
 
-def manual_launch(reconciler, system, calc_id):
+def manual_launch(reconciler, system, calc_id, group=None):
     """Launch of a relaunch asked for by the user.
 
     It is allowed only once the worker of the last attempt is surely over:
@@ -272,12 +273,19 @@ def manual_launch(reconciler, system, calc_id):
     attempt that groups listed and no worker took is launched again as it
     was; a calculation without attempts gets its first one.
 
+    When the last attempt has no launch recorded, its level and values come
+    from the groups that list it (``launch_for``): the launch they all give,
+    or the one of ``group``; never level 1 by default.
+
     Parameters
     ----------
     reconciler : triboworkflow.execution.reconcile.Reconciler
         Reconciliation of the run, after the cycle of its job manager.
     system, calc_id : str
         The calculation.
+    group : str or None, optional
+        Group whose launch of the last attempt is taken, when that launch is
+        not recorded and the groups listing it give different ones.
 
     Returns
     -------
@@ -287,7 +295,9 @@ def manual_launch(reconciler, system, calc_id):
     ------
     PolicyError
         If the calculation is completed, never launched, or its worker may
-        still run; the message says the state found.
+        still run; if the launch of the last attempt is not recorded and the
+        groups do not give it; if ``group`` is given and not needed. The
+        message says the state found.
     """
     state = reconciler.calculation(system, calc_id)
     where = f'{system}/{calc_id}'
@@ -308,14 +318,23 @@ def manual_launch(reconciler, system, calc_id):
         if verdict != 'over':
             raise PolicyError(f'{where}: job {claim["job_id"]} of the claim is {verdict} '
                               f'({detail})')
+    record = read_record(system_dir(run_dir, system), calc_id)
+    last = record.attempts[-1] if record.attempts else None
+    recorded = last is None or type(last.remedies.get('level')) is int
+    if group is not None and (state.launch is not None or recorded):
+        raise PolicyError(f'{where}: group {group} not used: the launch is known')
     if state.launch is not None:
         return state.launch
-    record = read_record(system_dir(run_dir, system), calc_id)
-    if not record.attempts:
+    if last is None:
         return Launch.initial(system, calc_id)
-    last = record.attempts[-1]
-    level = last.remedies.get('level')
-    if type(level) is not int:
-        raise PolicyError(f'{where}: the launch of attempt {last.n} is not recorded')
-    return Launch(system, calc_id, len(record.attempts) + 1, 'manual', level,
-                  last.remedies.get('values', {}), last.remedies.get('initial_values', {}))
+    if recorded:
+        level, values = last.remedies['level'], last.remedies.get('values', {})
+        initial = last.remedies.get('initial_values', {})
+    else:
+        try:
+            known = launch_for(run_dir, system, calc_id, last.n, group)
+        except LaunchError as error:
+            raise PolicyError(f'{where}: the launch of attempt {last.n} is not recorded: '
+                              f'{error}') from None
+        level, values, initial = known.level, known.values, known.initial_values
+    return Launch(system, calc_id, len(record.attempts) + 1, 'manual', level, values, initial)

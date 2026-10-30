@@ -43,6 +43,9 @@ NAMELISTS = ('CONTROL', 'SYSTEM', 'ELECTRONS', 'IONS')
 # Scheduler names of Xsorb's SCHEDULER_CONFIG (xsorb/io/scheduler.py:13-71).
 SCHEDULERS = ('slurm', 'pbs', 'torque', 'lsf', 'sge', 'htcondor', 'condor')
 ENGINES = ('qe',)
+# Steps of the interface workflow, in the order of the graph of the
+# orchestrator (execution/orchestrator.py, INTERFACE_GRAPH).
+INTERFACE_STEPS = ('match', 'pes', 'plotpes', 'shear', 'adhesion', 'ppes', 'charge')
 # Interface steps that run calculations; match, plotpes and shear only analyse.
 STEPS_WITH_ENGINE = ('pes', 'adhesion', 'ppes', 'charge')
 
@@ -445,11 +448,12 @@ class ExecutionParams:
         worker added; relative to the folder of the settings file.
     run_command : str
         Command up to the input file, e.g. ``mpirun -np 32 pw.x -nk 4``.
-    groups : int
-        Jobs (one worker each) over which the calculations of a group are
-        spread; never more jobs than calculations are submitted.
     walltime, polling_interval : int
         Seconds. ``walltime`` must match the one of the jobscript.
+    groups : int or None
+        Jobs (one worker each) over which the calculations of a group are
+        spread; never more jobs than calculations are submitted. None: given
+        on the command line (``--groups``) or asked in a terminal.
     max_seconds_margin : int
         Seconds kept free at the end of the walltime. Before each run the
         worker sets ``max_seconds`` to the walltime left minus this margin,
@@ -464,16 +468,17 @@ class ExecutionParams:
     scheduler: str
     jobscript: str
     run_command: str
-    groups: int
     walltime: int
     polling_interval: int
+    groups: int | None = None
     max_seconds_margin: int = 600
     job_report_wait: int = 3600
 
     def check(self, path):
         """Validate the table; errors name ``path``."""
         _choice(f'{path}.scheduler', self.scheduler, SCHEDULERS)
-        _positive(f'{path}.groups', self.groups)
+        if self.groups is not None:
+            _positive(f'{path}.groups', self.groups)
         _positive(f'{path}.walltime', self.walltime)
         _positive(f'{path}.polling_interval', self.polling_interval)
         _positive(f'{path}.max_seconds_margin', self.max_seconds_margin)
@@ -572,6 +577,10 @@ class InterfaceParams:
     ----------
     slabs : list of SlabParams
         Bottom slab, then top slab.
+    steps : list of str
+        Steps to run, from ``INTERFACE_STEPS``, each at most once. A step runs
+        once the steps it needs are done; among the steps that are ready, the
+        order of the list decides.
     set_bm : bool
         Whether the strain weights are the bulk moduli of the two materials.
     engine : str
@@ -582,6 +591,7 @@ class InterfaceParams:
     """
 
     slabs: list[SlabParams]
+    steps: list[str]
     set_bm: bool = True
     engine: str = 'qe'
     engines: dict[str, str] = field(default_factory=dict)
@@ -605,6 +615,14 @@ class InterfaceParams:
         """Validate the table; errors name ``path``."""
         if len(self.slabs) != 2:
             raise SettingsError(f'{path}.slabs', f'give two slabs, bottom then top; got {len(self.slabs)}')
+        if not self.steps:
+            raise SettingsError(f'{path}.steps', f'give at least one step of: {", ".join(INTERFACE_STEPS)}')
+        for i, step in enumerate(self.steps):
+            if step not in INTERFACE_STEPS:
+                raise SettingsError(f'{path}.steps[{i}]', f'unknown step {step!r}; '
+                                                          f'allowed: {", ".join(INTERFACE_STEPS)}')
+            if step in self.steps[:i]:
+                raise SettingsError(f'{path}.steps[{i}]', f'repeated step {step!r}')
         later = '; MLIP and CP2K engines are not available yet'
         _choice(f'{path}.engine', self.engine, ENGINES, later)
         for step, engine in self.engines.items():

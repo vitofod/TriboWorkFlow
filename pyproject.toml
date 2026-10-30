@@ -34,6 +34,9 @@ classifiers = [
     'Private :: Do Not Upload',
 ]
 
+[project.scripts]
+triboworkflow = 'triboworkflow.cli.main:main'
+
 [project.optional-dependencies]
 # Filled in phase 5 (MLIP) and phase 6 (CP2K).
 mlip = []

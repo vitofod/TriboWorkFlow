@@ -21,6 +21,7 @@ from triboworkflow.core import store
 from triboworkflow.execution import archive as archive_module
 from triboworkflow.execution import layout
 from triboworkflow.execution.archive import ArchiveError, archive_attempt, read_claim
+from triboworkflow.execution.jobs import Launch
 
 SYSTEM, CALC_ID = 'Cu111_Al111', 'pes_scf/aa'
 FP = 'sha256:' + 'a' * 64
@@ -151,6 +152,17 @@ def test_empty_claim(calc):
     record = store.read_record(calc.sdir, CALC_ID)
     assert record.attempts[2] == store.Attempt(3)
     assert not (calc.path / layout.CLAIM_FILE).exists()
+
+
+def test_archive_gives_the_launch_to_the_new_attempt(calc):
+    calc('empty claim', previous=2)
+    with pytest.raises(ArchiveError, match='launch of attempt 2 given for attempt 3'):
+        archive_attempt(calc.run_dir, SYSTEM, CALC_ID, launch=Launch(SYSTEM, CALC_ID, 2, 'manual', 1))
+    assert (calc.path / layout.CLAIM_FILE).read_text() == ''  # nothing changed
+    launch = Launch(SYSTEM, CALC_ID, 3, 'unchanged', 1)
+    assert archive_attempt(calc.run_dir, SYSTEM, CALC_ID, launch=launch) == 3
+    record = store.read_record(calc.sdir, CALC_ID)
+    assert record.attempts[2] == store.Attempt(3, remedies=launch.remedies())
 
 
 def test_running_attempt_is_not_archived(calc):

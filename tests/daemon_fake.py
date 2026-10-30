@@ -5,11 +5,13 @@
 
 Each pass writes ``passes`` in the directory of the run; at the end of the
 last pass, stopped by a signal or not, it writes ``saved``, as the real
-orchestrator saves its state. Nothing is submitted. ``broken`` fails while
-building the orchestrator, ``slow`` builds it after the seconds written in
-``delay``.
+orchestrator saves its state. Nothing is submitted. ``build`` writes the
+arguments it receives after the directory in ``factory_args.json``;
+``broken`` fails while building the orchestrator, ``slow`` builds it after
+the seconds written in ``delay``.
 """
 
+import json
 import time
 from pathlib import Path
 
@@ -35,7 +37,8 @@ class FakeOrchestrator:
         return passes
 
 
-def build(run_dir):
+def build(run_dir, *args):
+    (Path(run_dir) / 'factory_args.json').write_text(json.dumps(list(args)))
     return FakeOrchestrator(run_dir)
 
 

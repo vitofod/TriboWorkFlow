@@ -15,14 +15,15 @@ import json
 
 import pytest
 
-from run_helpers import (JOB_DONE, NOT_CONVERGED, SCF_DONE, SCF_TRUNCATED, SYSTEM, Run, header,
-                         text)
+from run_helpers import (FP, JOB_DONE, NOT_CONVERGED, SCF_DONE, SCF_TRUNCATED, SYSTEM, Run,
+                         header, text)
 from triboworkflow.core import store
 from triboworkflow.core.settings.schema import ExecutionParams
 from triboworkflow.core.store import Provenance, SystemWriter, is_done, read_system
 from triboworkflow.execution import layout
 from triboworkflow.execution import orchestrator as orchestrator_module
-from triboworkflow.execution.jobs import MANIFEST_FILE, SUBMITTED_FILE, read_manifest
+from triboworkflow.execution.jobs import (MANIFEST_FILE, SUBMITTED_FILE, Launch, Manifest,
+                                          read_manifest, write_job)
 from triboworkflow.execution.manager import JobManager
 from triboworkflow.execution.orchestrator import (INTERFACE_GRAPH, Orchestrator,
                                                   OrchestratorError, Step, order_steps)
@@ -33,6 +34,8 @@ EXECUTION = ExecutionParams(scheduler='slurm', jobscript='job.sh', run_command='
 ALL = ('match', 'pes', 'plotpes', 'shear', 'adhesion', 'ppes', 'charge')
 # Calculations of each fictitious step; match, plotpes and shear only analyse.
 CALCS = {'pes': 2, 'adhesion': 2, 'ppes': 1, 'charge': 1}
+# Fingerprint of the calculations after a change of the settings.
+OTHER = 'sha256:' + 'b' * 64
 
 
 class FakeStep(Step):
@@ -40,11 +43,18 @@ class FakeStep(Step):
 
     Its provenance has a version: changing it makes the entry stale.
     ``versions`` holds the version each step expects of the others.
+    ``fingerprint`` is the one its settings give to each calculation: a new
+    value stands for settings changed. Its ``prepare`` keeps the calculations
+    already there, whatever their fingerprint.
     """
 
     def __init__(self, run, name, versions):
         self.run, self.name, self.versions = run, name, versions
+        self.fingerprint = FP
         self.calls = []
+
+    def plan(self, run_dir, system):
+        return {f'{self.name}/c{i}': self.fingerprint for i in range(CALCS.get(self.name, 0))}
 
     def provenance(self, name):
         return Provenance.build(name, {'version': self.versions.get(name, 1)})
@@ -62,7 +72,7 @@ class FakeStep(Step):
         for i in range(CALCS.get(self.name, 0)):
             calc_id = f'{self.name}/c{i}'
             if not self.run.path(calc_id).exists():
-                self.run.calc(f'c{i}', step=self.name)
+                self.run.calc(f'c{i}', step=self.name, fingerprint=self.fingerprint)
             calc_ids.append(calc_id)
         return calc_ids
 
@@ -386,11 +396,102 @@ def test_relaunch_by_hand(run):
         orch.relaunch(SYSTEM, 'ppes/c0')
 
 
+def test_empty_claim_released_then_relaunched_and_submitted(run):
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.run_pass()
+    work(run, only=['pes/c1'])
+    claim = run.path('pes/c0') / layout.CLAIM_FILE
+    claim.write_text('')  # the worker of pes/c0 stopped right after creating its claim
+    (pes,) = [s for s in orch.run_pass().steps if s.step == 'pes']
+    assert pes.status == 'running' and pes.attention[0]['state'] == 'uncertain'
+    queries = run.slurm.queries
+    assert orch.release_claim(SYSTEM, 'pes/c0') == 1
+    assert run.slurm.queries == queries and not claim.exists()
+    (attempt,) = run.record('pes/c0').attempts
+    assert attempt.remedies == {'kind': 'initial', 'level': 1, 'values': {}, 'initial_values': {}}
+    (pes,) = [s for s in orch.run_pass().steps if s.step == 'pes']
+    assert pes.status == 'failed'
+    assert pes.attention == [{'calc_id': 'pes/c0', 'state': 'manual',
+                              'reason': 'end of the process not known'}]
+    group = orch.relaunch(SYSTEM, 'pes/c0')
+    manifest, _ = read_manifest(layout.job_dir(run.dir, group) / MANIFEST_FILE)
+    assert [(l.calc_id, l.n, l.kind, l.level) for l in manifest.calculations] == \
+        [('pes/c0', 2, 'manual', 1)]
+    assert run.slurm.submitted == 3  # two jobs of the first group, one for the relaunch
+    orch.run_pass()
+    assert run.slurm.submitted == 3
+
+
+@pytest.mark.parametrize('content, message', [
+    (None, 'no claim'),
+    (json.dumps({'n': 1, 'job_id': '1000', 'host': 'node01', 'pid': 77, 'since': 'x'}),
+     'the claim is not empty'),
+])
+def test_release_claim_refuses_a_claim_with_content(run, content, message):
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.run_pass()
+    claim = run.path('pes/c0') / layout.CLAIM_FILE
+    if content is not None:
+        claim.write_text(content)
+    before = run.files('pes/c0'), run.record('pes/c0')
+    with pytest.raises(OrchestratorError, match=message):
+        orch.release_claim(SYSTEM, 'pes/c0')
+    assert (run.files('pes/c0'), run.record('pes/c0')) == before
+
+
+def test_release_claim_of_a_calculation_not_of_a_step(run):
+    orch = orchestrator(run, ['match', 'pes'])
+    with pytest.raises(OrchestratorError, match='not a calculation of a step'):
+        orch.release_claim(SYSTEM, 'pes/c0')
+
+
+def test_relaunch_with_group_when_the_launch_is_not_recorded(run):
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.run_pass()
+    work(run, 'crashed')
+    orch.run_pass()  # group pes.2 lists attempt 2 of both, unchanged
+    # Another group lists attempt 2 of pes/c0 with another launch, and attempt 2
+    # was recorded without its launch (its job not followed by the manager).
+    write_job(run.dir, Manifest(name=f'{SYSTEM}.pes.3', scheduler='slurm', run_command='pw.x',
+                                walltime=3600, max_seconds_margin=60,
+                                calculations=(Launch(SYSTEM, 'pes/c0', 2, 'manual', 1),)),
+              run.jobscript)
+    record = run.record('pes/c0')
+    second = store.Attempt(2, job_id='4242', status=store.Status('crashed'), stop_reason='truncated',
+                           job_state='FAILED')
+    store.write_record(run.sdir, store.Record(**{**record.__dict__,
+                                                 'attempts': record.attempts + (second,),
+                                                 'status': second.status}))
+    with pytest.raises(PolicyError, match=rf'launch of attempt 2 is not recorded: .*different '
+                                          rf'launches: {SYSTEM}\.pes\.2 \(unchanged, level 1\), '
+                                          rf'{SYSTEM}\.pes\.3 \(manual, level 1\)'):
+        orch.relaunch(SYSTEM, 'pes/c0')
+    group = orch.relaunch(SYSTEM, 'pes/c0', group=f'{SYSTEM}.pes.2')
+    manifest, _ = read_manifest(layout.job_dir(run.dir, group) / MANIFEST_FILE)
+    assert [(l.calc_id, l.n, l.kind, l.level) for l in manifest.calculations] == \
+        [('pes/c0', 3, 'manual', 1)]
+
+
+def test_relaunch_refused_when_settings_changed(run):
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.run_pass()
+    work(run, 'user_request')
+    orch.run_pass()
+    orch.steps['pes'].fingerprint = OTHER
+    before = (run.dir / 'orchestrator.json').read_bytes(), run.slurm.submitted
+    with pytest.raises(OrchestratorError, match='settings changed since the preparation: '
+                                                'pes/c0: fingerprint differs'):
+        orch.relaunch(SYSTEM, 'pes/c0')
+    assert ((run.dir / 'orchestrator.json').read_bytes(), run.slurm.submitted) == before
+    assert sorted(p.name for p in (run.dir / 'jobs').iterdir()) == [f'{SYSTEM}.pes.1']
+
+
 # --- restarts ------------------------------------------------------------------------------
 
 def restarted(run, requested=('match', 'pes')):
-    manager = JobManager(run.dir, run.slurm, 3600, now=run.clock)
-    return orchestrator(run, requested, manager=manager), manager
+    """A new orchestrator and job manager on the run; the workers follow the new manager."""
+    run.manager = JobManager(run.dir, run.slurm, 3600, now=run.clock)
+    return orchestrator(run, requested, manager=run.manager), run.manager
 
 
 def test_restart_follows_the_jobs_without_new_submissions(run):
@@ -457,3 +558,247 @@ def test_invalid_state_file(run):
     (run.dir / 'orchestrator.json').write_text(json.dumps({'schema_version': 2, 'systems': {}}))
     with pytest.raises(OrchestratorError, match='schema_version: 2; this version reads 1'):
         orchestrator(run, ['match'])
+
+
+# --- steps still current -------------------------------------------------------------------
+
+def completed_pes(run):
+    """match and pes completed by a first orchestrator."""
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.run_pass()
+    work(run)
+    assert statuses(orch.run_pass()) == {'match': 'completed', 'pes': 'completed'}
+
+
+def test_completed_step_no_longer_current_runs_again(run):
+    completed_pes(run)
+    # A new orchestrator on the same run, after a change that makes the entry of pes stale.
+    orch, _ = restarted(run)
+    orch.steps['pes'].versions['pes'] = 2
+    assert orch.steps['pes'].done(run.dir, SYSTEM) is False
+    report = orch.run_pass()
+    assert statuses(report) == {'match': 'completed', 'pes': 'completed'}
+    assert orch.steps['pes'].calls == ['prepare', 'analyse']
+    assert orch.steps['pes'].done(run.dir, SYSTEM) is True
+    assert run.slurm.submitted == 2  # its calculations are current: reused, not run again
+
+
+def test_completed_step_still_current_is_not_run(run):
+    completed_pes(run)
+    orch, _ = restarted(run)
+    report = orch.run_pass()
+    assert statuses(report) == {'match': 'completed', 'pes': 'completed'}
+    assert prepared(orch) == {'match': 0, 'pes': 0} and orch.steps['pes'].calls == []
+
+
+def test_stale_prerequisite_not_requested_blocks(run):
+    completed_pes(run)
+    orch = orchestrator(run, ['adhesion'], versions={'pes': 2})
+    report = orch.run_pass()
+    assert statuses(report) == {'adhesion': 'blocked'}
+    assert orch.entry(SYSTEM, 'adhesion')['reason'] == ('entries missing or not current: pes; '
+                                                        'run the steps that compute them first')
+    assert prepared(orch) == {'adhesion': 0} and run.slurm.submitted == 2
+    state = json.loads((run.dir / 'orchestrator.json').read_text())
+    assert state['systems'][SYSTEM]['pes']['status'] == 'completed'
+
+
+# --- settings changed after the preparation --------------------------------------------------
+
+def complete_by_hand(run, *calc_ids, outcome='completed'):
+    """Each calculation run once by a worker, its job over."""
+    for calc_id in calc_ids:
+        run.start(calc_id, '900', output=OUTPUTS[outcome])
+        run.finish(calc_id, **OUTCOMES[outcome])
+
+
+@pytest.mark.parametrize('phase', ['submit_step', 'analyse_step', 'run_pass'])
+def test_settings_changed_after_prepare_stop_the_step(run, phase):
+    write_entry(run.dir, SYSTEM, 'match')
+    orch = orchestrator(run, ['pes'])
+    assert orch.prepare_step(SYSTEM, 'pes').status == 'running'
+    orch.steps['pes'].fingerprint = OTHER  # e.g. ecutwfc changed in the settings
+    if phase == 'submit_step':
+        pes, written = orch.submit_step(SYSTEM, 'pes')
+        assert written == []
+    elif phase == 'analyse_step':
+        complete_by_hand(run, 'pes/c0', 'pes/c1')
+        pes = orch.analyse_step(SYSTEM, 'pes')
+    else:
+        (pes,) = orch.run_pass().steps
+    assert pes.status == 'failed'
+    assert pes.reason.startswith('settings changed since the preparation: '
+                                 'pes/c0: fingerprint differs from the settings')
+    assert orch.entry(SYSTEM, 'pes')['error'].startswith('StalePreparation: ')
+    assert not (run.dir / 'jobs').exists() and run.slurm.submitted == 0
+    assert 'analyse' not in orch.steps['pes'].calls
+    assert statuses(orch.run_pass()) == {'pes': 'failed'}  # until retry
+
+
+@pytest.mark.parametrize('phase', ['submit_step', 'run_pass'])
+def test_group_written_before_settings_changed_is_not_submitted(run, monkeypatch, phase):
+    # The group of the step was written and registered, its jobs not submitted yet
+    # (e.g. a submission resolved as without job, a refusal cleared, a crash).
+    write_entry(run.dir, SYSTEM, 'match')
+    orch = orchestrator(run, ['pes'])
+    orch.prepare_step(SYSTEM, 'pes')
+    with monkeypatch.context() as patch:
+        patch.setattr(run.manager, 'submit', lambda *args, **kwargs: [])
+        orch.submit_step(SYSTEM, 'pes')
+    assert run.manager.missing_jobs(f'{SYSTEM}.pes.1') == 2 and run.slurm.submitted == 0
+    orch.steps['pes'].fingerprint = OTHER
+    if phase == 'submit_step':
+        pes, _ = orch.submit_step(SYSTEM, 'pes')
+    else:
+        (pes,) = orch.run_pass().steps
+    assert pes.status == 'failed' and pes.reason.startswith('settings changed')
+    assert run.slurm.submitted == 0
+    orch.run_pass()  # the step stays failed, its group is not submitted
+    assert run.slurm.submitted == 0
+
+
+def test_prepare_that_keeps_stale_calculations_fails_the_step(run):
+    write_entry(run.dir, SYSTEM, 'match')
+    run.calc('c0', step='pes')  # prepared with the settings of before
+    run.calc('c1', step='pes')
+    orch = orchestrator(run, ['pes'])
+    orch.steps['pes'].fingerprint = OTHER
+    report = orch.run_pass()
+    assert statuses(report) == {'pes': 'failed'}
+    assert orch.entry(SYSTEM, 'pes')['reason'].startswith(
+        'settings changed since the preparation: ')
+    assert not (run.dir / 'jobs').exists() and run.slurm.submitted == 0
+
+
+def test_retry_after_settings_changed(run):
+    write_entry(run.dir, SYSTEM, 'match')
+    orch = orchestrator(run, ['pes'])
+    orch.prepare_step(SYSTEM, 'pes')
+    orch.steps['pes'].fingerprint = OTHER
+    assert statuses(orch.run_pass()) == {'pes': 'failed'}
+    orch.retry(SYSTEM, 'pes')
+    # The calculations prepared before are still there: failed again.
+    assert statuses(orch.run_pass()) == {'pes': 'failed'}
+    orch.steps['pes'].fingerprint = FP  # settings as they were
+    orch.retry(SYSTEM, 'pes')
+    report = orch.run_pass()
+    assert statuses(report) == {'pes': 'running'} and report.submitted == [f'{SYSTEM}.pes.1']
+
+
+# --- phases of one step --------------------------------------------------------------------
+
+def test_phases_by_hand(run):
+    # Each phase with a new orchestrator and job manager, as each command of the CLI.
+    orch, _ = restarted(run)
+    assert orch.analyse_step(SYSTEM, 'match').status == 'completed'
+    orch, _ = restarted(run)
+    pes = orch.prepare_step(SYSTEM, 'pes')
+    assert (pes.system, pes.step, pes.status) == (SYSTEM, 'pes', 'running')
+    assert orch.entry(SYSTEM, 'pes')['calculations'] == ['pes/c0', 'pes/c1']
+    assert not (run.dir / 'jobs').exists() and run.slurm.submitted == 0
+    orch, _ = restarted(run)
+    pes, written = orch.submit_step(SYSTEM, 'pes')
+    assert written == [f'{SYSTEM}.pes.1'] and run.slurm.submitted == 2
+    assert pes.status == 'running'
+    work(run)
+    orch, _ = restarted(run)
+    pes, written = orch.submit_step(SYSTEM, 'pes')
+    assert written == [] and (pes.status, pes.reason) == ('running',
+                                                          'calculations completed: run analyse')
+    orch, _ = restarted(run)
+    assert orch.analyse_step(SYSTEM, 'pes').status == 'completed'
+    assert orch.steps['pes'].calls == ['analyse']
+    assert read_system(run.sdir).get(['pes']) == {'done': True}
+    state = json.loads((run.dir / 'orchestrator.json').read_text())
+    assert state['systems'][SYSTEM]['pes']['status'] == 'completed'
+
+
+def prepared_pes(run):
+    """match analysed and pes prepared by hand; the orchestrator."""
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.analyse_step(SYSTEM, 'match')
+    orch.prepare_step(SYSTEM, 'pes')
+    return orch
+
+
+def snapshot(run):
+    return {name: (run.dir / name).read_bytes() if (run.dir / name).exists() else None
+            for name in ('orchestrator.json', 'jobs.json')} | \
+           {'system.json': (run.sdir / 'system.json').read_bytes()}
+
+
+@pytest.mark.parametrize('case, reason', [
+    ('running', 'attempt 1 recorded as running'),
+    ('claim', 'claim of attempt 1, the record has 0 attempts'),
+    ('empty claim', 'empty claim'),
+    ('crashed', 'attempt 1 crashed'),
+    ('not taken', f'attempt 1 listed in group {SYSTEM}.pes.1, not taken yet'),
+])
+def test_analyse_step_uses_only_the_files(run, case, reason):
+    orch = prepared_pes(run)
+    if case == 'not taken':
+        orch.submit_step(SYSTEM, 'pes')
+        work(run, only=['pes/c1'])
+    else:
+        complete_by_hand(run, 'pes/c1')
+        if case == 'running':
+            run.start('pes/c0', '900')
+        elif case == 'claim':
+            run.claim('pes/c0', 1, '900')
+        elif case == 'empty claim':
+            (run.path('pes/c0') / layout.CLAIM_FILE).write_text('')
+        else:
+            complete_by_hand(run, 'pes/c0', outcome='crashed')
+    before, queries = snapshot(run), run.slurm.queries
+    orch, _ = restarted(run)
+    with pytest.raises(OrchestratorError) as error:
+        orch.analyse_step(SYSTEM, 'pes')
+    message = str(error.value)
+    assert f'pes/c0: {reason}' in message and 'pes/c1' not in message
+    assert run.slurm.queries == queries  # no query to the scheduler
+    assert snapshot(run) == before and 'analyse' not in orch.steps['pes'].calls
+    assert orch.entry(SYSTEM, 'pes')['status'] == 'running'
+
+
+def test_analyse_step_of_a_step_not_prepared_is_refused(run):
+    write_entry(run.dir, SYSTEM, 'match')
+    orch = orchestrator(run, ['pes'])
+    with pytest.raises(OrchestratorError, match='pes is not prepared'):
+        orch.analyse_step(SYSTEM, 'pes')
+    assert prepared(orch) == {'pes': 0} and not (run.dir / 'orchestrator.json').exists()
+
+
+def test_submit_step_needs_a_prepared_step(run):
+    orch = orchestrator(run, ['match', 'pes'])
+    with pytest.raises(OrchestratorError, match='pes is waiting.*prepare pes'):
+        orch.submit_step(SYSTEM, 'pes')
+    assert not (run.dir / 'orchestrator.json').exists() and run.slurm.submitted == 0
+
+
+def test_submit_step_twice_submits_nothing_twice(run):
+    orch = prepared_pes(run)
+    orch.submit_step(SYSTEM, 'pes')
+    orch, manager = restarted(run)
+    pes, written = orch.submit_step(SYSTEM, 'pes')
+    assert written == [] and pes.status == 'running'
+    assert run.slurm.submitted == 2 and sorted(manager.groups) == [f'{SYSTEM}.pes.1']
+
+
+def test_phases_by_hand_then_the_orchestrator_goes_on(run):
+    orch = prepared_pes(run)
+    orch.submit_step(SYSTEM, 'pes')
+    orch, manager = restarted(run)
+    report = orch.run_pass()
+    assert report.submitted == [] and statuses(report) == {'match': 'completed', 'pes': 'running'}
+    work(run)
+    report = orch.run_pass()
+    assert statuses(report) == {'match': 'completed', 'pes': 'completed'}
+    assert sorted(manager.groups) == [f'{SYSTEM}.pes.1'] and run.slurm.submitted == 2
+
+
+def test_step_without_calculations_is_analysed(run):
+    orch = orchestrator(run, ['match'])
+    report = orch.analyse_step(SYSTEM, 'match')
+    assert report.status == 'completed' and orch.steps['match'].calls == ['prepare', 'analyse']
+    assert run.slurm.queries == 0 and run.slurm.submitted == 0
+    assert read_system(run.sdir).get(['match']) == {'done': True}

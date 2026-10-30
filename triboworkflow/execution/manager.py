@@ -410,8 +410,14 @@ class JobManager:
                            checked=stamp, error=None)
         self._save()
 
-    def submit(self):
+    def submit(self, skip=()):
         """Submit the jobs still missing from each group whose submissions are not stopped.
+
+        Parameters
+        ----------
+        skip : collection of str, optional
+            Groups not submitted this time (e.g. those of a step whose
+            settings changed since its preparation).
 
         Returns
         -------
@@ -426,7 +432,7 @@ class JobManager:
         submitted = []
         for name, group in self.groups.items():
             missing = self.missing_jobs(name)
-            if group['refused'] is not None or group['unknown'] or missing == 0:
+            if name in skip or group['refused'] is not None or group['unknown'] or missing == 0:
                 continue
             try:
                 job_ids = submit_jobs(job_dir(self.run_dir, name), self.scheduler, missing)
@@ -494,11 +500,11 @@ class JobManager:
             complete=complete,
             incomplete=[name for name in self.groups if name not in complete])
 
-    def cycle(self):
-        """Recover, poll and submit; return the ``summary``."""
+    def cycle(self, skip=()):
+        """Recover, poll and submit (but the groups in ``skip``); return the ``summary``."""
         self.recover()
         self.poll()
-        self.submit()
+        self.submit(skip)
         return self.summary()
 
     def run(self, interval, sleep=time.sleep, max_cycles=None):

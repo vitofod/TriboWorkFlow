@@ -21,7 +21,7 @@ from triboworkflow.execution import layout
 from triboworkflow.execution.jobs import Launch, Manifest, write_job
 from triboworkflow.execution.manager import JobManager
 from triboworkflow.execution.reconcile import Reconciler
-from triboworkflow.execution.scheduler import JobScheduler
+from triboworkflow.execution.scheduler import JobScheduler, JobSchedulerError
 
 SYSTEM = 'Cu111_Al111'
 FP = 'sha256:' + 'a' * 64
@@ -98,16 +98,22 @@ class Slurm(JobScheduler):
     ``sbatch`` numbers the jobs and sets them PENDING; ``sacct`` prints
     ``states`` or ``restarts`` (0 by default) of a job, nothing for a job
     missing from ``states``. ``fail`` maps a field of ``sacct`` to the error
-    its query raises. ``submitted`` counts the submissions.
+    its query raises; ``refuse`` makes the next submissions fail with an
+    error and create no job. ``submitted`` counts the submissions,
+    ``queries`` the calls of ``sacct``.
     """
 
     def __init__(self):
         super().__init__('slurm')
         self.next_id = 1000
         self.states, self.restarts, self.fail = {}, {}, {}
-        self.submitted = 0
+        self.submitted = self.queries = self.refuse = 0
 
     def _run_command(self, cmd, input_data=None, cwd=None):
+        if cmd[0] == 'sbatch' and self.refuse:
+            self.refuse -= 1
+            raise JobSchedulerError('Command failed with return code 1: invalid account') \
+                from subprocess.CalledProcessError(1, cmd, output='', stderr='invalid account')
         if cmd[0] == 'sbatch':
             job_id = str(self.next_id)
             self.next_id += 1
@@ -116,6 +122,7 @@ class Slurm(JobScheduler):
             return subprocess.CompletedProcess(cmd, 0, stdout=f'Submitted batch job {job_id}\n',
                                                stderr='')
         assert cmd[0] == 'sacct', cmd
+        self.queries += 1
         field, job_id = cmd[cmd.index('-o') + 1], cmd[-1]
         if field in self.fail:
             raise self.fail[field]
@@ -139,7 +146,7 @@ class Run:
         self.slurm, self.clock = Slurm(), Clock()
         self.manager = JobManager(self.dir, self.slurm, WAIT, now=self.clock)
 
-    def calc(self, label='aa', input_text=PWI, step='pes_scf'):
+    def calc(self, label='aa', input_text=PWI, step='pes_scf', fingerprint=FP):
         """A prepared calculation: directory, ``input.pwi`` and record."""
         calc_id = f'{step}/{label}'
         path = self.path(calc_id)
@@ -147,8 +154,8 @@ class Run:
         (path / layout.INPUT_FILE).write_text(input_text)
         store.write_record(self.sdir, store.Record(
             system=SYSTEM, step=step, label=label, calc_type='slab_from_scratch',
-            engine=store.Engine('qe', 'pw.x'), energy_model={'ecutwfc': 40.0}, fingerprint=FP,
-            files={'input': 'input.pwi', 'output': 'output.pwo'}))
+            engine=store.Engine('qe', 'pw.x'), energy_model={'ecutwfc': 40.0},
+            fingerprint=fingerprint, files={'input': 'input.pwi', 'output': 'output.pwo'}))
         return calc_id
 
     @property

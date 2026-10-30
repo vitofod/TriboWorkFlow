@@ -13,6 +13,10 @@
 schema_version = 1
 
 [interface]
+# Steps to run, required: any of match, pes, plotpes, shear, adhesion, ppes,
+# charge. Each runs once the steps it needs are done; between steps that are
+# ready, the order of this list decides.
+steps = ["match", "pes", "plotpes", "shear", "adhesion", "ppes", "charge"]
 engine = "qe"                      # Engine of the steps that run calculations.
 # engines = { pes = "qe" }         # Per-step engine: pes, adhesion, ppes, charge.
 set_bm = true                      # Strain weights = bulk moduli of the two materials.
@@ -92,6 +96,7 @@ scheduler = "slurm"
 jobscript = "jobscript.sh"         # Relative to this file; copied with the worker line added.
 run_command = "mpirun -np 32 pw.x -nk 4"
 groups = 10                        # Jobs (workers); never more than the calculations.
+                                   # Optional: else --groups, or asked in a terminal.
 walltime = 86400                   # Seconds, as in the jobscript.
 polling_interval = 1800            # Seconds between two checks of the jobs.
 max_seconds_margin = 600           # Seconds kept free at the end of the walltime.

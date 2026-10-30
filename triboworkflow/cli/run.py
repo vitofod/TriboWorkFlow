@@ -1,0 +1,342 @@
+# Author: Vito Foderà
+# Created: 2026-10-30
+
+"""A run as the command line opens it.
+
+A run is a folder with its settings in ``config.toml``: every command works
+on the current folder or on the one given with ``-r/--run``, and the
+relative paths of the settings (jobscript, slabs) hold from that folder, so
+a run prepared on one machine is copied to another as it is. A run has one
+system, the interface of its two slabs, named ``<mid1>_<mid2>``.
+
+The number of jobs (workers) of each group of jobs comes from ``--groups``,
+then from ``[execution].groups``; when both are missing, the command asks for
+it if its standard input and output are a terminal, and stops with an error
+otherwise, so that a command started by a script never waits for an answer.
+
+``build_orchestrator`` gives the orchestrator of the run, with the steps of
+``[interface].steps`` from the registry of the steps; ``daemon_factory`` is
+the factory that the orchestrator in the background calls
+(``execution/daemon.py``), with the number of jobs decided by ``start``.
+"""
+
+import contextlib
+import dataclasses
+import logging
+import shlex
+import sys
+from pathlib import Path
+
+from triboworkflow.core.settings import load_settings
+from triboworkflow.core.store.atomic import read_json
+from triboworkflow.execution.jobs import jobscript_path
+from triboworkflow.execution.manager import JobManager
+from triboworkflow.execution.orchestrator import STATE_FILE, Orchestrator
+from triboworkflow.execution.scheduler import JobScheduler
+from triboworkflow.workflows.interface.registry import get_step
+
+logger = logging.getLogger(__name__)
+
+CONFIG_FILE = 'config.toml'
+CLI_LOG = 'cli.log'
+GROUPS_QUESTION = 'Number of jobs (workers) per group: '
+
+
+class RunError(RuntimeError):
+    """A run that the command line cannot open or use as asked."""
+
+
+def config_file(run_dir):
+    """``<run>/config.toml``.
+
+    Raises
+    ------
+    RunError
+        If the file is missing.
+    """
+    path = Path(run_dir) / CONFIG_FILE
+    if not path.is_file():
+        raise RunError(f'{path} not found: a run is the folder of its {CONFIG_FILE}; run the '
+                       'command there, or give the folder with -r/--run')
+    return path
+
+
+def load_run(run_dir):
+    """Settings of a run, read and validated from ``<run>/config.toml``.
+
+    Raises
+    ------
+    RunError
+        If the file is missing, or it describes one calculation
+        (``[structure]``) instead of the interface workflow.
+    SettingsError
+        If the settings are not valid.
+    """
+    path = config_file(run_dir)
+    settings = load_settings(path)
+    if settings.interface is None:
+        raise RunError(f'{path}: [structure] describes one calculation, which the command line '
+                       'does not run yet; a run needs [interface]')
+    return settings
+
+
+def system_name(settings):
+    """System of the run: ``<mid1>_<mid2>`` of the two slabs."""
+    bottom, top = settings.interface.slabs
+    return f'{bottom.mid}_{top.mid}'
+
+
+def execution_of(settings):
+    """``[execution]`` of the settings of a run.
+
+    Raises
+    ------
+    RunError
+        If the settings have no ``[execution]``.
+    """
+    if settings.execution is None:
+        raise RunError(f'{settings.source}: [execution] missing: scheduler, jobscript and '
+                       'walltime are needed to follow the calculations of the run')
+    return settings.execution
+
+
+def resolve_groups(settings, given, ask=None):
+    """Number of jobs (workers) per group of jobs.
+
+    Parameters
+    ----------
+    settings : Settings
+    given : int or None
+        Value of ``--groups``.
+    ask : callable or None, optional
+        Question in a terminal (``terminal_ask``), asked only when neither
+        ``given`` nor ``[execution].groups`` is set.
+
+    Returns
+    -------
+    int
+        The value, logged with where it comes from.
+
+    Raises
+    ------
+    RunError
+        If no value is given and there is no terminal to ask.
+    """
+    found = execution_of(settings).groups
+    if given is not None:
+        value, origin = given, '--groups'
+    elif found is not None:
+        value, origin = found, '[execution].groups'
+    elif ask is not None:
+        value, origin = ask(), 'answer in the terminal'
+    else:
+        raise RunError('groups not given: set [execution].groups or pass --groups')
+    logger.info('groups: %d, from %s', value, origin)
+    return value
+
+
+def _is_terminal(stream):
+    try:
+        return stream.isatty()
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+def terminal_ask(stdin=None, stdout=None):
+    """Question for the number of jobs per group, or None away from a terminal.
+
+    Parameters
+    ----------
+    stdin, stdout : file-like or None, optional
+        Streams of the question; ``sys.stdin`` and ``sys.stdout`` by default.
+
+    Returns
+    -------
+    callable or None
+        Function asking ``GROUPS_QUESTION`` until it gets an integer > 0;
+        None unless both ``stdin`` and ``stdout`` are a terminal.
+    """
+    stdin = sys.stdin if stdin is None else stdin
+    stdout = sys.stdout if stdout is None else stdout
+    if not (_is_terminal(stdin) and _is_terminal(stdout)):
+        return None
+
+    def ask():
+        while True:
+            stdout.write(GROUPS_QUESTION)
+            stdout.flush()
+            line = stdin.readline()
+            if not line:
+                raise RunError('groups not given: no answer to the question')
+            try:
+                value = int(line.strip())
+            except ValueError:
+                value = 0
+            if value > 0:
+                return value
+            stdout.write('give an integer > 0\n')
+
+    return ask
+
+
+def make_scheduler(settings, dry_run=False):
+    """Scheduler of ``[execution]``; with ``dry_run`` its commands are recorded, not run."""
+    return JobScheduler(execution_of(settings).scheduler, dry_run=dry_run)
+
+
+def build_orchestrator(run_dir, groups=None, steps=None, dry_run=False, step_objects=None):
+    """Orchestrator of a run.
+
+    Parameters
+    ----------
+    run_dir : path-like
+        Directory of the run.
+    groups : int or None, optional
+        Jobs per group, replacing ``[execution].groups``; by default the value
+        of the settings, which may be missing: the commands that write groups
+        resolve it first (``resolve_groups``).
+    steps : sequence of str or None, optional
+        Steps of the orchestrator; ``[interface].steps`` by default.
+    dry_run : bool, optional
+        Scheduler in a dry run: its commands are recorded, not run.
+    step_objects : mapping or None, optional
+        Name → ``Step``, in place of the registry of the steps.
+
+    Returns
+    -------
+    Orchestrator
+
+    Raises
+    ------
+    RunError
+        If the run cannot be opened or has no ``[execution]``.
+    StepNotAvailable
+        If a step is not in the registry.
+    """
+    run_dir = Path(run_dir)
+    settings = load_run(run_dir)
+    execution = execution_of(settings)
+    if groups is not None:
+        execution = dataclasses.replace(execution, groups=groups)
+    names = list(settings.interface.steps if steps is None else steps)
+    objects = dict(step_objects) if step_objects is not None else \
+        {name: get_step(name) for name in names}
+    manager = JobManager(run_dir, make_scheduler(settings, dry_run), execution.job_report_wait)
+    return Orchestrator(run_dir, [system_name(settings)], objects, manager, execution,
+                        jobscript_path(settings))
+
+
+def run_steps(run_dir, settings):
+    """Steps of a run: those of ``[interface].steps``, then the others in its state file.
+
+    A step run by hand and not listed in the settings has its state in
+    ``orchestrator.json`` too; nothing is written.
+    """
+    names = list(settings.interface.steps)
+    path = Path(run_dir) / STATE_FILE
+    if path.is_file():
+        try:
+            saved = read_json(path).get('systems', {}).get(system_name(settings), {})
+        except (OSError, ValueError, AttributeError):
+            saved = {}  # the orchestrator reports the state file that it cannot read
+        names += [name for name in saved if name not in names]
+    return names
+
+
+def run_orchestrator(run_dir, settings, groups=None):
+    """Orchestrator of every step of a run (``run_steps``), for the actions of the user."""
+    return build_orchestrator(run_dir, groups=groups, steps=run_steps(run_dir, settings))
+
+
+def step_orchestrator(run_dir, settings, step, groups=None):
+    """Orchestrator for a phase of one step: the steps of the run, and ``step``.
+
+    A step not in ``[interface].steps`` can be run by hand: it is added.
+    """
+    names = run_steps(run_dir, settings)
+    if step not in names:
+        names.append(step)
+    return build_orchestrator(run_dir, groups=groups, steps=names)
+
+
+def job_manager(run_dir, settings):
+    """Job manager of a run, for the actions of the user on its groups."""
+    return JobManager(run_dir, make_scheduler(settings), execution_of(settings).job_report_wait)
+
+
+def submissions(manager):
+    """``{group: (refused, submissions of outcome not known)}`` of a job manager, to compare."""
+    return {name: (group['refused'], len(group['unknown']))
+            for name, group in manager.groups.items()}
+
+
+def print_failed_submissions(manager, before):
+    """Print the submissions refused or of outcome not known since ``before`` (``submissions``).
+
+    Returns
+    -------
+    bool
+        Whether there is any.
+    """
+    found = False
+    for name, (refused, unknown) in submissions(manager).items():
+        was_refused, was_unknown = before.get(name, (None, 0))
+        if refused is not None and refused != was_refused:
+            print(f'group {name}: submission refused by the scheduler: {refused}. Fix '
+                  f'jobs/{name}/jobscript.sh, the copy that is submitted (keep its last line, the '
+                  f'worker), and the jobscript of the run for the next groups; then '
+                  f'"triboworkflow clear-refusal {name}"')
+            found = True
+        if unknown > was_unknown:
+            print(f'group {name}: {unknown - was_unknown} submissions of outcome not known: '
+                  f'the job may exist; look for it in the queue, then "triboworkflow '
+                  f'resolve-submission {name} --job-id ID" or "--no-job"')
+            found = True
+    return found
+
+
+def print_step(report):
+    """Print where a step stands; return the exit code (1 if blocked or failed)."""
+    text = f'{report.system}/{report.step}: {report.status}'
+    if report.reason:
+        text += f' ({report.reason})'
+    print(text)
+    if report.calcs:
+        print('  calculations: ' + ', '.join(f'{n} {outcome}'
+                                            for outcome, n in report.calcs.items()))
+    for item in report.attention:
+        print(f'  {item["calc_id"]}: {item["state"]}, {item["reason"]}')
+    return 1 if report.status in ('blocked', 'failed') else 0
+
+
+@contextlib.contextmanager
+def run_log(run_dir, argv):
+    """Log in ``<run>/cli.log`` while a command that changes the run runs.
+
+    The first line is the command, written in the file only.
+    """
+    root = logging.getLogger('triboworkflow')
+    handler = logging.FileHandler(Path(run_dir) / CLI_LOG, encoding='utf-8')
+    handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    root.addHandler(handler)
+    try:
+        root.info('triboworkflow %s', shlex.join(argv), extra={'file_only': True})
+        yield
+    finally:
+        root.removeHandler(handler)
+        handler.close()
+
+
+def daemon_factory(run_dir, groups=None):
+    """Factory of the orchestrator in the background (``daemon.start``).
+
+    Parameters
+    ----------
+    run_dir : path-like
+    groups : str or None, optional
+        Jobs per group decided by ``start``, as written in the command of the
+        process; without it, ``[execution].groups`` must be set.
+    """
+    settings = load_run(run_dir)
+    value = resolve_groups(settings, int(groups) if groups is not None else None)
+    return build_orchestrator(run_dir, groups=value)

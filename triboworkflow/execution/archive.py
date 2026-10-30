@@ -77,7 +77,7 @@ def _check_digest(path, recorded, where):
                            'nothing was moved')
 
 
-def archive_attempt(run_dir, system, calc_id):
+def archive_attempt(run_dir, system, calc_id, launch=None):
     """Archive the last attempt of a calculation and free it for a new one.
 
     Parameters
@@ -86,6 +86,10 @@ def archive_attempt(run_dir, system, calc_id):
         Directory of the run.
     system, calc_id : str
         The calculation.
+    launch : triboworkflow.execution.jobs.Launch or None, optional
+        Launch of the attempt, given to it (``Launch.remedies``) when the
+        record does not have it yet and it is added here (step 2); left out,
+        the attempt added has no launch.
 
     Returns
     -------
@@ -98,8 +102,9 @@ def archive_attempt(run_dir, system, calc_id):
     ArchiveError
         If the attempt is still recorded as running, the files are not
         those recorded, a file is both in place and in the archive, there
-        are files of an attempt without a claim, or the claim and the record
-        disagree on the number of the attempt.
+        are files of an attempt without a claim, the claim and the record
+        disagree on the number of the attempt, or ``launch`` is not the one
+        of this attempt.
     """
     path = calc_dir(run_dir, system, calc_id)
     sdir = system_dir(run_dir, system)
@@ -114,16 +119,21 @@ def archive_attempt(run_dir, system, calc_id):
     record = read_record(sdir, calc_id)
     # 1. Number of the attempt.
     claim = read_claim(claim_path)
+    n = claim['n'] if claim is not None else len(record.attempts) + 1
+    if launch is not None and (launch.calc != (system, calc_id) or launch.n != n):
+        raise ArchiveError(f'{path}: launch of attempt {launch.n} given for attempt {n} of '
+                           f'{system}/{calc_id} ({launch.system}/{launch.calc_id}); nothing was '
+                           'changed')
     if claim is None:
         claim = dict.fromkeys(_CLAIM_KEYS)
-        claim['n'] = len(record.attempts) + 1
+        claim['n'] = n
         write_json(claim_path, claim)
-    n = claim['n']
 
     # 2. Attempt n in the record.
     if len(record.attempts) == n - 1:
         attempt = Attempt(n=n, job_id=claim['job_id'], host=claim['host'],
-                          started=claim['since'])
+                          started=claim['since'],
+                          remedies=launch.remedies() if launch is not None else {})
         record = dataclasses.replace(record, attempts=record.attempts + (attempt,))
         write_record(sdir, record)
     elif len(record.attempts) != n:
