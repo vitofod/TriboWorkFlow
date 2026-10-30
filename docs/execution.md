@@ -209,9 +209,12 @@ launch when one is given (`archive_attempt(..., launch=)`), so that it can
 be relaunched at its level: `Orchestrator.release_claim`, asked by the user
 once the worker is surely over, takes it from the groups that list the
 attempt (`reconcile.launch_for`). A release interrupted leaves the claim
-with the number of the attempt alone, not yet in the record: the
-reconciliation reports it as an empty claim released in part, and
-releasing the claim again completes it.
+with the number of the attempt alone (`archive.released_in_part`), with
+the attempt not yet in the record or already there: the reconciliation
+reports it as an empty claim released in part, and releasing the claim
+again completes it. With the attempt already recorded, that attempt is
+archived and no other one is added; its launch is the one recorded, and a
+`--group` giving another launch is refused.
 
 ## Reconciliation
 

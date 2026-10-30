@@ -80,6 +80,35 @@ def released_claim(n):
     return {**dict.fromkeys(_CLAIM_KEYS), 'n': n}
 
 
+def released_in_part(claim, record):
+    """Where an archiving of an empty claim stopped, if this claim is the one it left.
+
+    Parameters
+    ----------
+    claim : dict or None
+        Content of the claim (``read_claim``).
+    record : triboworkflow.core.store.Record
+        Record of the calculation.
+
+    Returns
+    -------
+    str or None
+        ``'claim'`` when the claim has the number of the next attempt alone
+        and the record has not that attempt yet (stopped after step 1);
+        ``'record'`` when the record has it too, as step 2 writes it from
+        that claim (no job, host or start), and the files and the claim are
+        left (stopped after step 2); None for any other claim.
+    """
+    k = len(record.attempts)
+    if claim == released_claim(k + 1):
+        return 'claim'
+    last = record.attempts[-1] if k else None
+    if (k and claim == released_claim(k)
+            and (last.job_id, last.host, last.started) == (None, None, None)):
+        return 'record'
+    return None
+
+
 def _check_digest(path, recorded, where):
     if recorded is not None and file_digest(path) != recorded:
         raise ArchiveError(f'{path}: its digest differs from the one recorded for {where}; '

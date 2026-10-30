@@ -89,7 +89,7 @@ from triboworkflow.core.store import (PrerequisiteError, check_prerequisites, re
 from triboworkflow.core.store.atomic import read_json, write_json
 from triboworkflow.core.store.record import check_keys
 
-from .archive import ArchiveError, archive_attempt, read_claim, released_claim
+from .archive import ArchiveError, archive_attempt, read_claim, released_in_part
 from .jobs import MANIFEST_FILE, SUBMITTED_FILE, Manifest, write_job
 from .layout import CLAIM_FILE, JOBS_DIR, calc_dir, system_dir
 from .policy import decide, manual_launch
@@ -846,9 +846,13 @@ class Orchestrator:
         the record plus one, and its launch from the groups that list it
         (``launch_for``); its process stays unknown, so the calculation then
         needs the user and is relaunched with ``relaunch``. The scheduler is
-        not asked. A release interrupted leaves the claim with the number of
-        the attempt alone (``released_claim``), still not in the record: it
-        is completed by releasing the claim again.
+        not asked.
+
+        A release interrupted leaves the claim with the number of the attempt
+        alone (``released_in_part``) and is completed by releasing the claim
+        again: before the record has the attempt, as a first release; once it
+        has it, by archiving that attempt, with no other attempt added and
+        the launch already recorded (``group``, if given, must give the same).
 
         Parameters
         ----------
@@ -868,25 +872,46 @@ class Orchestrator:
         OrchestratorError
             If no step of the system has the calculation, it has no claim or
             its claim is neither empty nor the one of a release interrupted,
-            or the launch of the attempt is not known.
+            the launch of the attempt is not known, or ``group`` gives another
+            launch than the one recorded.
         """
         self._step_of(system, calc_id)
         path = calc_dir(self.run_dir, system, calc_id) / CLAIM_FILE
         where = f'{system}/{calc_id}'
         if not path.is_file():
             raise OrchestratorError(f'{where}: no claim to release')
-        n = len(read_record(system_dir(self.run_dir, system), calc_id).attempts) + 1
-        if path.stat().st_size != 0 and read_claim(path) != released_claim(n):
+        record = read_record(system_dir(self.run_dir, system), calc_id)
+        part = released_in_part(read_claim(path), record) if path.stat().st_size else 'empty'
+        if part is None:
             raise OrchestratorError(f'{where}: the claim is not empty; its job tells when its '
                                     'worker is over, and the reconciliation follows it')
-        try:
-            launch = launch_for(self.run_dir, system, calc_id, n, group)
-        except LaunchError as error:
-            raise OrchestratorError(f'{where}: {error}') from None
+        if part == 'record':
+            return self._complete_release(where, system, calc_id, record.attempts[-1], group)
+        n = len(record.attempts) + 1
+        launch = self._launch_for(where, system, calc_id, n, group)
         archive_attempt(self.run_dir, system, calc_id, launch=launch)
         logger.info('%s: empty claim released as attempt %d (%s, level %d)', where, n,
                     launch.kind, launch.level)
         return n
+
+    def _launch_for(self, where, system, calc_id, n, group):
+        try:
+            return launch_for(self.run_dir, system, calc_id, n, group)
+        except LaunchError as error:
+            raise OrchestratorError(f'{where}: {error}') from None
+
+    def _complete_release(self, where, system, calc_id, attempt, group):
+        """Archive the attempt recorded by a release interrupted; its number."""
+        if group is not None:
+            launch = self._launch_for(where, system, calc_id, attempt.n, group)
+            if launch.remedies() != attempt.remedies:
+                raise OrchestratorError(
+                    f'{where}: attempt {attempt.n} is recorded with the launch '
+                    f'{attempt.remedies.get("kind")}, level {attempt.remedies.get("level")}; '
+                    f'group {group} gives {launch.kind}, level {launch.level}: nothing changed')
+        archive_attempt(self.run_dir, system, calc_id)
+        logger.info('%s: release of the empty claim of attempt %d completed', where, attempt.n)
+        return attempt.n
 
     def retry(self, system, step):
         """Let a step failed for an error of its own start again at the next pass."""

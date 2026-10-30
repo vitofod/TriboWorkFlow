@@ -15,7 +15,8 @@ stays uncertain. Once you have checked that its job no longer runs, this
 command records the attempt with the launch of the group that listed it and
 an unknown end, and removes the claim; then relaunch the calculation. When
 the groups that list the attempt give different launches, choose one with
---group. No command of the scheduler runs.
+--group. No command of the scheduler runs. A release interrupted ("empty
+claim released in part" in status) is completed by the same command again.
 
 Example:
  $ triboworkflow release-claim pes/c0 --worker-over

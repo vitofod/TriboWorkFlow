@@ -101,7 +101,7 @@ from triboworkflow.core.store import (Attempt, AttemptFile, Status, file_digest,
                                       write_record)
 from triboworkflow.engines.qe.status import PwOutputError, read_pw_status, record_status
 
-from .archive import RESTART_COUNT_KEY, read_claim, released_claim
+from .archive import RESTART_COUNT_KEY, read_claim, released_in_part
 from .jobs import MANIFEST_FILE, read_manifest
 from .layout import (CLAIM_FILE, INPUT_FILE, JOBS_DIR, OUTPUT_FILE, RUN_INPUT_FILE, calc_dir,
                      job_dir, system_dir)
@@ -406,6 +406,9 @@ class Reconciler:
             return self._claim_without_attempt(system, calc_id, path, record, claim, state)
         if n != k:
             return state('uncertain', f'claim of attempt {n}, the record has {k} attempts')
+        if released_in_part(claim, record) == 'record':
+            return state('uncertain', f'empty claim released in part: attempt {n} is recorded, '
+                                      'not archived yet; release the claim again')
         if last.status.process != 'running':
             return state(*self._outcome(path, last))
         if last.job_id is None:
@@ -430,7 +433,7 @@ class Reconciler:
     def _claim_without_attempt(self, system, calc_id, path, record, claim, state):
         """A claim of attempt ``k + 1``: the worker stopped (or is) before writing it."""
         n = claim['n']
-        if claim == released_claim(n):
+        if released_in_part(claim, record) == 'claim':
             return state('uncertain', f'empty claim released in part: attempt {n} is not in the '
                                       'record yet; release the claim again')
         if claim['job_id'] is None:

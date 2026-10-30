@@ -20,8 +20,10 @@ from run_helpers import (FP, JOB_DONE, NOT_CONVERGED, SCF_DONE, SCF_TRUNCATED, S
 from triboworkflow.core import store
 from triboworkflow.core.settings.schema import ExecutionParams
 from triboworkflow.core.store import Provenance, SystemWriter, is_done, read_system
+from triboworkflow.execution import archive as archive_module
 from triboworkflow.execution import layout
 from triboworkflow.execution import orchestrator as orchestrator_module
+from triboworkflow.execution.archive import released_claim
 from triboworkflow.execution.jobs import (MANIFEST_FILE, SUBMITTED_FILE, Launch, Manifest,
                                           read_manifest, write_job)
 from triboworkflow.execution.manager import JobManager
@@ -422,7 +424,15 @@ def test_empty_claim_released_then_relaunched_and_submitted(run):
     assert run.slurm.submitted == 3
 
 
-def test_release_claim_interrupted_is_completed_by_running_it_again(run, monkeypatch):
+@pytest.mark.parametrize('point, reason', [
+    ('claim', 'empty claim released in part: attempt 1 is not in the record yet; release the '
+              'claim again'),
+    ('record', 'empty claim released in part: attempt 1 is recorded, not archived yet; release '
+               'the claim again'),
+])
+@pytest.mark.parametrize('group', [None, f'{SYSTEM}.pes.1'])
+def test_release_claim_interrupted_is_completed_by_running_it_again(run, monkeypatch, point,
+                                                                    reason, group):
     orch = orchestrator(run, ['match', 'pes'])
     orch.run_pass()
     work(run, only=['pes/c1'])
@@ -433,24 +443,65 @@ def test_release_claim_interrupted_is_completed_by_running_it_again(run, monkeyp
     def stop(*args, **kwargs):
         raise Interrupt
     with monkeypatch.context() as patch:
-        # Stopped after the claim got the number of its attempt, before the record.
-        patch.setattr('triboworkflow.execution.archive.write_record', stop)
+        if point == 'claim':  # after the claim got the number of its attempt, before the record
+            patch.setattr(archive_module, 'write_record', stop)
+        else:  # after the record got the attempt, before the claim was removed
+            interrupt(patch, archive_module, 'write_record')
         with pytest.raises(Interrupt):
-            orch.release_claim(SYSTEM, 'pes/c0')
-    assert json.loads(claim.read_text())['n'] == 1 and run.record('pes/c0').attempts == ()
+            orch.release_claim(SYSTEM, 'pes/c0', group)
+    assert json.loads(claim.read_text()) == released_claim(1)
+    assert len(run.record('pes/c0').attempts) == (0 if point == 'claim' else 1)
     (pes,) = [s for s in orch.run_pass().steps if s.step == 'pes']
-    assert pes.attention == [{'calc_id': 'pes/c0', 'state': 'uncertain',
-                              'reason': 'empty claim released in part: attempt 1 is not in the '
-                                        'record yet; release the claim again'}]
-    assert orch.release_claim(SYSTEM, 'pes/c0') == 1
+    assert pes.attention == [{'calc_id': 'pes/c0', 'state': 'uncertain', 'reason': reason}]
+    assert orch.release_claim(SYSTEM, 'pes/c0', group) == 1
     assert not claim.exists()
-    (attempt,) = run.record('pes/c0').attempts
+    (attempt,) = run.record('pes/c0').attempts  # the same attempt, none added
     assert attempt.remedies == {'kind': 'initial', 'level': 1, 'values': {}, 'initial_values': {}}
-    assert statuses(orch.run_pass())['pes'] == 'failed'
-    group = orch.relaunch(SYSTEM, 'pes/c0')
-    manifest, _ = read_manifest(layout.job_dir(run.dir, group) / MANIFEST_FILE)
+    (pes,) = [s for s in orch.run_pass().steps if s.step == 'pes']
+    assert pes.status == 'failed'
+    assert pes.attention == [{'calc_id': 'pes/c0', 'state': 'manual',
+                              'reason': 'end of the process not known'}]
+    written = orch.relaunch(SYSTEM, 'pes/c0')
+    manifest, _ = read_manifest(layout.job_dir(run.dir, written) / MANIFEST_FILE)
     assert [(l.calc_id, l.n, l.kind, l.level) for l in manifest.calculations] == \
         [('pes/c0', 2, 'manual', 1)]
+    assert run.slurm.submitted == 3  # two jobs of the first group, one for the relaunch
+
+
+def test_release_claim_resumed_with_a_group_of_another_launch_is_refused(run, monkeypatch):
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.run_pass()
+    work(run, 'crashed')
+    orch.run_pass()  # group pes.2 lists attempt 2 of both, unchanged
+    claim = run.path('pes/c0') / layout.CLAIM_FILE
+    claim.write_text('')  # the worker of attempt 2 stopped right after creating its claim
+    with monkeypatch.context() as patch:
+        interrupt(patch, archive_module, 'write_record')
+        with pytest.raises(Interrupt):
+            orch.release_claim(SYSTEM, 'pes/c0')
+    # Another group lists attempt 2 of pes/c0 with another launch.
+    write_job(run.dir, Manifest(name=f'{SYSTEM}.pes.9', scheduler='slurm', run_command='pw.x',
+                                walltime=3600, max_seconds_margin=60,
+                                calculations=(Launch(SYSTEM, 'pes/c0', 2, 'manual', 1),)),
+              run.jobscript)
+    before = run.files('pes/c0'), run.record('pes/c0')
+    with pytest.raises(OrchestratorError, match=rf'attempt 2 is recorded with the launch '
+                                                rf'unchanged, level 1; group {SYSTEM}\.pes\.9 '
+                                                rf'gives manual, level 1'):
+        orch.release_claim(SYSTEM, 'pes/c0', f'{SYSTEM}.pes.9')
+    assert (run.files('pes/c0'), run.record('pes/c0')) == before
+
+
+def test_release_claim_refuses_a_released_claim_on_an_attempt_of_a_worker(run):
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.run_pass()
+    work(run, only=['pes/c1'])  # attempt 1 of pes/c1 run by the worker of a job
+    claim = run.path('pes/c1') / layout.CLAIM_FILE
+    claim.write_text(json.dumps(released_claim(1)))
+    before = run.files('pes/c1'), run.record('pes/c1')
+    with pytest.raises(OrchestratorError, match='the claim is not empty'):
+        orch.release_claim(SYSTEM, 'pes/c1')
+    assert (run.files('pes/c1'), run.record('pes/c1')) == before
 
 
 @pytest.mark.parametrize('content, message', [
