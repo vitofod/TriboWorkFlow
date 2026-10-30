@@ -593,6 +593,77 @@ def test_dry_run_state_is_not_known(fake_run, name, commands):
     assert run.calls == []
 
 
+@pytest.mark.parametrize('name, state, queued', [
+    ('slurm', 'PENDING', True), ('slurm', 'REQUEUED', True), ('slurm', 'RUNNING', False),
+    ('slurm', 'SUSPENDED', False), ('slurm', 'PEND+', False), ('slurm', 'COMPLETED', False),
+    ('pbs', 'Q', True), ('pbs', 'W', True), ('pbs', 'R', False), ('torque', 'Q', True),
+    ('torque', 'C', False), ('lsf', 'PEND', True), ('lsf', 'RUN', False), ('sge', 'qw', True),
+    ('sge', 'r', False), ('htcondor', '1', True), ('htcondor', '1,1', True),
+    ('htcondor', '1,2', False), ('htcondor', '2', False), ('slurm', None, False),
+    # Held jobs wait in the queue, but are not queued to run.
+    ('pbs', 'H', False), ('torque', 'H', False), ('sge', 'hqw', False), ('sge', 'hRwq', False),
+    ('htcondor', '5', False), ('htcondor', '1,5', False), ('lsf', 'PSUSP', False),
+])
+def test_queued_states(name, state, queued):
+    assert JobScheduler(name).is_queued(state) is queued
+
+
+@pytest.mark.parametrize('name, state, base', [
+    ('slurm', 'CANCELLED by 1000', 'CANCELLED'), ('slurm', 'CANCELLED+', 'CANCELLED'),
+    ('slurm', 'OUT_OF_ME+', 'OUT_OF_ME'), ('pbs', 'F', 'F'), ('htcondor', '4,3', '4,3'),
+    ('slurm', None, None),
+])
+def test_state_names(name, state, base):
+    assert JobScheduler(name).state_name(state) == base
+
+
+def test_active_states():
+    scheduler = JobScheduler('slurm')
+    assert [scheduler.is_active(s) for s in ('RUNNING', 'TIMEOUT', 'OUT_OF_ME+', None)] == \
+        [True, False, None, None]
+
+
+# --- restarts of one job -------------------------------------------------------------
+
+SACCT_RESTARTS = ['sacct', '-X', '-n', '-o', 'Restarts', '-j', '123']
+
+
+@pytest.mark.parametrize('output, count', [('         0 \n', 0), ('  2\n', 2), ('', None),
+                                           ('\n  \n', None)])
+def test_slurm_restart_count(fake_run, output, count):
+    run = fake_run(output)
+    assert JobScheduler('slurm').get_restart_count('123') == count
+    assert [call[0] for call in run.calls] == [SACCT_RESTARTS]
+
+
+@pytest.mark.parametrize('output', ['  1 \n 2 \n', 'Unknown\n', '-1\n', '2+\n'])
+def test_slurm_unexpected_restart_count_raises(fake_run, output):
+    fake_run(output)
+    with pytest.raises(JobSchedulerError, match='Not one number of restarts for job 123'):
+        JobScheduler('slurm').get_restart_count('123')
+
+
+def test_restart_count_command_failure_raises(fake_run):
+    fake_run(error=subprocess.CalledProcessError(1, SACCT_RESTARTS, stderr='slurmdbd down'))
+    with pytest.raises(JobSchedulerError, match='slurmdbd down'):
+        JobScheduler('slurm').get_restart_count('123')
+
+
+@pytest.mark.parametrize('name', ['pbs', 'torque', 'lsf', 'sge', 'htcondor', 'condor'])
+def test_other_schedulers_do_not_tell_the_restarts(fake_run, name):
+    run = fake_run(error=AssertionError('no command may run'))
+    assert JobScheduler(name).get_restart_count('123') is None
+    assert run.calls == []
+
+
+def test_dry_run_restart_count_is_not_known(fake_run):
+    run = fake_run(error=AssertionError('no command may run in a dry run'))
+    scheduler = JobScheduler('slurm', dry_run=True)
+    assert scheduler.get_restart_count('123') is None
+    assert [command[0] for command in scheduler.commands] == [SACCT_RESTARTS]
+    assert run.calls == []
+
+
 # --- dry run -----------------------------------------------------------------------
 
 def test_dry_run_records_and_runs_nothing(fake_run, jobscript, tmp_path):

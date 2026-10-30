@@ -40,7 +40,7 @@ max_area_ratio_tol = 0.05
 best_match = "area"
 
 [namelists.CONTROL]
-nstep = 150
+nstep = 150                        # Relax; recommended 150, at most 250. Raised by the relaunches.
 max_seconds = 84600                # Seconds; upper limit of the value set from the walltime left.
 tstress = false
 tprnfor = true
@@ -69,7 +69,7 @@ vdw_corr = "none"
 electron_maxstep = 200
 conv_thr = 1.0e-6                  # Ry
 mixing_mode = "local-TF"
-mixing_beta = 0.3
+mixing_beta = 0.4                  # Recommended 0.4, at least 0.1. Lowered by the relaunches.
 
 [[atomic_species]]
 label = "Cu"

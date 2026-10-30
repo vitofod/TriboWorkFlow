@@ -22,8 +22,8 @@ from triboworkflow.core.store import StoreError
 from triboworkflow.execution import layout
 from triboworkflow.execution import scheduler as scheduler_module
 from triboworkflow.execution.jobs import (JOBSCRIPT_FILE, MANIFEST_FILE, SUBMITTED_FILE, JobError,
-                                          Manifest, jobscript_path, read_manifest, submit_jobs,
-                                          worker_line, write_job)
+                                          Launch, Manifest, jobscript_path, read_manifest,
+                                          submit_jobs, worker_line, write_job)
 from triboworkflow.execution.scheduler import JobScheduler
 
 EXAMPLES = Path(__file__).resolve().parents[1] / 'examples'
@@ -39,11 +39,12 @@ def example_settings(**execution):
 
 TEMPLATE = b'#!/bin/bash\n#SBATCH --job-name=pes\n#SBATCH --time=24:00:00\nmodule load qe\n'
 CALCS = (('Cu111_Al111', 'pes_scf/aa'), ('Cu111_Al111', 'pes_scf/ab'), ('Cu111_Ni111', 'pes_scf/aa'))
+LAUNCHES = tuple(Launch.initial(*calc) for calc in CALCS)
 
 
 def manifest(**changes):
     fields = dict(name='pes_scf', scheduler='slurm', run_command='mpirun -np 32 pw.x -nk 4',
-                  walltime=86400, max_seconds_margin=600, calculations=CALCS)
+                  walltime=86400, max_seconds_margin=600, calculations=LAUNCHES)
     fields.update(changes)
     return Manifest(**fields)
 
@@ -91,19 +92,33 @@ def test_attempt_numbers_from_one(tmp_path, n):
 
 # --- manifest ----------------------------------------------------------------------
 
+LEVEL_2 = {'mixing_beta': 0.2, 'nstep': 200}
+INITIAL = {'mixing_beta': 0.4, 'nstep': 150}
+
+
 def test_manifest_round_trip(tmp_path):
-    data = manifest().to_dict()
-    assert data['calculations'][0] == {'system': 'Cu111_Al111', 'calc_id': 'pes_scf/aa'}
-    assert Manifest.from_dict(json.loads(json.dumps(data))) == manifest()
+    remedy = Launch('Cu111_Ni111', 'pes_scf/ab', 3, 'remedy', 2, {'mixing_beta': 0.2},
+                    {'mixing_beta': 0.4})
+    data = manifest(calculations=LAUNCHES + (remedy,)).to_dict()
+    assert data['schema_version'] == 2
+    assert data['calculations'][0] == {'system': 'Cu111_Al111', 'calc_id': 'pes_scf/aa', 'n': 1,
+                                       'kind': 'initial', 'level': 1, 'values': {},
+                                       'initial_values': {}}
+    assert data['calculations'][3] == {'system': 'Cu111_Ni111', 'calc_id': 'pes_scf/ab', 'n': 3,
+                                       'kind': 'remedy', 'level': 2,
+                                       'values': {'mixing_beta': 0.2},
+                                       'initial_values': {'mixing_beta': 0.4}}
+    assert Manifest.from_dict(json.loads(json.dumps(data))) == \
+        manifest(calculations=LAUNCHES + (remedy,))
 
 
 def test_manifest_from_a_generator():
-    assert manifest(calculations=(c for c in CALCS)) == manifest()
+    assert manifest(calculations=(c for c in LAUNCHES)) == manifest()
 
 
 def test_manifest_from_the_settings():
     settings = example_settings(max_seconds_margin=900)
-    built = Manifest.from_execution('pes_scf', CALCS, settings.execution)
+    built = Manifest.from_execution('pes_scf', LAUNCHES, settings.execution)
     assert built == manifest(max_seconds_margin=900)
 
 
@@ -114,20 +129,74 @@ def test_manifest_from_the_settings():
     ({'walltime': 3600.0}, 'walltime: 3600.0 is not an integer > 0'),
     ({'max_seconds_margin': 86400}, 'must be < walltime (86400)'),
     ({'calculations': ()}, 'the group has no calculations'),
-    ({'calculations': ('ab',)}, 'is not a sequence of (system, calc_id)'),
-    ({'calculations': (('sys', 'pes_scf'),)}, 'is not "<step>/<label>"'),
-    ({'calculations': CALCS + (CALCS[0],)}, 'Cu111_Al111/pes_scf/aa is listed twice'),
+    ({'calculations': ('ab',)}, 'is not a sequence of Launch'),
+    ({'calculations': CALCS}, 'is not a sequence of Launch'),
+    ({'calculations': LAUNCHES + (LAUNCHES[0],)}, 'Cu111_Al111/pes_scf/aa is listed twice'),
+    ({'calculations': LAUNCHES + (Launch('Cu111_Al111', 'pes_scf/aa', 2, 'unchanged', 1),)},
+     'Cu111_Al111/pes_scf/aa is listed twice'),
 ])
 def test_manifest_errors(changes, message):
     with pytest.raises(JobError, match=message.replace('(', r'\(').replace(')', r'\)')):
         manifest(**changes)
 
 
+def test_launch():
+    launch = Launch('Cu111_Al111', 'pes_scf/aa', 2, 'unchanged', 1)
+    assert launch.calc == ('Cu111_Al111', 'pes_scf/aa') and not launch.changes_input
+    assert launch.remedies() == {'kind': 'unchanged', 'level': 1, 'values': {},
+                                 'initial_values': {}}
+    assert Launch.initial('Cu111_Al111', 'pes_scf/aa') == \
+        Launch('Cu111_Al111', 'pes_scf/aa', 1, 'initial', 1, {}, {})
+    values = dict(LEVEL_2)
+    remedy = Launch('Cu111_Al111', 'pes_scf/aa', 3, 'remedy', 2, values, INITIAL)
+    values['nstep'] = 1
+    assert remedy.values == LEVEL_2 and remedy.changes_input
+    assert remedy.remedies() == {'kind': 'remedy', 'level': 2, 'values': LEVEL_2,
+                                 'initial_values': INITIAL}
+    assert Launch.from_dict(remedy.to_dict()) == remedy
+    # Unchanged and manual launches above level 1 repeat the values of the level.
+    for kind in ('unchanged', 'manual'):
+        assert Launch('Cu111_Al111', 'pes_scf/aa', 4, kind, 2, LEVEL_2, INITIAL).changes_input
+
+
+@pytest.mark.parametrize('fields, message', [
+    (('a/b', 'pes_scf/aa', 1, 'initial', 1), 'not a valid name'),
+    (('sys', 'pes_scf', 1, 'initial', 1), 'is not "<step>/<label>"'),
+    (('sys', 'pes_scf/aa', 0, 'initial', 1), 'n = 0 is not an integer >= 1'),
+    (('sys', 'pes_scf/aa', 2.0, 'unchanged', 1), 'n = 2.0 is not an integer >= 1'),
+    (('sys', 'pes_scf/aa', 2, 'unchanged', True), 'level = True is not an integer >= 1'),
+    (('sys', 'pes_scf/aa', 2, 'restart', 1), "kind = 'restart' is not one of initial, "
+                                              "unchanged, remedy, manual"),
+    (('sys', 'pes_scf/aa', 2, 'initial', 1), 'an initial launch is attempt 1 at level 1, not '
+                                             'attempt 2 at level 1'),
+    (('sys', 'pes_scf/aa', 1, 'initial', 2), 'an initial launch is attempt 1 at level 1'),
+    (('sys', 'pes_scf/aa', 1, 'manual', 1), "attempt 1 is an initial launch, not 'manual'"),
+    (('sys', 'pes_scf/aa', 2, 'remedy', 1, {'nstep': 200}), 'a remedy runs at level 2 or more'),
+    (('sys', 'pes_scf/aa', 2, 'remedy', 2), 'values is empty at level 2'),
+    (('sys', 'pes_scf/aa', 2, 'remedy', 2, LEVEL_2), 'initial_values is empty at level 2'),
+    (('sys', 'pes_scf/aa', 2, 'unchanged', 3, {}, INITIAL), 'values is empty at level 3'),
+    (('sys', 'pes_scf/aa', 2, 'manual', 1, {'nstep': 200}), "at level 1 the input runs as "
+                                                            "prepared, values = {'nstep': 200}"),
+    (('sys', 'pes_scf/aa', 2, 'unchanged', 1, {}, INITIAL), 'at level 1 the input runs as '
+                                                            'prepared, initial_values'),
+    (('sys', 'pes_scf/aa', 2, 'remedy', 2, [('nstep', 200)]), 'values must be a JSON object'),
+    (('sys', 'pes_scf/aa', 2, 'remedy', 2, {1: 200}), 'values: key 1 is not a string'),
+    (('sys', 'pes_scf/aa', 2, 'remedy', 2, LEVEL_2, None), 'initial_values must be a JSON '
+                                                           'object'),
+])
+def test_launch_errors(fields, message):
+    with pytest.raises(JobError, match=message.replace('(', r'\(').replace(')', r'\)')):
+        Launch(*fields)
+
+
 @pytest.mark.parametrize('edit, message', [
-    ({'schema_version': 2}, 'schema_version: 2; this version reads 1'),
+    ({'schema_version': 1}, 'schema_version: 1; this version reads 2'),
     ({'extra': 1}, "unknown 'extra'"),
     ({'calculations': {}}, 'calculations: a JSON array is required'),
-    ({'calculations': [{'system': 'a'}]}, 'calculations: missing calc_id'),
+    ({'calculations': [{'system': 'a'}]}, 'calculations: missing calc_id, n, kind, level, values, '
+                                          'initial_values'),
+    ({'calculations': [{'system': 'a', 'calc_id': 's/l'}]}, 'calculations: missing n'),
+    ({'calculations': [{**LAUNCHES[0].to_dict(), 'level': 0}]}, 'level = 0'),
 ])
 def test_manifest_file_errors(edit, message):
     data = {**manifest().to_dict(), **edit}
@@ -174,9 +243,9 @@ def test_write_job_errors(run_dir, jobscript, tmp_path):
     with pytest.raises(JobError, match='calculations without input.pwi .*Cu111_Al111/pes_scf/ab'):
         write_job(run_dir, manifest(), jobscript)
     assert not (run_dir / 'jobs').exists()
-    write_job(run_dir, manifest(calculations=CALCS[:1]), jobscript)
+    write_job(run_dir, manifest(calculations=LAUNCHES[:1]), jobscript)
     with pytest.raises(JobError, match='already exists'):
-        write_job(run_dir, manifest(calculations=CALCS[:1]), jobscript)
+        write_job(run_dir, manifest(calculations=LAUNCHES[:1]), jobscript)
 
 
 def test_read_manifest_checks_the_directory(run_dir, jobscript):

@@ -161,8 +161,11 @@ ACCEPTED = [
                             'namelists.SYSTEM.dftd3_threebody': True}),
     ('vdw-alias', W, {'namelists.SYSTEM.vdw_corr': 'DFT-D'}),
     ('c6-negative', W, {'namelists.SYSTEM."london_c6(2)"': -1.0}),
-    ('nstep', W, {'namelists.CONTROL.nstep': 500}),
-    ('mixing-beta', W, {'namelists.ELECTRONS.mixing_beta': 2.0}),
+    # Changed by the relaunches: checked, but only what makes no sense is refused.
+    ('nstep-large', W, {'namelists.CONTROL.nstep': 500}),
+    ('nstep-1', W, {'namelists.CONTROL.nstep': 1}),
+    ('mixing-beta-1', W, {'namelists.ELECTRONS.mixing_beta': 1}),
+    ('mixing-beta-small', W, {'namelists.ELECTRONS.mixing_beta': 0.01}),
     ('smearing', W, {'namelists.SYSTEM.smearing': 'cold'}),
     ('occupations', W, {'namelists.SYSTEM.occupations': 'fixed'}),
     ('no-ecut', W, {'namelists.SYSTEM': {}}),
@@ -194,6 +197,22 @@ ACCEPTED = [
 @pytest.mark.parametrize('base, edits', [case[1:] for case in ACCEPTED], ids=[case[0] for case in ACCEPTED])
 def test_accepted_as_given(base, edits):
     assert isinstance(settings_from_dict(edited(base, edits)), Settings)
+
+
+@pytest.mark.parametrize('edits, notes', [
+    ({}, []),
+    ({'namelists.CONTROL.nstep': 250, 'namelists.ELECTRONS.mixing_beta': 0.1}, []),
+    ({'namelists.CONTROL.nstep': 251}, [
+        'namelists.CONTROL.nstep = 251 is above 250: the recommended value is 150; the '
+        'relaunches never lower it']),
+    ({'namelists.ELECTRONS.mixing_beta': 0.05}, [
+        'namelists.ELECTRONS.mixing_beta = 0.05 is below 0.1: the recommended value is 0.4; the '
+        'relaunches never raise it']),
+])
+def test_advice_on_the_values_changed_by_the_relaunches(edits, notes, caplog):
+    caplog.set_level('WARNING')
+    settings_from_dict(edited(WORKFLOW, edits))
+    assert [record.getMessage() for record in caplog.records] == notes
 
 
 @pytest.mark.parametrize('k_points', [
@@ -293,6 +312,13 @@ ERRORS = [
     ('hubbard-u', W, {f'{SYSTEM}."Hubbard_U(1)"': 4.2}, f'{SYSTEM}.Hubbard_U(1)', 'Hubbard'),
     ('calculation', S, {f'{CONTROL}.calculation': 'vc-relax'}, f'{CONTROL}.calculation',
      "'vc-relax' is not allowed; allowed values: 'scf', 'relax'"),
+    *[(f'nstep-{value!r}', W, {f'{CONTROL}.nstep': value}, f'{CONTROL}.nstep',
+       f'an integer >= 1 is required, got {value!r}') for value in (0, -50, 150.0, '150', True)],
+    ('nstep-case', W, {f'{CONTROL}.nstep': DELETE, f'{CONTROL}.NSTEP': 0}, f'{CONTROL}.NSTEP',
+     'an integer >= 1 is required'),
+    *[(f'mixing-beta-{value!r}', W, {'namelists.ELECTRONS.mixing_beta': value},
+       'namelists.ELECTRONS.mixing_beta', f'a number in (0, 1] is required, got {value!r}')
+      for value in (0, 0.0, -0.3, 1.5, 2.0, '0.4', False)],
     # whole file
     ('both-modes', W, {'structure': {'file': 'a.xyz'}}, '', 'give either [structure]'),
     ('no-mode', W, {'interface': DELETE}, '', 'give either [structure]'),

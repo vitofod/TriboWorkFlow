@@ -31,6 +31,11 @@ completed job only as long as the server keeps it. For LSF and SGE the state
 is read from the listing of active jobs, so a job missing from it has no
 state: its absence does not tell whether or how it ended.
 
+``get_restart_count`` gives how many times Slurm requeued or restarted a job
+(``sacct`` field ``Restarts``), read apart from its state; a requeued job
+keeps its id and runs its jobscript again from the start. The other
+schedulers do not tell it.
+
 With ``dry_run=True`` no command is run: each command is appended to
 ``JobScheduler.commands``, ``submit_job`` returns None, the listings are
 empty and the states of the jobs are not known.
@@ -58,7 +63,8 @@ from dataclasses import dataclass
 # Commands of each scheduler. ``list_active_jobs`` lists the running and queued
 # jobs of the user ($USER is replaced by the user name), read by columns unless
 # ``listing_format`` names a format of named attributes; ``job_state`` and
-# ``job_history`` give the state of one job ($JOB_ID is replaced by its id);
+# ``job_history`` give the state of one job ($JOB_ID is replaced by its id),
+# ``job_restarts`` the number of times it was requeued or restarted;
 # ``submit_method = "stdin"`` passes the jobscript on the standard input.
 # ``test_cmd`` is part of the original table and is not used.
 SCHEDULER_CONFIG = {
@@ -69,7 +75,8 @@ SCHEDULER_CONFIG = {
         "id_format": r"^\d+$",
         "test_cmd": "sbatch",
         "list_active_jobs": ["squeue", "-h", "-u", "$USER", "-t", "RUNNING,PENDING,CONFIGURING"],
-        "job_state": ["sacct", "-X", "-n", "-o", "State%30", "-j", "$JOB_ID"]
+        "job_state": ["sacct", "-X", "-n", "-o", "State%30", "-j", "$JOB_ID"],
+        "job_restarts": ["sacct", "-X", "-n", "-o", "Restarts", "-j", "$JOB_ID"]
     },
     "pbs": {
         "submit": ["qsub"],
@@ -169,6 +176,21 @@ SCHEDULER_STATES = {
 # Ended states after which a job may become active again: Slurm may requeue a
 # preempted job, depending on the configured PreemptMode.
 REVERSIBLE_STATES = {"slurm": frozenset({"PREEMPTED"})}
+
+# Active states of a job that waits in the queue to run, not held: a job that
+# ran and is in one of them again was requeued, and its run is over. Slurm
+# pending and requeued; PBS and Torque queued and waiting for their start
+# time; LSF pending; SGE waiting; HTCondor idle. Held jobs (``is_held``) are not
+# among them, nor is LSF ``PSUSP`` (pending, suspended by the user).
+QUEUED_STATES = {
+    "slurm": frozenset({"PENDING", "REQUEUED"}),
+    "pbs": frozenset({"Q", "W"}),
+    "torque": frozenset({"Q", "W"}),
+    "lsf": frozenset({"PEND"}),
+    "sge": frozenset({"qw"}),
+    "htcondor": frozenset({"1"}),
+    "condor": frozenset({"1"}),
+}
 
 # States of held jobs, which stay in the queue and do not run until the hold is
 # released: HTCondor ``JobStatus`` 5, PBS and Torque ``H``. For SGE every state
@@ -392,7 +414,7 @@ class JobScheduler:
         return cmd
 
     def _job_command(self, operation, job_id):
-        """Command of ``operation`` (``job_state`` or ``job_history``) for one job."""
+        """Command of ``operation`` (a ``job_*`` key of the table) for one job."""
         return [job_id if arg == "$JOB_ID" else arg for arg in self.config[operation]]
 
     def _listed_job_id(self, field):
@@ -819,6 +841,45 @@ class JobScheduler:
                 return attributes["job_state"], attributes
         return None, {}
 
+    def get_restart_count(self, job_id):
+        """Number of times the scheduler requeued or restarted one job.
+
+        Slurm: ``sacct`` field ``Restarts`` of the most recent record of the
+        id. A run of the job sees the same number in ``SLURM_RESTART_COUNT``,
+        which Slurm sets only after a restart.
+
+        Parameters
+        ----------
+        job_id : str
+            Id returned by ``submit_job``.
+
+        Returns
+        -------
+        int or None
+            None for a scheduler that does not tell it (no ``job_restarts``
+            command), for a job without a record, and in a dry run.
+
+        Raises
+        ------
+        JobSchedulerError
+            If the command fails or prints something other than one integer.
+        """
+        if "job_restarts" not in self.config:
+            return None
+        job_id = str(job_id)
+        cmd = self._job_command("job_restarts", job_id)
+        output = self._run_command(cmd).stdout
+        if self.dry_run:
+            return None
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if not lines:
+            return None
+        if len(lines) > 1 or not _DIGITS.fullmatch(lines[0]):
+            raise JobSchedulerError(
+                f"Not one number of restarts for job {job_id} in the output of "
+                f"'{' '.join(cmd)}': {output.strip()!r}")
+        return int(lines[0])
+
     def _sge_hold_types(self, job_id):
         """SGE hold types (``SGE_HOLD_TYPES``) whose listing has the job, in order."""
         key, types = self.job_key(job_id), []
@@ -855,6 +916,34 @@ class JobScheduler:
             return _SGE_HOLD_LETTER in state
         held = HELD_STATES.get(self.scheduler_name, ())
         return any(value in held for value in state.split(","))
+
+    def is_active(self, state):
+        """True if a job in ``state`` is queued or running, False if it ended, None if not known."""
+        return self._is_active(state)
+
+    def is_queued(self, state):
+        """Whether a job in ``state`` waits in the queue, not held (``QUEUED_STATES``).
+
+        For Slurm the name before any ``+`` or flag; for an HTCondor cluster,
+        if all its processes wait. False for a held job, any other state, a
+        custom scheduler and None.
+        """
+        if state is None or self.is_held(state):
+            return False
+        queued = QUEUED_STATES.get(self.scheduler_name, frozenset())
+        if self.scheduler_name == "slurm":
+            return state.split()[0].rstrip("+") in queued
+        return all(value in queued for value in state.split(","))
+
+    def state_name(self, state):
+        """Name of a state as in the tables of this module, or None.
+
+        For Slurm the first word without ``+`` (``"CANCELLED by 1000"`` gives
+        ``"CANCELLED"``); for the other schedulers the state as printed.
+        """
+        if state is None:
+            return None
+        return state.split()[0].rstrip("+") if self.scheduler_name == "slurm" else state
 
     def is_final(self, state):
         """Whether a job in ``state`` (as in ``JobState.state``) can no longer change.

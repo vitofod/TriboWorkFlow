@@ -41,9 +41,11 @@ Each job is ``waiting``, ``held``, ``ended`` or needs ``attention``:
   after having been, or in a state that is not known.
 
 A job is also ``uncertain`` while its last query failed or did not report
-it. A job keeps its id, its last known state and the claims of its
-calculations, which the manager never touches, and is asked again at every
-cycle until its state is final (``JobScheduler.is_final``). A group is
+it. The registry keeps when the current state of a job was first reported,
+so that a state can be confirmed by a later query. A job keeps its id, its
+last known state and the claims of its calculations, which the manager never
+touches, and is asked again at every cycle until its state is final
+(``JobScheduler.is_final``). A group is
 complete only when all its jobs were submitted and are in a final state
 confirmed by the last query, with no submission refused or of outcome not
 known.
@@ -82,12 +84,13 @@ from .scheduler import JobSchedulerError
 
 logger = logging.getLogger(__name__)
 
-REGISTRY_VERSION = 1
+REGISTRY_VERSION = 2
 
 _REGISTRY_KEYS = ('schema_version', 'groups', 'jobs')
 _GROUP_KEYS = ('planned', 'refused', 'unknown')
 _UNKNOWN_KEYS = ('error', 'at')
-_JOB_KEYS = ('group', 'since', 'state', 'active', 'hold', 'reported', 'checked', 'error')
+_JOB_KEYS = ('group', 'since', 'state', 'state_since', 'active', 'hold', 'reported', 'checked',
+             'error')
 _HOLD_KEYS = ('reason', 'detail')
 
 # Report of a held job for each reason of the hold (``JobState.hold_reason``).
@@ -168,7 +171,8 @@ class JobManager:
         Content of the registry: ``groups`` (``planned`` jobs, error of the
         submission ``refused`` and submissions of outcome ``unknown`` of each
         group) and ``jobs`` (``group``, time ``since`` it was registered,
-        last known ``state`` as printed by the scheduler, whether it was
+        last known ``state`` as printed by the scheduler and time
+        ``state_since`` of the first query that reported it, whether it was
         ``active``, the ``hold`` (``reason`` and ``detail``, or None if not
         held), whether the last successful query ``reported`` it, time
         ``checked`` of that query and ``error`` of the last failed one, for
@@ -232,9 +236,13 @@ class JobManager:
 
     @property
     def jobs(self):
-        """Known jobs: id → ``{'group', 'since', 'state', 'active', 'hold', 'reported',
-        'checked', 'error'}``."""
+        """Known jobs: id → ``{'group', 'since', 'state', 'state_since', 'active', 'hold',
+        'reported', 'checked', 'error'}``."""
         return self.registry['jobs']
+
+    def now(self):
+        """Current time of the manager, as an aware ``datetime.datetime``."""
+        return self._now()
 
     def group_jobs(self, name):
         """Ids of the jobs of a group, in the order they were registered."""
@@ -242,8 +250,8 @@ class JobManager:
 
     def _add_job(self, job_id, name):
         self.jobs[job_id] = {'group': name, 'since': self._stamp(), 'state': None,
-                             'active': None, 'hold': None, 'reported': None, 'checked': None,
-                             'error': None}
+                             'state_since': None, 'active': None, 'hold': None, 'reported': None,
+                             'checked': None, 'error': None}
 
     def _group(self, name):
         if name not in self.groups:
@@ -395,8 +403,11 @@ class JobManager:
             else:
                 hold = ({'reason': state.hold_reason, 'detail': state.hold_detail}
                         if state.held else None)
+                stamp = self._stamp()
+                if state.state != job['state'] or job['state_since'] is None:
+                    job['state_since'] = stamp
                 job.update(state=state.state, active=state.active, hold=hold, reported=True,
-                           checked=self._stamp(), error=None)
+                           checked=stamp, error=None)
         self._save()
 
     def submit(self):

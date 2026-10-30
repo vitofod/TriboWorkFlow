@@ -8,16 +8,22 @@ Each job of a group runs one worker on the manifest of the group
 
     python -m triboworkflow.execution.worker <run>/jobs/<name>/manifest.json
 
-The worker goes once through the calculations, in the order of the manifest,
-and runs each one that no other worker has taken. Taking a calculation and
+The worker goes once through the calculations, in the order of the manifest.
+Each one names the attempt ``n`` to run (``jobs.Launch``): the worker runs it
+only while the record has ``n - 1`` attempts, and skips it when attempt ``n``
+was already made, by another worker of the group or by an earlier group, so
+that a late job of a replaced group runs nothing. Taking a calculation and
 running it are six steps, each completed before the next begins:
 
 1. the claim file ``claim`` is created with ``O_CREAT | O_EXCL``: exactly one
    worker succeeds, the others skip the calculation; the claim then holds
-   the number of the attempt, the job id, the host, the pid and the time;
-2. the record gets attempt ``n`` (the number of attempts so far plus one)
-   with the job, the host, the start time and the time limit, and the
-   process ``running``;
+   the number of the attempt, the job id, how many times the scheduler
+   restarted the job (``restart_count``, see below), the host, the pid and
+   the time; the record is then read again, and the claim removed if
+   attempt ``n`` was made in the meantime;
+2. the record gets attempt ``n`` with the job, the host, the start time, the
+   time limit and the launch of the manifest (kind, level and parameters
+   changed, in ``remedies``), and the process ``running``;
 3. ``run.pwi`` is written: ``input.pwi`` with ``max_seconds`` set to the
    time limit of the attempt; ``input.pwi`` is never changed;
 4. ``output.pwo`` is created with ``O_EXCL``: an output already there belongs
@@ -41,6 +47,16 @@ Time limit: ``max_seconds`` of each attempt is the walltime minus the time
 since the worker started minus ``max_seconds_margin``, capped by the
 ``max_seconds`` of ``input.pwi`` when given. When nothing is left, the worker
 takes no more calculations.
+
+Restarts: a scheduler may requeue a job and run its jobscript again from the
+start with the same id. The claim records ``restart_count``, the number of
+restarts the scheduler gives to the run that wrote it, so that this run can
+be told apart from a later one of the same job. It is the integer value of
+the variable of ``RESTART_COUNT_VARIABLES``, the value as written if it is
+not an integer, None if the variable is not set or the scheduler has none.
+Slurm sets ``SLURM_RESTART_COUNT`` only after a restart. A launch above level
+1 of the remedies, whose values replace some of ``input.pwi``, is not run:
+this version does not write them in the input.
 
 Notes
 -----
@@ -79,6 +95,10 @@ logger = logging.getLogger(__name__)
 # Environment variable with the id of the running job, for each scheduler.
 JOB_ID_VARIABLES = {'slurm': 'SLURM_JOB_ID', 'pbs': 'PBS_JOBID', 'torque': 'PBS_JOBID',
                     'lsf': 'LSB_JOBID', 'sge': 'JOB_ID'}
+# Environment variable with the number of times the job was restarted or
+# requeued, for the schedulers that set one.
+RESTART_COUNT_VARIABLES = {'slurm': 'SLURM_RESTART_COUNT'}
+_COUNT = re.compile(r'[0-9]+')
 
 _CONTROL_START = re.compile(r'^\s*&control\b', re.IGNORECASE)
 _NAMELIST_END = re.compile(r'^\s*/\s*$')
@@ -108,6 +128,30 @@ def job_id_from_environment(scheduler, environ=None):
     environ = os.environ if environ is None else environ
     variable = JOB_ID_VARIABLES.get(scheduler)
     return (environ.get(variable) or None) if variable else None
+
+
+def restart_count_from_environment(scheduler, environ=None):
+    """Number of times the scheduler restarted the job the worker runs in.
+
+    Parameters
+    ----------
+    scheduler : str
+        Name of the scheduler; one without a variable in
+        ``RESTART_COUNT_VARIABLES`` gives None.
+    environ : mapping or None, optional
+        Environment; ``os.environ`` by default.
+
+    Returns
+    -------
+    int or str or None
+        The value of the variable as an integer, or as written if it is not
+        an integer; None if the variable is not set or empty. Slurm sets it
+        only after a restart.
+    """
+    environ = os.environ if environ is None else environ
+    variable = RESTART_COUNT_VARIABLES.get(scheduler)
+    value = (environ.get(variable) or None) if variable else None
+    return int(value) if value is not None and _COUNT.fullmatch(value) else value
 
 
 def read_input(path):
@@ -199,13 +243,16 @@ class Worker:
     clock : callable, optional
         Monotonic clock in seconds; ``time.monotonic`` by default.
     environ : mapping or None, optional
-        Environment, read for the job id; ``os.environ`` by default.
+        Environment, read for the job id and the restart count;
+        ``os.environ`` by default.
 
     Attributes
     ----------
     manifest : triboworkflow.execution.jobs.Manifest
     run_dir : pathlib.Path
     job_id, host : str or None
+    restart_count : int or str or None
+        See ``restart_count_from_environment``.
     """
 
     def __init__(self, manifest_path, clock=time.monotonic, environ=None):
@@ -213,6 +260,7 @@ class Worker:
         self.started = clock()
         self.manifest, self.run_dir = read_manifest(manifest_path)
         self.job_id = job_id_from_environment(self.manifest.scheduler, environ)
+        self.restart_count = restart_count_from_environment(self.manifest.scheduler, environ)
         self.host = socket.gethostname()
 
     def time_left(self):
@@ -227,37 +275,46 @@ class Worker:
         -------
         list of (str, str, str)
             ``(system, calc_id, outcome)`` of each calculation looked at, in
-            order: ``'ran'``, ``'taken'`` (claimed by another worker) or
-            ``'error'`` (not run, see the log). The list stops where the time
-            ran out.
+            order: ``'ran'``, ``'taken'`` (claimed by another worker),
+            ``'skipped'`` (attempt ``n`` already made) or ``'error'`` (not
+            run, see the log). The list stops where the time ran out.
         """
         outcomes = []
-        for system, calc_id in self.manifest.calculations:
+        for launch in self.manifest.calculations:
             left = math.floor(self.time_left())
             if left <= 0:
                 logger.info('No time left for more calculations: stopping before %s/%s',
-                            system, calc_id)
+                            launch.system, launch.calc_id)
                 break
-            outcomes.append((system, calc_id, self.run_calculation(system, calc_id, left)))
+            outcomes.append((launch.system, launch.calc_id, self.run_calculation(launch, left)))
         return outcomes
 
-    def run_calculation(self, system, calc_id, left):
-        """Take one calculation and run it, if no other worker has it.
+    def run_calculation(self, launch, left):
+        """Run attempt ``n`` of one calculation, if it is the next one and no other worker has it.
 
         Parameters
         ----------
-        system, calc_id : str
-            Calculation of the manifest.
+        launch : triboworkflow.execution.jobs.Launch
+            Calculation of the manifest and attempt to run.
         left : int
             Seconds left for the attempt (``time_left``).
 
         Returns
         -------
         str
-            ``'ran'``, ``'taken'`` or ``'error'``.
+            ``'ran'``, ``'taken'``, ``'skipped'`` or ``'error'``.
         """
+        system, calc_id, n = launch.system, launch.calc_id, launch.n
         path = calc_dir(self.run_dir, system, calc_id)
         claim = path / CLAIM_FILE
+        # Attempt n must be the next one: a worker of a replaced group finds it made.
+        try:
+            if self._next_attempt(launch) is None:
+                logger.info('%s/%s: attempt %d already made: nothing to run', system, calc_id, n)
+                return 'skipped'
+        except Exception as error:
+            logger.error('%s/%s: not run: %s', system, calc_id, error)
+            return 'error'
         # 1. Claim.
         try:
             fd = os.open(claim, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
@@ -265,16 +322,21 @@ class Worker:
             logger.info('%s/%s: taken by another worker', system, calc_id)
             return 'taken'
         try:
-            record, run_text, calculation, max_seconds, cap = self._prepare(system, calc_id,
-                                                                            path, left)
+            record = self._next_attempt(launch)
+            if record is not None:
+                run_text, calculation, max_seconds, cap = self._prepare(launch, path, left)
         except Exception as error:  # nothing was done: the calculation is left free
             os.close(fd)
             os.unlink(claim)
             logger.error('%s/%s: not run: %s', system, calc_id, error)
             return 'error'
-        n = len(record.attempts) + 1
-        owner = {'n': n, 'job_id': self.job_id, 'host': self.host, 'pid': os.getpid(),
-                 'since': _now()}
+        if record is None:  # made and archived since the first look: free for a new group
+            os.close(fd)
+            os.unlink(claim)
+            logger.info('%s/%s: attempt %d already made: nothing to run', system, calc_id, n)
+            return 'skipped'
+        owner = {'n': n, 'job_id': self.job_id, 'restart_count': self.restart_count,
+                 'host': self.host, 'pid': os.getpid(), 'since': _now()}
         with os.fdopen(fd, 'w', encoding='utf-8') as fh:
             fh.write(json.dumps(owner) + '\n')
             fh.flush()
@@ -284,7 +346,7 @@ class Worker:
         attempt = Attempt(n=n, job_id=self.job_id, host=self.host, started=_now(),
                           max_seconds=max_seconds, max_seconds_cap=cap,
                           input=AttemptFile(RUN_INPUT_FILE), output=AttemptFile(OUTPUT_FILE),
-                          status=Status(process='running'))
+                          status=Status(process='running'), remedies=launch.remedies())
         write_record(system_dir(self.run_dir, system),
                      dataclasses.replace(record, status=Status(process='running'), results=None,
                                          attempts=record.attempts + (attempt,)))
@@ -306,9 +368,29 @@ class Worker:
         logger.info('%s/%s: attempt %d ended with exit code %d', system, calc_id, n, exit_code)
         return 'ran'
 
-    def _prepare(self, system, calc_id, path, left):
-        """Record, text of ``run.pwi``, calculation, time limit and cap of an attempt."""
-        record = read_record(system_dir(self.run_dir, system), calc_id)
+    def _next_attempt(self, launch):
+        """Record of the calculation if attempt ``n`` is the next one, None if it was made.
+
+        Raises
+        ------
+        WorkerError
+            If the record has fewer than ``n - 1`` attempts.
+        """
+        record = read_record(system_dir(self.run_dir, launch.system), launch.calc_id)
+        made = len(record.attempts)
+        if made >= launch.n:
+            return None
+        if made < launch.n - 1:
+            raise WorkerError(f'the manifest asks for attempt {launch.n}, the record has {made} '
+                              'attempts')
+        return record
+
+    def _prepare(self, launch, path, left):
+        """Text of ``run.pwi``, calculation, time limit and cap of an attempt."""
+        if launch.changes_input:
+            raise WorkerError(f'attempt {launch.n} runs at level {launch.level} with '
+                              f'{", ".join(sorted(launch.values))}, which this version does not '
+                              'write in the input')
         for name in (RUN_INPUT_FILE, OUTPUT_FILE):
             if (path / name).exists():
                 raise WorkerError(f'{path / name} exists without a claim: a previous attempt '
@@ -328,7 +410,7 @@ class Worker:
             raise WorkerError(f'{path / INPUT_FILE}: max_seconds is read as {cap!r}, but '
                               f'{"one" if replaced else "no"} max_seconds line was found in '
                               '&CONTROL')
-        return record, run_text, calculation, max_seconds, cap
+        return run_text, calculation, max_seconds, cap
 
     def _finish(self, system, calc_id, path, n, calculation, exit_code):
         """Write the end of attempt ``n`` in the record."""
@@ -369,10 +451,11 @@ def main(argv=None):
     worker = Worker(args.manifest)
     outcomes = worker.run()
     counts = {k: sum(1 for *_, outcome in outcomes if outcome == k)
-              for k in ('ran', 'taken', 'error')}
-    logger.info('Worker done: %d run, %d taken by other workers, %d not run for an error, '
-                '%d not reached, of %d calculations', counts['ran'], counts['taken'],
-                counts['error'], len(worker.manifest.calculations) - len(outcomes),
+              for k in ('ran', 'taken', 'skipped', 'error')}
+    logger.info('Worker done: %d run, %d taken by other workers, %d already made, %d not run '
+                'for an error, %d not reached, of %d calculations', counts['ran'],
+                counts['taken'], counts['skipped'], counts['error'],
+                len(worker.manifest.calculations) - len(outcomes),
                 len(worker.manifest.calculations))
     return 0
 

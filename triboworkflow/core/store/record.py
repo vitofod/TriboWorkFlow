@@ -313,7 +313,9 @@ class Attempt:
     status : Status, optional
         States of the calculation at the end of this attempt.
     remedies : dict, optional
-        Parameters changed for this attempt with respect to the input.
+        How the attempt was launched, written by the worker: ``kind`` (why
+        it ran), ``level`` (of the remedies) and ``values`` (the parameters
+        changed with respect to the input). Empty when not known.
     """
 
     n: int

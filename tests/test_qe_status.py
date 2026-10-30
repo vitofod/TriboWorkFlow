@@ -16,7 +16,8 @@ import pytest
 
 from triboworkflow.core.store import Status
 from triboworkflow.engines.qe import status as qe
-from triboworkflow.engines.qe.status import PwOutputError, pw_status, read_pw_status, record_status
+from triboworkflow.engines.qe.status import (PwError, PwOutputError, pw_status, read_pw_status,
+                                             record_status)
 
 ERROR_RULE = ' ' + '%' * 78
 
@@ -165,6 +166,60 @@ def test_states_of_one_run(name, calculation, output, process, scf, geometry, co
     assert status.clean_stop == (process == 'ended')
     assert status.stop_reason in qe.STOP_REASONS + (None,)
     assert status.final_coordinates in qe.FINAL_COORDINATES
+
+
+@pytest.mark.parametrize('lines, expected', [
+    (ERROR, PwError('cdiaghg', '309', 'problems computing cholesky')),
+    ([ERROR_RULE, '     Error in routine read_namelists (2):', '     bad line in namelist',
+      '     &system', ERROR_RULE], PwError('read_namelists', '2', 'bad line in namelist &system')),
+    ([ERROR_RULE, '     Error in routine c_bands:', '     too many bands are not converged',
+      ERROR_RULE], PwError('c_bands', None, 'too many bands are not converged')),
+    ([ERROR_RULE, '     Error in routine  cdiaghg (309):', '', '     stopping ...'],
+     PwError('cdiaghg', '309', '')),
+])
+def test_error_of_pw_kept_as_printed(lines, expected):
+    status = pw_status(text(SCF, scf_cycle(None), lines), 'scf')
+    assert (status.process, status.stop_reason, status.error) == ('crashed', 'error', expected)
+
+
+def test_error_is_written_in_one_line():
+    error = PwError('cdiaghg', '309', 'problems computing cholesky')
+    assert str(error) == 'error in routine cdiaghg (309): problems computing cholesky'
+    assert str(PwError('c_bands', None, 'x')) == 'error in routine c_bands: x'
+
+
+def summary(*lines, relax=False):
+    """Header of a run whose summary holds ``lines``, then a converged cycle."""
+    head = header(relax=relax)
+    end = head.index('     crystal axes: (cart. coord. in units of alat)')
+    return text(head[:end - 1] + list(lines) + head[end - 1:], scf_cycle('converged'), JOB_DONE)
+
+
+def test_values_of_the_summary():
+    status = pw_status(summary('     mixing beta               =       0.3000'), 'scf')
+    assert (status.mixing_beta, status.nstep) == (0.3, None)
+    status = pw_status(summary('     mixing beta               =       0.2500', relax=True),
+                       'relax')
+    assert (status.mixing_beta, status.nstep) == (0.25, 50)
+    assert pw_status(summary(), 'scf').mixing_beta is None
+
+
+def test_values_after_the_summary_are_not_read():
+    output = summary() + '     mixing beta = 0.1\n'
+    assert pw_status(output, 'scf').mixing_beta is None
+
+
+@pytest.mark.parametrize('line', ['     mixing beta               =       0.30x',
+                                  '     mixing beta               ='])
+def test_value_of_the_summary_that_is_not_a_number(line):
+    with pytest.raises(PwOutputError, match='in the summary of the run: not a float'):
+        pw_status(summary(line), 'scf')
+
+
+def test_no_error_without_a_crash():
+    assert pw_status(text(SCF, scf_cycle('converged'), JOB_DONE), 'scf').error is None
+    # An error line followed by JOB DONE: pw.x closed the run.
+    assert pw_status(text(SCF, scf_cycle(None), ERROR, JOB_DONE), 'scf').error is None
 
 
 def test_markers_need_not_be_indented():

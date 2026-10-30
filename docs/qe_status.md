@@ -62,6 +62,19 @@ Stop reasons:
 needs it, but it is not enough: whether the restart files are on disk is not
 written in the output.
 
+## Values and errors of the run
+
+| Attribute | Content | Read from |
+|---|---|---|
+| `mixing_beta` | value pw.x uses, given in the input or default | `mixing beta = …` in the summary of the run |
+| `nstep` | value pw.x uses, `relax` only | `nstep = …` in the summary of the run |
+| `error` | `PwError(routine, code, message)`, as printed, when `process` is `crashed` | the last `Error in routine <routine> (<code>):` and the lines of its message, up to the line of `%` |
+
+The summary ends at `crystal axes:`; a value that is not a number is an
+error. The relaunches start their levels of the remedies from `mixing_beta`
+and `nstep`, and report the error of pw.x to the user. An error printed by
+several processes is read once, the last one.
+
 ## States of the record
 
 `record_status(pw, job)` gives the `Status` of the record (`parsing` stays
@@ -84,9 +97,10 @@ geometry converged, `not_converged` for any other stop with `JOB DONE.`
 
 Versions 7.1, 7.2 and 7.3 are read; any other is an error.
 `version_validated` is true for 7.1 and 7.2, whose lines were checked on real
-outputs. The lines of the step limit, of `max_seconds`, of a stop by request
-and of a failed optimizer come from the source code of 7.2 and were not
-checked on real outputs. `scf_must_converge = .false.` and `vc-relax` are
+outputs, the error of pw.x and the values of the summary included. The lines
+of the step limit, of `max_seconds`, of a stop by request and of a failed
+optimizer come from the source code of 7.2 and were not checked on real
+outputs. `scf_must_converge = .false.` and `vc-relax` are
 not handled.
 
 ## Tests

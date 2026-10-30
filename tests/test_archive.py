@@ -197,6 +197,30 @@ def test_unreadable_claims(tmp_path, text):
     assert read_claim(path) is None
 
 
+@pytest.mark.parametrize('content, expected', [
+    ({**CLAIM, 'restart_count': 2}, {**CLAIM, 'restart_count': 2}),
+    ({**CLAIM, 'restart_count': None}, {**CLAIM, 'restart_count': None}),
+    ({**CLAIM, 'restart_count': 'x1'}, {**CLAIM, 'restart_count': 'x1'}),
+    # Written without the restart count: the key is not there, not None.
+    (CLAIM, CLAIM),
+    ({'n': 3}, {'n': 3, 'job_id': None, 'host': None, 'pid': None, 'since': None}),
+])
+def test_read_claim(tmp_path, content, expected):
+    path = tmp_path / 'claim'
+    path.write_text(json.dumps(content))
+    assert read_claim(path) == expected
+
+
+def test_empty_claim_rewritten_without_restart_count(calc, monkeypatch):
+    calc('empty claim', previous=1)
+    with monkeypatch.context() as patch:
+        patch.setattr(archive_module, 'write_json', failing(archive_module.write_json, 1, True))
+        with pytest.raises(Interrupt):
+            archive(calc)
+    assert read_claim(calc.path / layout.CLAIM_FILE) == {
+        'n': 2, 'job_id': None, 'host': None, 'pid': None, 'since': None}
+
+
 # --- interrupted archiving ---------------------------------------------------------------
 
 def failing(function, at, after=False):
@@ -260,7 +284,7 @@ sys.exit(1)
 @pytest.mark.skipif(os.name != 'posix' or not Path('/bin/bash').exists(),
                     reason='the worker launches the engine with /bin/bash')
 def test_new_attempt_after_archiving(calc, tmp_path):
-    from triboworkflow.execution.jobs import MANIFEST_FILE, Manifest, write_job
+    from triboworkflow.execution.jobs import MANIFEST_FILE, Launch, Manifest, write_job
     from triboworkflow.execution.worker import Worker
 
     calc('finished')
@@ -270,14 +294,19 @@ def test_new_attempt_after_archiving(calc, tmp_path):
     jobscript.write_text('#!/bin/bash\n')
     manifest = Manifest(name='pes_scf', scheduler='slurm',
                         run_command=f'{shlex.quote(sys.executable)} {shlex.quote(str(fake))}',
-                        walltime=86400, max_seconds_margin=600, calculations=((SYSTEM, CALC_ID),))
+                        walltime=86400, max_seconds_margin=600,
+                        calculations=(Launch(SYSTEM, CALC_ID, 2, 'unchanged', 1),))
     manifest_path = write_job(calc.run_dir, manifest, jobscript) / MANIFEST_FILE
-    assert Worker(manifest_path).run() == [(SYSTEM, CALC_ID, 'taken')]
+    environ = {'SLURM_JOB_ID': '4522', 'SLURM_RESTART_COUNT': '1'}
+    assert Worker(manifest_path, environ=environ).run() == [(SYSTEM, CALC_ID, 'taken')]
     assert archive(calc) == 1
-    assert Worker(manifest_path).run() == [(SYSTEM, CALC_ID, 'ran')]
+    assert Worker(manifest_path, environ=environ).run() == [(SYSTEM, CALC_ID, 'ran')]
     record = store.read_record(calc.sdir, CALC_ID)
     assert [a.n for a in record.attempts] == [1, 2]
     assert record.attempts[0].output.path == 'attempts/1/output.pwo'
     assert record.attempts[1].output.path == 'output.pwo'
     assert record.attempts[1].exit_code == 1
-    assert json.loads((calc.path / layout.CLAIM_FILE).read_text())['n'] == 2
+    assert record.attempts[1].remedies == {'kind': 'unchanged', 'level': 1, 'values': {},
+                                           'initial_values': {}}
+    claim = read_claim(calc.path / layout.CLAIM_FILE)
+    assert (claim['n'], claim['job_id'], claim['restart_count']) == (2, '4522', 1)

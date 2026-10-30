@@ -19,9 +19,11 @@ converted by dacite. Differences:
   free tables: their keys are those of pw.x;
 - in the tables of the schema integers are accepted for real numbers, and
   booleans are not accepted for numbers;
-- after dacite, ``validate`` runs the ``check`` methods of the schema.
+- after dacite, ``validate`` runs the ``check`` methods of the schema, then
+  logs as warnings the ``advice`` of the tables that give it.
 """
 
+import logging
 import tomllib
 import types
 import typing
@@ -32,6 +34,8 @@ from dacite import (Config, DaciteError, MissingValueError, WrongTypeError,
                     from_dict)
 
 from .schema import KEY_HINTS, SCHEMA_VERSION, Settings, SettingsError, join, walk
+
+logger = logging.getLogger(__name__)
 
 
 def load_settings(path):
@@ -107,7 +111,7 @@ def settings_from_dict(data):
 
 
 def validate(settings):
-    """Run every check of the schema, innermost tables first.
+    """Run every check of the schema, innermost tables first, and log its advice.
 
     Parameters
     ----------
@@ -121,6 +125,9 @@ def validate(settings):
     for path, node in walk(settings):
         if hasattr(node, 'check'):
             node.check(path)
+    for path, node in walk(settings):
+        for note in node.advice(path) if hasattr(node, 'advice') else ():
+            logger.warning('%s', note)
 
 
 def _real(value):

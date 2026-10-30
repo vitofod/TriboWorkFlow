@@ -21,9 +21,10 @@ import pytest
 
 from triboworkflow.core import store
 from triboworkflow.execution import layout
-from triboworkflow.execution.jobs import MANIFEST_FILE, Manifest, write_job
+from triboworkflow.execution.jobs import MANIFEST_FILE, Launch, Manifest, write_job
 from triboworkflow.execution.worker import (Worker, WorkerError, job_id_from_environment,
-                                            read_input, with_max_seconds)
+                                            read_input, restart_count_from_environment,
+                                            with_max_seconds)
 
 posix_only = pytest.mark.skipif(os.name != 'posix' or not Path('/bin/bash').exists(),
                                 reason='the worker launches the engine with /bin/bash')
@@ -97,7 +98,8 @@ def run(tmp_path):
     run_dir = tmp_path / 'run'
 
     def build(labels=('aa',), output=SCF_DONE, exit=0, input_text=None, sleep=0, name='pes_scf',
-              run_command=None, record=True):
+              run_command=None, record=True, n=1, kind='initial', level=1, values=None,
+              initial_values=None):
         calcs = []
         for label in labels:
             calc_id = f'pes_scf/{label}'
@@ -111,7 +113,8 @@ def run(tmp_path):
                     system=SYSTEM, step='pes_scf', label=label, calc_type='slab_from_scratch',
                     engine=store.Engine('qe', 'pw.x'), energy_model={'ecutwfc': 40.0},
                     fingerprint=FP, files={'input': 'input.pwi', 'output': 'output.pwo'}))
-            calcs.append((SYSTEM, calc_id))
+            calcs.append(Launch(SYSTEM, calc_id, n, kind, level, values or {},
+                                initial_values or {}))
         command = run_command or f'{shlex.quote(sys.executable)} {shlex.quote(str(fake))}'
         manifest = Manifest(name=name, scheduler='slurm', run_command=command, walltime=WALLTIME,
                             max_seconds_margin=MARGIN, calculations=tuple(calcs))
@@ -201,6 +204,21 @@ def test_job_id_from_environment(scheduler, environ, job_id):
     assert job_id_from_environment(scheduler, environ) == job_id
 
 
+@pytest.mark.parametrize('scheduler, environ, count', [
+    ('slurm', {'SLURM_RESTART_COUNT': '2'}, 2),
+    ('slurm', {'SLURM_RESTART_COUNT': '0'}, 0),
+    # Set by Slurm only after a restart.
+    ('slurm', {}, None),
+    ('slurm', {'SLURM_RESTART_COUNT': ''}, None),
+    # Not an integer: kept as written.
+    ('slurm', {'SLURM_RESTART_COUNT': ' 2'}, ' 2'),
+    ('slurm', {'SLURM_RESTART_COUNT': '-1'}, '-1'),
+    ('pbs', {'SLURM_RESTART_COUNT': '2'}, None),
+])
+def test_restart_count_from_environment(scheduler, environ, count):
+    assert restart_count_from_environment(scheduler, environ) == count
+
+
 # --- one worker ------------------------------------------------------------------------
 
 @posix_only
@@ -213,9 +231,12 @@ def test_attempt_recorded(run):
     assert '  max_seconds = 85699\n' in (path / layout.RUN_INPUT_FILE).read_text()
     assert (path / layout.OUTPUT_FILE).read_text() == SCF_DONE
     claim = json.loads((path / layout.CLAIM_FILE).read_text())
+    assert list(claim) == ['n', 'job_id', 'restart_count', 'host', 'pid', 'since']
     assert claim['n'] == 1 and claim['job_id'] == '4521' and claim['pid'] == os.getpid()
+    assert claim['restart_count'] is None
     record = record_of(run, 'aa')
     (attempt,) = record.attempts
+    assert attempt.remedies == {'kind': 'initial', 'level': 1, 'values': {}, 'initial_values': {}}
     assert record.status == attempt.status == store.Status('ended', 'converged', 'n/a')
     assert (attempt.n, attempt.job_id, attempt.max_seconds, attempt.max_seconds_cap) == \
         (1, '4521', WALLTIME - MARGIN - 101, None)
@@ -323,20 +344,86 @@ def test_output_that_is_not_pw_output(run, caplog):
     assert 'pes_scf/aa' in caplog.text
 
 
+def add_attempts(run, label, count):
+    """Give the record of a calculation ``count`` killed attempts."""
+    attempts = tuple(store.Attempt(i + 1, job_id=str(i + 1), status=store.Status('killed'))
+                     for i in range(count))
+    store.write_record(layout.system_dir(run.run_dir, SYSTEM), store.Record(**{
+        **record_of(run, label).__dict__, 'attempts': attempts,
+        'status': store.Status('killed')}))
+    return attempts
+
+
 @posix_only
 def test_second_attempt_after_archiving(run):
-    manifest = run()
+    manifest = run(n=2, kind='unchanged')
     path = calc_path(run, 'aa')
-    sdir = layout.system_dir(run.run_dir, SYSTEM)
-    first = store.Attempt(1, job_id='1', status=store.Status('killed'))
-    store.write_record(sdir, store.Record(**{**record_of(run, 'aa').__dict__, 'attempts': (first,),
-                                             'status': store.Status('killed')}))
-    Worker(manifest, environ={'SLURM_JOB_ID': '2'}).run()
-    record = store.read_record(sdir, 'pes_scf/aa')
+    (first,) = add_attempts(run, 'aa', 1)
+    Worker(manifest, environ={'SLURM_JOB_ID': '2', 'SLURM_RESTART_COUNT': '3'}).run()
+    record = record_of(run, 'aa')
     assert [a.n for a in record.attempts] == [1, 2]
     assert record.attempts[0] == first
     assert record.attempts[1].job_id == '2' and record.status.process == 'ended'
-    assert json.loads((path / layout.CLAIM_FILE).read_text())['n'] == 2
+    assert record.attempts[1].remedies == {'kind': 'unchanged', 'level': 1, 'values': {},
+                                           'initial_values': {}}
+    claim = json.loads((path / layout.CLAIM_FILE).read_text())
+    assert (claim['n'], claim['restart_count']) == (2, 3)
+
+
+@posix_only
+@pytest.mark.parametrize('made', [1, 2])
+def test_attempt_already_made_is_skipped(run, made, caplog):
+    # A late job of a replaced group: the record already has attempt n.
+    caplog.set_level('INFO')
+    manifest = run()
+    attempts = add_attempts(run, 'aa', made)
+    assert Worker(manifest).run() == [(SYSTEM, 'pes_scf/aa', 'skipped')]
+    assert record_of(run, 'aa').attempts == attempts
+    assert not (calc_path(run, 'aa') / layout.CLAIM_FILE).exists()
+    assert not run.log.exists()
+    assert 'attempt 1 already made' in caplog.text
+
+
+@posix_only
+def test_attempt_made_between_the_first_look_and_the_claim(run, monkeypatch):
+    manifest = run(labels=('aa', 'ab'))
+    worker = Worker(manifest)
+    real, calls = Worker._next_attempt, []
+
+    def next_attempt(self, launch):
+        calls.append(launch.calc_id)
+        if calls == ['pes_scf/aa', 'pes_scf/aa']:
+            add_attempts(run, 'aa', 1)  # made and archived by another worker meanwhile
+        return real(self, launch)
+
+    monkeypatch.setattr(Worker, '_next_attempt', next_attempt)
+    assert worker.run() == [(SYSTEM, 'pes_scf/aa', 'skipped'), (SYSTEM, 'pes_scf/ab', 'ran')]
+    assert not (calc_path(run, 'aa') / layout.CLAIM_FILE).exists()
+    assert len(record_of(run, 'aa').attempts) == 1
+
+
+@posix_only
+def test_attempt_ahead_of_the_record(run, caplog):
+    manifest = run(n=3, kind='unchanged')
+    add_attempts(run, 'aa', 1)
+    assert Worker(manifest).run() == [(SYSTEM, 'pes_scf/aa', 'error')]
+    assert 'the manifest asks for attempt 3, the record has 1 attempts' in caplog.text
+    assert not (calc_path(run, 'aa') / layout.CLAIM_FILE).exists()
+    assert not run.log.exists()
+
+
+@posix_only
+@pytest.mark.parametrize('kind', ['remedy', 'unchanged'])
+def test_launches_above_level_one_are_not_run(run, kind, caplog):
+    manifest = run(n=2, kind=kind, level=2, values={'mixing_beta': 0.2, 'nstep': 200},
+                   initial_values={'mixing_beta': 0.4, 'nstep': 150})
+    add_attempts(run, 'aa', 1)
+    assert Worker(manifest).run() == [(SYSTEM, 'pes_scf/aa', 'error')]
+    assert ('attempt 2 runs at level 2 with mixing_beta, nstep, which this version does not '
+            'write in the input') in caplog.text
+    assert not (calc_path(run, 'aa') / layout.CLAIM_FILE).exists()
+    assert not (calc_path(run, 'aa') / layout.RUN_INPUT_FILE).exists()
+    assert len(record_of(run, 'aa').attempts) == 1
 
 
 @posix_only

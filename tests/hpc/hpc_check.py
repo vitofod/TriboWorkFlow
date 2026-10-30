@@ -43,8 +43,8 @@ from pathlib import Path
 
 from triboworkflow.core import store
 from triboworkflow.execution import layout
-from triboworkflow.execution.jobs import (MANIFEST_FILE, SUBMITTED_FILE, Manifest, read_manifest,
-                                          submit_jobs, write_job)
+from triboworkflow.execution.jobs import (MANIFEST_FILE, SUBMITTED_FILE, Launch, Manifest,
+                                          read_manifest, submit_jobs, write_job)
 from triboworkflow.execution.scheduler import JobScheduler
 
 SYSTEM = 'check'
@@ -118,7 +118,7 @@ def prepare(args):
             engine=store.Engine('fake', FAKE_FILE), energy_model={'fake': True},
             fingerprint=store.fingerprint({'fake': i}),
             files={'input': layout.INPUT_FILE, 'output': layout.OUTPUT_FILE}))
-        calculations.append((SYSTEM, calc_id))
+        calculations.append(Launch.initial(SYSTEM, calc_id))
     command = ' '.join(filter(None, [args.launcher, shlex.quote(sys.executable),
                                       shlex.quote(str(fake))]))
     manifest = Manifest(name='check', scheduler=args.scheduler, run_command=command,
@@ -152,7 +152,8 @@ def report(args):
     per_job, per_host = Counter(), Counter()
     not_run = []
     print(f'{len(manifest.calculations)} calculations, {len(job_ids)} jobs submitted')
-    for _, calc_id in manifest.calculations:
+    for launch in manifest.calculations:
+        calc_id = launch.calc_id
         label = calc_id.split('/')[1]
         record = store.read_record(sdir, calc_id)
         path = layout.calc_dir(run_dir, SYSTEM, calc_id)

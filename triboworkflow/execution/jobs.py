@@ -9,13 +9,21 @@ the group and takes the calculations one at a time (``worker.py``). A group
 lives in ``<run>/jobs/<name>/`` (see ``layout.py``):
 
 - ``manifest.json``: the calculations, in the order the workers take them,
-  and how to run them (scheduler, command, walltime, time margin);
+  each with the attempt to run (``Launch``), and how to run them
+  (scheduler, command, walltime, time margin);
 - ``jobscript.sh``: the jobscript of the user, copied unchanged, with one
   line added at the end that starts the worker on the manifest;
 - ``submitted.json``: the ids of the jobs submitted so far.
 
 The jobscript of the user is never changed. The jobs of a group differ only
 by their ids.
+
+Each calculation of a manifest names the attempt the group runs: its number
+``n``, why it runs (``LAUNCH_KINDS``), the level of the remedies and the
+parameters changed. A worker runs a calculation only while its record has
+``n - 1`` attempts, so every attempt belongs to one group: a group whose
+attempt was already made, e.g. a late job of a group that was replaced, finds
+nothing to run. A new attempt of a calculation always goes in a new group.
 
 Notes
 -----
@@ -25,22 +33,23 @@ calculations, with a worker that loops over them, follows SCS
 (``labelling/QuantumEspresso/qe.py``, ``labelling/labelling.py``).
 """
 
+import copy
 import logging
 import os
 import shlex
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from triboworkflow.core.guard import hpc_only
-from triboworkflow.core.store.atomic import read_json, write_json
+from triboworkflow.core.store.atomic import check_json_value, read_json, write_json
 from triboworkflow.core.store.record import check_keys, check_name, split_calc_id
 
 from .layout import INPUT_FILE, calc_dir, job_dir
 
 logger = logging.getLogger(__name__)
 
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 MANIFEST_FILE = 'manifest.json'
 JOBSCRIPT_FILE = 'jobscript.sh'
 SUBMITTED_FILE = 'submitted.json'
@@ -48,8 +57,14 @@ SUBMITTED_FILE = 'submitted.json'
 # Module started by the line added to the jobscript.
 WORKER_MODULE = 'triboworkflow.execution.worker'
 
+# Why an attempt runs: the first one; again with the input of the attempt it
+# repeats, after a crash or a kill; at the next level of the remedies, to help
+# convergence; asked for by the user.
+LAUNCH_KINDS = ('initial', 'unchanged', 'remedy', 'manual')
+
 _MANIFEST_KEYS = ('schema_version', 'name', 'scheduler', 'run_command', 'walltime',
                   'max_seconds_margin', 'calculations')
+_LAUNCH_KEYS = ('system', 'calc_id', 'n', 'kind', 'level', 'values', 'initial_values')
 
 
 class JobError(ValueError):
@@ -60,6 +75,119 @@ def _seconds(value, where):
     if type(value) is not int or value <= 0:
         raise JobError(f'{where}: {value!r} is not an integer > 0')
     return value
+
+
+@dataclass(frozen=True)
+class Launch:
+    """One calculation of a group: the attempt to run and how.
+
+    Parameters
+    ----------
+    system : str
+        Name of the system.
+    calc_id : str
+        ``<step>/<label>`` of the calculation.
+    n : int
+        Number of the attempt, counted from 1. A worker runs it only while
+        the record of the calculation has ``n - 1`` attempts.
+    kind : str
+        Why the attempt runs, one of ``LAUNCH_KINDS``: ``'initial'`` for
+        attempt 1 only; the others for a later attempt.
+    level : int
+        Level of the remedies of the attempt, from 1 (``input.pwi`` as
+        prepared); ``'initial'`` runs at level 1, ``'remedy'`` at level 2 or
+        more. An unchanged or manual launch keeps the level, and so the
+        input, of the attempt it repeats.
+    values : dict, optional
+        Values of the parameters of the remedies at ``level``, by name, that
+        replace those of ``input.pwi`` (some may be equal to them); empty at
+        level 1, not empty above.
+    initial_values : dict, optional
+        Effective values of the same parameters at level 1, read from the
+        summary of pw.x, from which the levels are computed; empty at level 1,
+        not empty above.
+
+    Raises
+    ------
+    JobError
+        If a field is not valid.
+    """
+
+    system: str
+    calc_id: str
+    n: int
+    kind: str
+    level: int
+    values: dict = field(default_factory=dict)
+    initial_values: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        where = f'calculations: {self.system}/{self.calc_id}'
+        try:
+            check_name(self.system, 'system')
+            split_calc_id(self.calc_id)
+        except ValueError as error:
+            raise JobError(f'calculations: {error}') from None
+        for name in ('n', 'level'):
+            value = getattr(self, name)
+            if type(value) is not int or value < 1:
+                raise JobError(f'{where}: {name} = {value!r} is not an integer >= 1')
+        if self.kind not in LAUNCH_KINDS:
+            raise JobError(f'{where}: kind = {self.kind!r} is not one of '
+                           f'{", ".join(LAUNCH_KINDS)}')
+        if self.kind == 'initial' and (self.n, self.level) != (1, 1):
+            raise JobError(f'{where}: an initial launch is attempt 1 at level 1, not attempt '
+                           f'{self.n} at level {self.level}')
+        if self.kind != 'initial' and self.n == 1:
+            raise JobError(f'{where}: attempt 1 is an initial launch, not {self.kind!r}')
+        if self.kind == 'remedy' and self.level < 2:
+            raise JobError(f'{where}: a remedy runs at level 2 or more, not {self.level}')
+        for name in ('values', 'initial_values'):
+            value = getattr(self, name)
+            if not isinstance(value, dict):
+                raise JobError(f'{where}: {name} must be a JSON object, not {value!r}')
+            try:
+                check_json_value(value, f'{where}: {name}')
+            except ValueError as error:
+                raise JobError(str(error)) from None
+            if self.level == 1 and value:
+                raise JobError(f'{where}: at level 1 the input runs as prepared, '
+                               f'{name} = {value!r}')
+            if self.level > 1 and not value:
+                raise JobError(f'{where}: {name} is empty at level {self.level}')
+            object.__setattr__(self, name, copy.deepcopy(value))
+
+    @classmethod
+    def initial(cls, system, calc_id):
+        """Launch of the first attempt of a calculation."""
+        return cls(system, calc_id, 1, 'initial', 1)
+
+    @property
+    def calc(self):
+        """``(system, calc_id)``."""
+        return self.system, self.calc_id
+
+    @property
+    def changes_input(self):
+        """Whether the attempt runs with values other than those of ``input.pwi`` (level > 1)."""
+        return bool(self.values)
+
+    def remedies(self):
+        """What the worker writes in ``remedies`` of the attempt: kind, level and values."""
+        return {'kind': self.kind, 'level': self.level, 'values': copy.deepcopy(self.values),
+                'initial_values': copy.deepcopy(self.initial_values)}
+
+    def to_dict(self):
+        """JSON object of the launch."""
+        return {'system': self.system, 'calc_id': self.calc_id, 'n': self.n, 'kind': self.kind,
+                'level': self.level, 'values': copy.deepcopy(self.values),
+                'initial_values': copy.deepcopy(self.initial_values)}
+
+    @classmethod
+    def from_dict(cls, data):
+        """Launch from its JSON object, with exactly the keys of ``to_dict``."""
+        check_keys(data, _LAUNCH_KEYS, 'calculations')
+        return cls(**data)
 
 
 @dataclass(frozen=True)
@@ -79,9 +207,9 @@ class Manifest:
         Walltime of each job, in seconds.
     max_seconds_margin : int
         Seconds kept free at the end of the walltime; < ``walltime``.
-    calculations : tuple of (str, str)
-        ``(system, calc_id)`` of each calculation, in the order the workers
-        take them; no repetitions.
+    calculations : tuple of Launch
+        The attempt to run for each calculation, in the order the workers
+        take them; each calculation once.
 
     Raises
     ------
@@ -111,23 +239,15 @@ class Manifest:
             raise JobError(f'max_seconds_margin: must be < walltime ({self.walltime}), '
                            f'got {self.max_seconds_margin}')
         calculations = tuple(self.calculations)
-        if any(not isinstance(c, (tuple, list)) or len(c) != 2 for c in calculations):
-            raise JobError(f'calculations: {calculations!r} is not a sequence of '
-                           '(system, calc_id)')
-        calculations = tuple(tuple(c) for c in calculations)
+        if any(not isinstance(c, Launch) for c in calculations):
+            raise JobError(f'calculations: {calculations!r} is not a sequence of Launch')
         if not calculations:
             raise JobError('calculations: the group has no calculations')
         seen = set()
-        for calc in calculations:
-            system, calc_id = calc
-            try:
-                check_name(system, 'system')
-                split_calc_id(calc_id)
-            except ValueError as error:
-                raise JobError(f'calculations: {error}') from None
-            if calc in seen:
-                raise JobError(f'calculations: {system}/{calc_id} is listed twice')
-            seen.add(calc)
+        for launch in calculations:
+            if launch.calc in seen:
+                raise JobError(f'calculations: {launch.system}/{launch.calc_id} is listed twice')
+            seen.add(launch.calc)
         object.__setattr__(self, 'calculations', calculations)
 
     @classmethod
@@ -138,8 +258,8 @@ class Manifest:
         ----------
         name : str
             Name of the group.
-        calculations : iterable of (str, str)
-            ``(system, calc_id)`` of each calculation.
+        calculations : iterable of Launch
+            The attempt to run for each calculation.
         execution : triboworkflow.core.settings.schema.ExecutionParams
             Settings of ``[execution]``.
         """
@@ -152,7 +272,7 @@ class Manifest:
         return {'schema_version': MANIFEST_VERSION, 'name': self.name,
                 'scheduler': self.scheduler, 'run_command': self.run_command,
                 'walltime': self.walltime, 'max_seconds_margin': self.max_seconds_margin,
-                'calculations': [{'system': s, 'calc_id': c} for s, c in self.calculations]}
+                'calculations': [launch.to_dict() for launch in self.calculations]}
 
     @classmethod
     def from_dict(cls, data, source=None):
@@ -165,10 +285,7 @@ class Manifest:
                                f'{MANIFEST_VERSION}')
             if not isinstance(data['calculations'], list):
                 raise JobError('calculations: a JSON array is required')
-            calculations = []
-            for calc in data['calculations']:
-                check_keys(calc, ('system', 'calc_id'), 'calculations')
-                calculations.append((calc['system'], calc['calc_id']))
+            calculations = [Launch.from_dict(calc) for calc in data['calculations']]
             return cls(name=data['name'], scheduler=data['scheduler'],
                        run_command=data['run_command'], walltime=data['walltime'],
                        max_seconds_margin=data['max_seconds_margin'],
@@ -247,8 +364,8 @@ def write_job(run_dir, manifest, jobscript, python=None):
         If a calculation has no ``input.pwi``, the jobscript is missing or
         the group already exists.
     """
-    missing = [f'{s}/{c}' for s, c in manifest.calculations
-               if not (calc_dir(run_dir, s, c) / INPUT_FILE).is_file()]
+    missing = [f'{c.system}/{c.calc_id}' for c in manifest.calculations
+               if not (calc_dir(run_dir, c.system, c.calc_id) / INPUT_FILE).is_file()]
     if missing:
         raise JobError(f'calculations without {INPUT_FILE} in {run_dir}: {", ".join(missing)}')
     jobscript = Path(jobscript)

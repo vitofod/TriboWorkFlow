@@ -21,9 +21,11 @@ settings.require_complete()                 # SettingsError if placeholders are 
   given: any `pw.x` key can be used, keys left out take the `pw.x` defaults,
   and `pw.x` judges the values and ignores the keys that do not apply. The
   settings never add, change or reject a `pw.x` parameter, except for the
-  keys the generator writes itself and the conventions of the project
+  keys the generator writes itself, the conventions of the project
   (`ibrav = 0`, cell and positions in angstrom, `scf` and `relax` only, no
-  Hubbard).
+  Hubbard), and the keys the relaunches change: `max_seconds`, written for
+  every run, and `nstep` and `mixing_beta`, checked here and changed by the
+  remedies (see [Values changed by the relaunches](#values-changed-by-the-relaunches)).
 - **The other tables are strict.** In the tables of the project
   (`[structure]`, `[k_points]`, `[interface]`, `[execution]`, …) an unknown
   or misspelt key is an error, with the list of the allowed keys. Their
@@ -107,6 +109,22 @@ Keys the settings do not accept:
 
 `pseudo_dir` and `outdir` are paths on the machine that runs `pw.x`; they
 are never resolved locally.
+
+### Values changed by the relaunches
+
+A calculation that ends without convergence runs again with `nstep` and
+`mixing_beta` changed together (levels 2 and 3 of the remedies, see
+`execution.md`), starting from the values `pw.x` uses: those given here or
+its defaults. So these two keys are checked:
+
+| Key | Where | Error | Warning (recommended value) |
+|---|---|---|---|
+| `nstep` | CONTROL | not an integer ≥ 1 | above 250 (150) |
+| `mixing_beta` | ELECTRONS | not a number in (0, 1] | below 0.1 (0.4) |
+
+Booleans and strings are errors; a warning is logged when the file is read.
+The relaunches never lower `nstep` nor raise `mixing_beta`. `nstep` matters
+for `relax` only.
 
 ### Dispersion corrections
 

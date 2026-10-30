@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from triboworkflow.engines.qe.status import pw_status, record_status
+from triboworkflow.engines.qe.status import PwError, pw_status, record_status
 
 CORPUS_VARIABLE = 'TRIBOWORKFLOW_PWO_CORPUS'
 CORPUS = os.environ.get(CORPUS_VARIABLE)
@@ -64,6 +64,26 @@ def test_corpus_file(name, calculation, version, runs, process, scf, geometry, c
         (version, runs, process, scf, geometry, coordinates, reason)
     assert status.version_validated
     assert record_status(status).summary == summary
+
+
+@pytest.mark.parametrize('name, calculation, mixing_beta, nstep', [
+    ('file_output_relax_convergenza_raggiunta_con_commenti.pwo', 'relax', 0.25, 200),
+    ('file_output_scf_convergenza_raggiunta_con_stress_e_pressioneDiCella_e_con_commenti.pwo',
+     'scf', 0.3, None),
+    ('relax_andato_correttamente_a_convergenza.pwo', 'relax', 0.3, 200),
+    # Three runs, 0.3 then 0.15 twice: the last one is read.
+    ('relax_convergenza_non_raggiunta_dopo_200_iterazioni_con_commenti.pwo', 'relax', 0.15, 200),
+    ('scf_interrotto_per_crash_durante_calcolo_con_commenti.pwo', 'scf', 0.2, None),
+])
+def test_corpus_values_of_the_summary(name, calculation, mixing_beta, nstep):
+    status = pw_status(read_corpus_file(name), calculation)
+    assert (status.mixing_beta, status.nstep) == (mixing_beta, nstep)
+
+
+def test_corpus_error_of_pw():
+    # The error is printed once per process; the last one is read.
+    status = pw_status(read_corpus_file('relax_crash_con_errore_con_commenti.pwo'), 'relax')
+    assert status.error == PwError('cdiaghg', '309', 'problems computing cholesky')
 
 
 @pytest.mark.parametrize('name, calculation', [case[:2] for case in EXPECTED],

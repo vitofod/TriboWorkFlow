@@ -9,7 +9,8 @@ attempt is archived:
 
 1. the number ``n`` of the attempt comes from the claim; an empty claim (a
    worker stopped right after creating it) gets the number the worker would
-   have used, the attempts in the record plus one, written in the claim;
+   have used, the attempts in the record plus one, written in the claim
+   with nothing else known;
 2. a record without attempt ``n`` (a worker stopped before writing it) gets
    it, with what the claim tells (job, host, time) and the rest null;
 3. ``run.pwi`` and ``output.pwo`` are moved to ``attempts/<n>/`` with
@@ -39,6 +40,7 @@ from .layout import (ATTEMPTS_DIR, CLAIM_FILE, OUTPUT_FILE, RUN_INPUT_FILE, atte
                      calc_dir, system_dir)
 
 _CLAIM_KEYS = ('n', 'job_id', 'host', 'pid', 'since')
+RESTART_COUNT_KEY = 'restart_count'
 
 
 class ArchiveError(RuntimeError):
@@ -46,14 +48,27 @@ class ArchiveError(RuntimeError):
 
 
 def read_claim(path):
-    """Content of a claim file, or None for an empty or unreadable claim."""
+    """Content of a claim file, or None for an empty or unreadable claim.
+
+    Returns
+    -------
+    dict or None
+        ``n``, ``job_id``, ``host``, ``pid`` and ``since``, None where the
+        claim does not have them, and ``restart_count`` only if the claim has
+        it, as written: the worker always writes it, so a claim without it
+        (written before, or rewritten by the archiving of an empty claim)
+        does not tell which run of its job wrote it.
+    """
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict) or type(data.get('n')) is not int or data['n'] < 1:
         return None
-    return {key: data.get(key) for key in _CLAIM_KEYS}
+    claim = {key: data.get(key) for key in _CLAIM_KEYS}
+    if RESTART_COUNT_KEY in data:
+        claim[RESTART_COUNT_KEY] = data[RESTART_COUNT_KEY]
+    return claim
 
 
 def _check_digest(path, recorded, where):

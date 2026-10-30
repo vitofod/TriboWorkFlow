@@ -40,7 +40,7 @@ calculation = "relax"              # relax | scf
 title = "A_title"
 prefix = "A_prefix"
 restart_mode = "from_scratch"      # from_scratch | restart
-nstep = 150                        # For relax.
+nstep = 150                        # For relax; recommended 150, at most 250.
 outdir = "path/to/output_dir"      # Path on the machine that runs pw.x.
 max_seconds = 84600                # Seconds.
 tstress = false
@@ -64,7 +64,7 @@ vdw_corr = "none"                  # E.g. grimme-d2, grimme-d3; see docs/configu
 electron_maxstep = 200
 conv_thr = 1.0e-6                  # Ry
 mixing_mode = "local-TF"           # local-TF | plain
-mixing_beta = 0.3
+mixing_beta = 0.4                  # Recommended 0.4, at least 0.1.
 diagonalization = "david"
 
 [namelists.IONS]

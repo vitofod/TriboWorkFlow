@@ -106,15 +106,17 @@ source establishes it:
 | `max_seconds_cap` | upper limit of `max_seconds` in the prepared input; null if none | worker |
 | `input`, `output` | `{"path", "digest"}`: file relative to the calculation directory and its `file_digest` | worker, archiving |
 | `exit_code` | exit status of the command that ran the engine; null if the worker did not see it end | worker |
-| `job_state` | state of the job reported by the scheduler | job manager |
+| `job_state` | state of the job as printed by the scheduler, written when the reconciliation fixes an attempt whose worker did not end it (for a requeued job, the state of its new run) | reconciliation |
 | `stop_reason` | why the run stopped, read from the output | output |
 | `clean_stop` | whether the engine closed the run, read from the output | output |
 | `status` | `process`, `scf`, `geometry`, `parsing` at the end of the attempt | output, job |
-| `remedies` | parameters changed for this attempt with respect to the input | remedies |
+| `remedies` | launch of the attempt: `kind` (`initial`, `unchanged`, `remedy`, `manual`), `level` of the remedies, `values` of the level and `initial_values` (effective values at level 1), both empty at level 1; empty when not known | worker, reconciliation |
 
 The exit code, the state of the job and the reason of the stop are kept
 apart and never derived from one another; the states of the calculation
 come from the output, and from the job only where the output says nothing.
+The relaunches count their attempts from `remedies`, so the record alone
+tells how many unchanged relaunches were made at the current level.
 
 `check_energy_model(records)` raises an error when the records do not share
 one energy model (engine name and program, and `energy_model`): energies of

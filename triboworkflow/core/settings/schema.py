@@ -12,9 +12,11 @@ from the TOML tables with dacite and then runs their ``check`` methods.
 The namelists are passed to pw.x as given: pw.x applies its own defaults to
 the keys left out and judges the values. The checks only cover what the code
 needs to work: the layout of the file, the keys the input generator writes
-itself, and the conventions of the project (``ibrav = 0``, angstrom, ``scf``
-and ``relax`` only, no Hubbard corrections). Values that a step does not use
-are ignored, as pw.x ignores keys that do not apply.
+itself, the conventions of the project (``ibrav = 0``, angstrom, ``scf`` and
+``relax`` only, no Hubbard corrections) and the keys that the relaunches
+change (``RELAUNCH_KEYS``), whose values must make sense and give a warning
+outside the recommended ones (``Namelists.advice``). Values that a step does
+not use are ignored, as pw.x ignores keys that do not apply.
 
 Placeholders, i.e. empty strings and ``ecutwfc``/``ecutrho`` equal to 0, are
 accepted when a file is loaded and rejected when an input is generated
@@ -47,6 +49,14 @@ STEPS_WITH_ENGINE = ('pes', 'adhesion', 'ppes', 'charge')
 # &CONTROL keys of a single calculation: in the workflow the code sets them
 # for every calculation (own prefix and outdir, calculation from calc_type).
 PER_CALCULATION = ('calculation', 'title', 'prefix', 'restart_mode', 'outdir')
+
+# Keys that the relaunches change when a calculation does not converge, the
+# only pw.x keys whose values the settings check: nstep must be an integer
+# >= 1, mixing_beta a number in (0, 1]. Values allowed but outside the
+# recommended ones give a warning.
+RELAUNCH_KEYS = ('nstep', 'mixing_beta')
+NSTEP_ADVISED, NSTEP_ADVISED_MAX = 150, 250
+MIXING_BETA_ADVISED, MIXING_BETA_ADVISED_MIN = 0.4, 0.1
 
 _CELL = 'ibrav = 0 always: the cell is written in CELL_PARAMETERS from the structure'
 # &SYSTEM keys written by the generator, or excluded by the project.
@@ -281,10 +291,15 @@ class Namelists:
         default : optional
             Returned when the key is not given.
         """
-        for key, value in getattr(self, namelist).items():
+        key = self.key(namelist, name)
+        return default if key is None else getattr(self, namelist)[key]
+
+    def key(self, namelist, name):
+        """Key of a namelist as written in the settings, or None (see ``get``)."""
+        for key in getattr(self, namelist):
             if key_name(key) == name and '(' not in key:
-                return value
-        return default
+                return key
+        return None
 
     def check(self, path):
         """Validate the namelists; errors name ``path``."""
@@ -302,6 +317,37 @@ class Namelists:
         calculation = self.get('CONTROL', 'calculation')
         if calculation is not None:
             _choice(f'{path}.CONTROL.calculation', calculation, ('scf', 'relax'))
+        # The relaunches change nstep and mixing_beta (RELAUNCH_KEYS): their values must make sense.
+        nstep = self.get('CONTROL', 'nstep')
+        if nstep is not None and (type(nstep) is not int or nstep < 1):
+            raise SettingsError(f'{path}.CONTROL.{self.key("CONTROL", "nstep")}',
+                                f'an integer >= 1 is required, got {nstep!r}')
+        beta = self.get('ELECTRONS', 'mixing_beta')
+        if beta is not None and (type(beta) not in (int, float) or not 0 < beta <= 1):
+            raise SettingsError(f'{path}.ELECTRONS.{self.key("ELECTRONS", "mixing_beta")}',
+                                f'a number in (0, 1] is required, got {beta!r}')
+
+    def advice(self, path):
+        """Values allowed but outside those recommended for the relaunches.
+
+        Returns
+        -------
+        list of str
+            One message per value: ``nstep`` above ``NSTEP_ADVISED_MAX``,
+            ``mixing_beta`` below ``MIXING_BETA_ADVISED_MIN``.
+        """
+        notes = []
+        nstep = self.get('CONTROL', 'nstep')
+        if type(nstep) is int and nstep > NSTEP_ADVISED_MAX:
+            notes.append(f'{path}.CONTROL.{self.key("CONTROL", "nstep")} = {nstep} is above '
+                         f'{NSTEP_ADVISED_MAX}: the recommended value is {NSTEP_ADVISED}; the '
+                         'relaunches never lower it')
+        beta = self.get('ELECTRONS', 'mixing_beta')
+        if type(beta) in (int, float) and beta < MIXING_BETA_ADVISED_MIN:
+            notes.append(f'{path}.ELECTRONS.{self.key("ELECTRONS", "mixing_beta")} = {beta} is '
+                         f'below {MIXING_BETA_ADVISED_MIN}: the recommended value is '
+                         f'{MIXING_BETA_ADVISED}; the relaunches never raise it')
+        return notes
 
 
 @dataclass

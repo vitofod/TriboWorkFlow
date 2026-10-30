@@ -18,7 +18,8 @@ import pytest
 
 from triboworkflow.core.guard import NotOnHPCError
 from triboworkflow.execution import layout
-from triboworkflow.execution.jobs import SUBMITTED_FILE, JobError, Manifest, submit_jobs, write_job
+from triboworkflow.execution.jobs import (SUBMITTED_FILE, JobError, Launch, Manifest, submit_jobs,
+                                          write_job)
 from triboworkflow.execution.manager import JobManager, JobManagerError
 from triboworkflow.execution.scheduler import SGE_HOLD_TYPES, JobScheduler, JobSchedulerError
 
@@ -123,7 +124,8 @@ def run_dir(tmp_path):
     jobscript.write_text('#!/bin/bash\n')
     for name in ('batch1', 'batch2'):
         write_job(run, Manifest(name=name, scheduler='slurm', run_command='pw.x', walltime=3600,
-                                max_seconds_margin=600, calculations=CALCS), jobscript)
+                                max_seconds_margin=600,
+                                calculations=tuple(Launch.initial(*c) for c in CALCS)), jobscript)
     return run
 
 
@@ -182,12 +184,40 @@ def test_registry_content(run_dir, manager, slurm, clock):
     slurm.states['1000'] = 'CANCELLED by 1000'
     jobs.cycle()
     assert registry(run_dir) == {
-        'schema_version': 1,
+        'schema_version': 2,
         'groups': {'batch1': {'planned': 1, 'refused': None, 'unknown': []}},
         'jobs': {'1000': {'group': 'batch1', 'since': '2026-10-28T10:00:00+01:00',
-                          'state': 'CANCELLED by 1000', 'active': False, 'hold': None,
-                          'reported': True, 'checked': '2026-10-28T10:30:00+01:00',
-                          'error': None}}}
+                          'state': 'CANCELLED by 1000',
+                          'state_since': '2026-10-28T10:30:00+01:00', 'active': False,
+                          'hold': None, 'reported': True,
+                          'checked': '2026-10-28T10:30:00+01:00', 'error': None}}}
+
+
+def test_time_of_the_first_report_of_a_state(manager, slurm, clock):
+    jobs = manager()
+    jobs.add_group('batch1', 1)
+    jobs.cycle()
+    assert jobs.jobs['1000']['state_since'] is None  # submitted, not yet asked
+    jobs.cycle()
+    assert jobs.jobs['1000']['state_since'] == '2026-10-28T10:00:00+01:00'
+    clock.advance(600)
+    slurm.states['1000'] = 'PREEMPTED'
+    jobs.cycle()
+    for _ in range(2):  # same state: the first report is kept
+        clock.advance(600)
+        jobs.cycle()
+    assert jobs.jobs['1000']['state_since'] == '2026-10-28T10:10:00+01:00'
+    assert jobs.jobs['1000']['checked'] == '2026-10-28T10:30:00+01:00'
+    clock.advance(600)
+    del slurm.states['1000']  # not reported: state and its time kept
+    jobs.cycle()
+    assert (jobs.jobs['1000']['state'], jobs.jobs['1000']['state_since']) == \
+        ('PREEMPTED', '2026-10-28T10:10:00+01:00')
+    clock.advance(600)
+    slurm.states['1000'] = 'PENDING'
+    jobs.cycle()
+    assert jobs.jobs['1000']['state_since'] == '2026-10-28T10:50:00+01:00'
+    assert jobs.now() == clock.time
 
 
 def test_group_errors(run_dir, slurm, manager):
@@ -322,20 +352,24 @@ def test_group_submitted_by_hand_is_registered_without_new_jobs(run_dir, manager
 def test_invalid_registry(run_dir, manager):
     path = run_dir / layout.JOBS_REGISTRY_FILE
     group = {'planned': 1, 'refused': None, 'unknown': []}
-    job = {'group': 'b', 'since': None, 'state': None, 'active': None, 'hold': None,
-           'reported': None, 'checked': None, 'error': None}
+    job = {'group': 'b', 'since': None, 'state': None, 'state_since': None, 'active': None,
+           'hold': None, 'reported': None, 'checked': None, 'error': None}
+    old_job = {k: v for k, v in job.items() if k != 'state_since'}
     for content, message in [
-        ({'schema_version': 2, 'groups': {}, 'jobs': {}}, 'schema_version'),
-        ({'schema_version': 1, 'groups': []}, 'missing jobs'),
-        ({'schema_version': 1, 'groups': [], 'jobs': {}}, 'groups: a JSON object'),
-        ({'schema_version': 1, 'groups': {'b': {'planned': 1}}, 'jobs': {}}, 'missing refused'),
-        ({'schema_version': 1, 'groups': {'b': dict(group, unknown={})}, 'jobs': {}},
+        ({'schema_version': 1, 'groups': {}, 'jobs': {}}, 'schema_version: 1; this version '
+                                                          'reads 2'),
+        ({'schema_version': 2, 'groups': []}, 'missing jobs'),
+        ({'schema_version': 2, 'groups': [], 'jobs': {}}, 'groups: a JSON object'),
+        ({'schema_version': 2, 'groups': {'b': {'planned': 1}}, 'jobs': {}}, 'missing refused'),
+        ({'schema_version': 2, 'groups': {'b': dict(group, unknown={})}, 'jobs': {}},
          'a JSON array'),
-        ({'schema_version': 1, 'groups': {'b': dict(group, unknown=[{'error': 'x'}])}, 'jobs': {}},
+        ({'schema_version': 2, 'groups': {'b': dict(group, unknown=[{'error': 'x'}])}, 'jobs': {}},
          'missing at'),
-        ({'schema_version': 1, 'groups': {}, 'jobs': {'1': job}}, "group 'b' not registered"),
-        ({'schema_version': 1, 'groups': {'b': group}, 'jobs': {'1': dict(job, hold={})}},
+        ({'schema_version': 2, 'groups': {}, 'jobs': {'1': job}}, "group 'b' not registered"),
+        ({'schema_version': 2, 'groups': {'b': group}, 'jobs': {'1': dict(job, hold={})}},
          'hold: missing reason'),
+        ({'schema_version': 2, 'groups': {'b': group}, 'jobs': {'1': old_job}},
+         'missing state_since'),
     ]:
         path.write_text(json.dumps(content))
         with pytest.raises(JobManagerError, match=message):

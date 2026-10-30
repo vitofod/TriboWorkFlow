@@ -37,6 +37,12 @@ or because it gives up; they do not prove convergence, which only the
 optimizer declares. Whether they were written in full is kept apart, because
 reading the final structure needs them.
 
+The summary that pw.x prints at the beginning of a run also gives the values
+it uses, given in the input or default: ``mixing beta`` and, for a
+relaxation, ``nstep``. They are read from the last run as well
+(``PwStatus.mixing_beta``, ``PwStatus.nstep``), and so is the error that
+stopped a run (``PwError``).
+
 A state that the output does not establish is None. An output that ends
 before any closing line is truncated: the job may still be running, or it
 was stopped from outside, and only the scheduler can tell which. A truncated
@@ -57,6 +63,7 @@ The checks start from those of Xsorb (``xsorb/calculations/results.py``,
 geometry optimizations) and SCS (``labelling/QuantumEspresso/qe.py``, SCF).
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,10 +93,41 @@ _MAX_SECONDS = 'Maximum CPU time exceeded'
 _USER_REQUEST = 'Program stopped by user request'
 _SUMMARY_END = 'crystal axes:'
 _NSTEP = 'nstep'
+_MIXING_BETA = 'mixing beta'
+_STOPPING = 'stopping ...'
+_ERROR_HEAD = re.compile(r'(\S+?)\s*\(\s*([^)]*?)\s*\)\s*:?$')
 
 
 class PwOutputError(ValueError):
     """Text that is not a pw.x output this module can read."""
+
+
+@dataclass(frozen=True)
+class PwError:
+    """An error printed by pw.x before it stops.
+
+    pw.x prints it between two lines of ``%``::
+
+        Error in routine cdiaghg (309):
+        problems computing cholesky
+
+    Parameters
+    ----------
+    routine : str
+        Routine that raised the error, as printed.
+    code : str or None
+        Code in parentheses after the routine, as printed; None if absent.
+    message : str
+        Lines of the message, stripped and joined by a space; empty if none.
+    """
+
+    routine: str
+    code: str | None
+    message: str
+
+    def __str__(self):
+        code = f' ({self.code})' if self.code is not None else ''
+        return f'error in routine {self.routine}{code}: {self.message}'
 
 
 @dataclass(frozen=True)
@@ -122,6 +160,15 @@ class PwStatus:
         ``'max_steps'``, ``'optimizer_failed'``, ``'max_seconds'``,
         ``'user_request'``, ``'error'``, ``'truncated'``; None when the run
         ended for a reason this module does not recognize.
+    error : PwError or None, optional
+        The last error of the run, as printed, when ``process`` is
+        ``'crashed'``; None otherwise.
+    mixing_beta : float or None, optional
+        ``mixing beta`` printed in the summary of the run, i.e. the value
+        pw.x uses, given or default; None if the summary does not print it.
+    nstep : int or None, optional
+        ``nstep`` printed in the summary of the run (relax only); None
+        otherwise.
     """
 
     calculation: str
@@ -132,6 +179,9 @@ class PwStatus:
     geometry: str | None
     final_coordinates: str
     stop_reason: str | None
+    error: PwError | None = None
+    mixing_beta: float | None = None
+    nstep: int | None = None
 
     @property
     def clean_stop(self):
@@ -208,12 +258,52 @@ def _check_calculation(run, calculation):
                             f'{printed} nstep')
 
 
+def _summary_value(run, name, kind):
+    """Value printed as ``<name> = <value>`` in the summary of the run, or None.
+
+    The summary ends at the ``crystal axes:`` line; a run truncated before it
+    is read up to its end.
+
+    Raises
+    ------
+    PwOutputError
+        If the value is not a number of the type ``kind``.
+    """
+    end = _last_index(run, _SUMMARY_END)
+    for line in run[:end] if end is not None else run:
+        key, sep, value = line.partition('=')
+        if sep and key.strip() == name:
+            try:
+                return kind(value.split()[0])
+            except (IndexError, ValueError):
+                raise PwOutputError(f'"{line.strip()}" in the summary of the run: not a '
+                                    f'{kind.__name__}') from None
+    return None
+
+
 def _process(run):
     if _has(run, _JOB_DONE):
         return 'ended'
     if _has(run, _ERROR):
         return 'crashed'
     return None
+
+
+def _error(run):
+    """The last error of the run (``PwError``), or None."""
+    start = _last_index(run, _ERROR)
+    if start is None:
+        return None
+    head = run[start].strip()[len(_ERROR):].strip()
+    match = _ERROR_HEAD.match(head)
+    routine, code = (match.group(1), match.group(2)) if match else (head.rstrip(':'), None)
+    message = []
+    for line in run[start + 1:]:
+        if line.strip().startswith('%') or _starts(line, _STOPPING):
+            break
+        if line.strip():
+            message.append(line.strip())
+    return PwError(routine, code, ' '.join(message))
 
 
 def _scf(run):
@@ -302,7 +392,10 @@ def pw_status(text, calculation):
         geometry, coordinates = _geometry(run, process), _final_coordinates(run)
     return PwStatus(calculation=calculation, version=version, runs=runs, process=process,
                     scf=scf, geometry=geometry, final_coordinates=coordinates,
-                    stop_reason=_stop_reason(run, calculation, process, scf, geometry))
+                    stop_reason=_stop_reason(run, calculation, process, scf, geometry),
+                    error=_error(run) if process == 'crashed' else None,
+                    mixing_beta=_summary_value(run, _MIXING_BETA, float),
+                    nstep=_summary_value(run, _NSTEP, int))
 
 
 def read_pw_status(path, calculation):

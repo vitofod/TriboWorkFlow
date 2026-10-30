@@ -2,9 +2,11 @@
 
 Calculations run only on an HPC machine, inside jobs of its batch scheduler.
 This page describes how a group of calculations is laid out, submitted, run
-and followed, and how to check the execution on a new machine with a fake
-engine. Reconciling the calculations with their jobs and relaunching them are
-not part of the package yet.
+and followed; how the calculations are reconciled with their jobs and
+relaunched; how the orchestrator takes the steps of a workflow forward, in
+the background on the login node; and how to check the execution on a new
+machine with a fake engine. The values of the remedies are decided but not
+yet written in the inputs, so a relaunch above level 1 is not submitted.
 
 ## Layout of a run
 
@@ -24,7 +26,10 @@ not part of the package yet.
 │   ├── manifest.json
 │   ├── jobscript.sh
 │   └── submitted.json
-└── jobs.json                    registry of the job manager
+├── jobs.json                    registry of the job manager
+├── orchestrator.json            steps of each system
+├── orchestrator.pid             orchestrator running in the background
+└── orchestrator.log             its output
 ```
 
 pw.x runs inside the calculation directory, so the relative `outdir = 'OUT'`
@@ -38,7 +43,11 @@ jobscript (`execution/jobs.py`):
 
 - `manifest.json`: the calculations, in the order the workers take them, and
   how to run them: scheduler, `run_command`, `walltime`, `max_seconds_margin`
-  (from `[execution]`, see `configuration.md`).
+  (from `[execution]`, see `configuration.md`). Each calculation names the
+  attempt the group runs (`Launch`): its number `n`, its kind (`initial`,
+  `unchanged`, `remedy`, `manual`), the level of the remedies and, above
+  level 1, the values of the level and the effective values at level 1. A
+  new attempt of a calculation always goes in a new group.
 - `jobscript.sh`: the jobscript of `[execution]`, copied byte for byte, with
   one line added at the end:
 
@@ -91,6 +100,15 @@ the reason comes from the listing of each hold type (`hu`, `ho`, `hs`: needs
 an intervention; `hd`, `hj`: waiting for other jobs; `ha`: waiting for its
 start time), for PBS and Torque `Hold_Types` is shown as printed.
 
+**Restarts.** A scheduler may requeue a job, which keeps its id and runs its
+jobscript again from the start. Slurm tells how many times
+(`get_restart_count`: `sacct -X -n -o Restarts -j <id>`, a query of its own),
+and a run of the job sees the same number in `SLURM_RESTART_COUNT`, set only
+after a restart. The other schedulers do not tell it. A job waiting in the
+queue to run (`is_queued`: Slurm `PENDING`, `REQUEUED`; PBS and Torque `Q`,
+`W`; LSF `PEND`; SGE `qw`; HTCondor `1`), not held, is one that was requeued
+if it already ran.
+
 A submission that fails says whether the job may exist
 (`JobSubmissionError.accepted`): False when the command exited with an error
 and printed no id, None when it timed out, failed in another way or printed
@@ -124,9 +142,10 @@ Each job is:
 - **attention**: not reported after `job_report_wait`, no longer reported, or
   in a state that is not known.
 
-A job keeps its id, its last known state and the claims of its calculations,
-and is asked again at every cycle until its state is final; it is never
-replaced. A group is complete when all its jobs are in a final state
+A job keeps its id, its last known state, the time that state was first
+reported (to confirm it at a later query) and the claims of its
+calculations, and is asked again at every cycle until its state is final; it
+is never replaced. A group is complete when all its jobs are in a final state
 confirmed by the last query, with no refused submission or submission of
 outcome not known. `run(polling_interval)` repeats the cycle while a job is
 waiting or jobs are to submit; held jobs, jobs that need attention and
@@ -135,12 +154,17 @@ unresolved submissions stay in the summary for the next cycles.
 ## Worker
 
 Each job runs one worker (`execution/worker.py`). The worker goes once
-through the calculations of the manifest and runs each one that no other
-worker has taken:
+through the calculations of the manifest. It runs attempt `n` of a
+calculation only while the record has `n - 1` attempts, so a late job of a
+group that was replaced finds the attempt made and skips it, and only if no
+other worker has taken it:
 
 1. creates `claim` with `O_CREAT | O_EXCL`: exactly one worker succeeds, the
-   others skip the calculation;
-2. adds attempt `n` to the record, with the process `running`;
+   others skip the calculation; the claim holds the attempt, the job id, the
+   restart count of the job (`restart_count`, from `SLURM_RESTART_COUNT`,
+   null when not set), the host, the pid and the time;
+2. adds attempt `n` to the record, with the process `running` and the launch
+   of the manifest in `remedies`;
 3. writes `run.pwi`, a copy of `input.pwi` with `max_seconds` set;
 4. creates `output.pwo` with `O_EXCL`;
 5. runs `<run_command> -in run.pwi >> output.pwo` with bash, in the
@@ -150,7 +174,8 @@ worker has taken:
    whether pw.x closed the run.
 
 If something is wrong before step 2 (no record, a calculation other than
-`scf` or `relax`, files of an earlier attempt still in place), the worker
+`scf` or `relax`, files of an earlier attempt still in place, a launch above
+level 1 whose values this version does not write in the input), the worker
 removes its claim, logs the error and goes on. A worker killed with its job
 leaves the attempt with the process `running`; what happened is then known
 from the scheduler.
@@ -172,7 +197,143 @@ Before a calculation runs again, its last attempt is archived
 after a check of their digests, the record gets the new paths, and the claim
 is removed last. An interrupted archiving is completed by running it again.
 An attempt still recorded as `running` is not archived; `OUT/` is not
-touched.
+touched. An attempt is archived only when it is relaunched.
+
+## Reconciliation
+
+Before anything new is submitted, each calculation is brought up to date
+with its record, its claim, the scheduler and its output
+(`execution/reconcile.py`), and classified:
+
+| State | Meaning |
+|---|---|
+| `new` | no attempt, and no group for the first one |
+| `pending` | a group for the next attempt is not over yet |
+| `running` | an attempt runs, or the end of its job is awaited |
+| `held` | the job of the claim is held: kept as it is, nothing relaunched |
+| `completed` | the last attempt ended with the SCF and the geometry converged |
+| `unchanged` | the last attempt crashed, was killed or stopped at `max_seconds` |
+| `remedy` | pw.x closed the run without convergence (`scf_not_converged`, `max_steps`) |
+| `manual` | no automatic relaunch: the user decides, with the reason |
+| `uncertain` | what happened cannot be established now; the claim is kept |
+| `not_taken` | every group for the next attempt is over and none took it |
+
+An attempt recorded as `running` is fixed only when the run of the job that
+wrote its claim is over: the job is in a final state confirmed by the last
+query; or it is in the queue again; or a Slurm job runs with more restarts
+than the `restart_count` of the claim; or a Slurm job is `PREEMPTED` at a
+query at least `polling_interval` seconds after the first one that reported
+it, with the restarts of the claim. Without the restart count the attempt
+waits for the end of the job, and a preempted job is `uncertain`. A claim
+without a job id, an empty claim and a job that the scheduler no longer
+reports are `uncertain`.
+
+The fixed attempt gets the state of the job as printed, the states read from
+the output (the process `killed` when the scheduler stopped or requeued the
+job, `crashed` otherwise, unless pw.x closed the run), the reason of the
+stop and the digests of its files. The output decides when pw.x closed the
+run: a calculation whose worker was killed after pw.x ended is completed.
+
+How the job ended decides when the output does not:
+
+| Scheduler | Relaunched unchanged | Left to the user |
+|---|---|---|
+| Slurm | `TIMEOUT`, `NODE_FAIL`, `BOOT_FAIL`, `PREEMPTED`, `COMPLETED`, `FAILED`, requeued | `CANCELLED`, `DEADLINE`, `OUT_OF_MEMORY`, others |
+| PBS, Torque | `F`, `C` | — |
+| HTCondor | `4` (completed) | `3` (removed) |
+
+So a `qdel` on PBS or Torque cannot be told from another end of the job and
+is relaunched. An error of pw.x (`Error in routine`) is left to the user,
+with its routine, code and message read from the output, which is kept. A
+group that ends without any of its attempts taken makes its calculations
+`manual`, with its jobs and their states ("no progress"); the cause is not
+deduced.
+
+## Relaunches
+
+The policy (`execution/policy.py`) decides what follows each reconciled
+calculation:
+
+- `new` gets its first attempt; `not_taken` the same launch again, which
+  uses no relaunch;
+- `unchanged` runs again with the input of its level, in a new job, at most
+  twice in a row at a level; then the user decides. The count comes from the
+  launches recorded in the attempts, so a restart does not reset it; a new
+  level or a manual relaunch starts it again;
+- `remedy` runs at the next level, up to level 3; then the user decides.
+
+| Level | `mixing_beta` | `nstep` (relax only) |
+|---|---|---|
+| 1 | of the input (recommended 0.4) | of the input (recommended 150) |
+| 2 | `min(β₀, 0.2)` | 200 if `n₀ ≤ 200`, 250 if `n₀ ≤ 250`, `n₀` above |
+| 3 | `min(β₀, 0.1)` | `max(n₀, 250)` |
+
+`β₀` and `n₀` are the values pw.x uses at level 1, given or default, read
+from the summary at the beginning of its output; when `input.pwi` writes
+them they must agree with the summary. They are kept with the launches above
+level 1. **This version decides the launches above level 1 but does not
+submit them**: their values are not written in the input yet, and the
+calculation is reported as needing the user.
+
+`policy.manual_launch` gives the launch of a relaunch asked for by the user:
+allowed only when the worker of the last attempt is surely over (no claim,
+or the run of the job of the claim over), at the level of the last attempt
+and with its input; the count of the unchanged relaunches starts again.
+
+## Orchestrator
+
+`execution/orchestrator.py` takes the steps of each system forward along the
+graph of the entries they read: `match` → `pes` → {`plotpes` → `shear`;
+`adhesion` → {`ppes`; `charge`}}, `shear` reading also `pes` and `match`.
+Each pass:
+
+1. runs a cycle of the job manager;
+2. registers the groups written and not registered;
+3. for each system, goes through the requested steps in the order of the
+   graph, the order given deciding only between steps that are ready. A
+   step whose dependency failed or is blocked is **blocked**; one whose
+   dependency is not completed is **waiting**; the steps of a system run one
+   at a time. A step starts by checking its entries (already done and
+   current: **completed** without running) and the entries it reads
+   (`check_prerequisites`: missing or stale, **blocked** with what is
+   missing, nothing computed again), then prepares its calculations. A
+   **running** step is reconciled and decided; the launches go, after the
+   archiving of the last attempt, in a new group `<system>.<step>.<k>`. When
+   every calculation is completed the step analyses them and is
+   **completed**; when what is left needs the user it has **failed**, with
+   the calculations and why;
+4. saves the steps in `orchestrator.json`.
+
+A failure blocks only the descendants: the other branches go on, and the
+workflow succeeds only when every requested step is completed. A step failed
+for its calculations goes back to running when they are relaunched by hand
+(`Orchestrator.relaunch`); one failed for an error of its own stays failed
+until `retry`. After a restart, or a pass interrupted at any point, the next
+pass recovers the jobs, reconciles the attempts and only then submits,
+without duplicates.
+
+## In the background
+
+`execution/daemon.py` runs the orchestrator on the login node, as SCS does:
+
+- `start(run_dir, factory, scheduler)` checks that the submission command of
+  the scheduler is found, creates `orchestrator.pid` with `O_EXCL` (host,
+  time, command and a token of the start, no pid yet) and starts the
+  orchestrator in a new session, its output in `orchestrator.log`. The
+  process handles SIGTERM, builds the orchestrator and then writes its own
+  pid in the file, if the file still holds its token. `start` returns once
+  that pid is written; a process that exits first, or does not write it
+  within `timeout` seconds (120 by default, then it is killed), leaves no pid
+  file, and `start` raises an error naming the log, unless it exited with
+  code 0 (nothing left to do);
+- `status(run_dir)` tells whether it runs; a pid file of another host is
+  never touched, one of a process gone is replaced at the next start;
+- `stop(run_dir)` sends SIGTERM: the orchestrator ends its pass, saves its
+  state and exits. The jobs submitted go on. The handler of the signal only
+  records the request, so it cannot block the process whatever it is doing;
+  between two passes the orchestrator checks it every 0.2 s.
+
+The commands of the command line come with the CLI.
 
 ## Checking a new machine
 
