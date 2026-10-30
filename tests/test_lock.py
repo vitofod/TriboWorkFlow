@@ -13,12 +13,13 @@ import os
 import socket
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from run_helpers import SYSTEM, WAIT, Run
 from triboworkflow.execution.jobs import Launch, Manifest, write_job
-from triboworkflow.execution.lock import LOCK_FILE, RunLock, RunLockError, holder
+from triboworkflow.execution.lock import LOCK_FILE, TAKEOVER_FILE, RunLock, RunLockError, holder
 from triboworkflow.execution.manager import JobManager
 
 posix_only = pytest.mark.skipif(os.name != 'posix', reason='process checks are POSIX only')
@@ -81,6 +82,47 @@ def test_dead_holder_on_this_host_is_replaced(tmp_path, caplog):
 
 
 @posix_only
+def test_replacement_of_a_stale_lock_admits_one_holder(tmp_path, monkeypatch):
+    # B runs whole at the moment A removes the stale lock, after A checked it.
+    lock_file(tmp_path, pid=gone_pid())
+    path = tmp_path / LOCK_FILE
+    original, injected, outcomes = Path.unlink, [], {}
+
+    def unlink(self, *args, **kwargs):
+        if self == path and not injected:
+            injected.append(True)
+            outcomes['B'] = attempt(RunLock(tmp_path, 'triboworkflow relaunch pes_scf/aa'))
+        return original(self, *args, **kwargs)
+
+    def attempt(lock):
+        try:
+            return lock.acquire()
+        except RunLockError as error:
+            return error
+    monkeypatch.setattr(Path, 'unlink', unlink)
+    outcomes['A'] = attempt(RunLock(tmp_path, 'triboworkflow submit pes'))
+    assert injected
+    holders = [lock for lock in outcomes.values() if isinstance(lock, RunLock)]
+    assert len(holders) == 1 and read_lock(tmp_path)['token'] == holders[0].token
+    assert not (tmp_path / TAKEOVER_FILE).exists()
+
+
+@posix_only
+def test_replacement_left_unfinished_is_never_taken_over(tmp_path):
+    data = lock_file(tmp_path, pid=gone_pid())
+    (tmp_path / TAKEOVER_FILE).write_text('')  # a command stopped while replacing the lock
+    with pytest.raises(RunLockError, match=f'{TAKEOVER_FILE} exists.*by hand'):
+        RunLock(tmp_path, 'triboworkflow submit pes').acquire()
+    assert read_lock(tmp_path) == data and (tmp_path / TAKEOVER_FILE).exists()
+
+
+def test_replacement_left_unfinished_does_not_stop_a_free_run(tmp_path):
+    (tmp_path / TAKEOVER_FILE).write_text('')
+    with RunLock(tmp_path, 'triboworkflow submit pes') as lock:
+        assert read_lock(tmp_path)['token'] == lock.token
+
+
+@posix_only
 def test_pid_reused_by_another_program_counts_as_dead(tmp_path):
     other = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
     try:
@@ -131,6 +173,15 @@ def test_adopt_refuses_the_lock_of_another_token(tmp_path):
     with pytest.raises(RunLockError, match='not the one'):
         RunLock.adopt(tmp_path, 't0k3n')
     assert read_lock(tmp_path) == data
+
+
+def test_adopt_refused_while_the_lock_is_replaced(tmp_path):
+    RunLock(tmp_path, 'orchestrator', token='t0k3n').acquire()
+    before = read_lock(tmp_path)
+    (tmp_path / TAKEOVER_FILE).write_text('')
+    with pytest.raises(RunLockError, match=f'{TAKEOVER_FILE} exists.*by hand'):
+        RunLock.adopt(tmp_path, 't0k3n')
+    assert read_lock(tmp_path) == before
 
 
 def test_adopt_without_lock_is_refused(tmp_path):

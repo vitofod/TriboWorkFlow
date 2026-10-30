@@ -96,9 +96,10 @@ the holder, e.g. `the run is in use by triboworkflow submit pes (pid 5120 on
 login03 since …): wait for it to end; the orchestrator in the background
 ends with "triboworkflow stop"`. `check`, `status` and `stop` are always
 allowed. A lock left by a process gone from the same host is replaced, with
-a warning; one written on another host is never touched, and the message
-says to remove it by hand after checking that no command of the run runs
-there.
+a warning, by one process only: the one that creates `run.lock.takeover`
+for the time of the replacement. A lock written on another host is never
+touched, and the message says to remove it by hand after checking that no
+command of the run runs there.
 
 A command refused for its use, by the guard of the HPC machine or by the
 lock writes nothing in the run, not even `cli.log`.
@@ -249,12 +250,16 @@ them: choose one with `--group`.
   `relaunch <calc_id>`. The attempt takes its launch (kind, level, values)
   from the group that listed it; with several groups and different launches
   the command lists them and `--group` chooses; with none (only if `jobs/`
-  was removed) it refuses: the level is never assigned by default;
+  was removed) it refuses: the level is never assigned by default. A
+  `release-claim` interrupted is reported by `status` as an empty claim
+  released in part: run the same `release-claim` again;
 - a step failed for an error of the code while it was prepared or analysed,
   or for settings changed after its preparation: fix the cause, then
   `retry <step>`;
 - `run.lock` left by a process gone on another host: check that no command
-  of the run runs there, then remove it by hand.
+  of the run runs there, then remove it by hand. The same for
+  `run.lock.takeover`, left by a command stopped while it replaced a lock:
+  until it is removed, a lock left is not replaced.
 
 ## Dry run
 

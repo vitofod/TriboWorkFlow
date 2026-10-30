@@ -208,7 +208,10 @@ the attempt is added to the record with its end unknown. It also gets its
 launch when one is given (`archive_attempt(..., launch=)`), so that it can
 be relaunched at its level: `Orchestrator.release_claim`, asked by the user
 once the worker is surely over, takes it from the groups that list the
-attempt (`reconcile.launch_for`).
+attempt (`reconcile.launch_for`). A release interrupted leaves the claim
+with the number of the attempt alone, not yet in the record: the
+reconciliation reports it as an empty claim released in part, and
+releasing the claim again completes it.
 
 ## Reconciliation
 
@@ -322,9 +325,12 @@ Each pass:
    **running** step is followed, the calculations prepared are compared with
    those the settings give now (`Step.plan`: `calc_id` and fingerprint): one
    missing, one no longer given or a fingerprint that differs makes the step
-   **failed** until `retry`, and none of its calculations is used; this is
-   checked before the cycle of the job manager, so that the jobs still
-   missing from the groups of such a step are not submitted. A running
+   **failed** until `retry`, and none of its calculations is used. This is
+   checked before the cycle of the job manager, which submits the jobs still
+   missing from a group only for a step with calculations prepared and still
+   current, no error of its own and not completed: the groups of any other
+   step are held back, among them those of a step whose plan cannot be read
+   and those of a preparation before `retry`. A running
    step is reconciled and decided; the launches go, after the archiving of
    the last attempt, in a new group `<system>.<step>.<k>`. When every
    calculation is completed the step analyses them and is **completed**;
@@ -361,7 +367,14 @@ holder is refused and told who holds the run. The lock is created with
 `O_EXCL` and holds the pid, the host, the time, the command and a token; a
 holder removes it only while it still holds its token. A lock left by a
 process gone from this host is replaced with a warning, one of another host
-or one that cannot be read is never touched. Whether `O_EXCL` excludes
+or one that cannot be read is never touched. A lock is replaced, and adopted
+by the orchestrator in the background, only by the process holding
+`<run>/run.lock.takeover`, also created with `O_EXCL`: under it the lock is
+read again and removed only if it is still the one left, so two processes
+that find the same lock left never both hold the run. A takeover file left
+by a process stopped while replacing the lock is never removed by the code:
+until it is removed by hand, after checking that no command of the run runs,
+a lock left is not replaced. Whether `O_EXCL` excludes
 processes on different nodes of the shared filesystem is checked on each new
 machine (`locks` of `tests/hpc/hpc_check.py`).
 

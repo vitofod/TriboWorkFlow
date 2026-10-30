@@ -422,9 +422,43 @@ def test_empty_claim_released_then_relaunched_and_submitted(run):
     assert run.slurm.submitted == 3
 
 
+def test_release_claim_interrupted_is_completed_by_running_it_again(run, monkeypatch):
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.run_pass()
+    work(run, only=['pes/c1'])
+    claim = run.path('pes/c0') / layout.CLAIM_FILE
+    claim.write_text('')
+    orch.run_pass()
+
+    def stop(*args, **kwargs):
+        raise Interrupt
+    with monkeypatch.context() as patch:
+        # Stopped after the claim got the number of its attempt, before the record.
+        patch.setattr('triboworkflow.execution.archive.write_record', stop)
+        with pytest.raises(Interrupt):
+            orch.release_claim(SYSTEM, 'pes/c0')
+    assert json.loads(claim.read_text())['n'] == 1 and run.record('pes/c0').attempts == ()
+    (pes,) = [s for s in orch.run_pass().steps if s.step == 'pes']
+    assert pes.attention == [{'calc_id': 'pes/c0', 'state': 'uncertain',
+                              'reason': 'empty claim released in part: attempt 1 is not in the '
+                                        'record yet; release the claim again'}]
+    assert orch.release_claim(SYSTEM, 'pes/c0') == 1
+    assert not claim.exists()
+    (attempt,) = run.record('pes/c0').attempts
+    assert attempt.remedies == {'kind': 'initial', 'level': 1, 'values': {}, 'initial_values': {}}
+    assert statuses(orch.run_pass())['pes'] == 'failed'
+    group = orch.relaunch(SYSTEM, 'pes/c0')
+    manifest, _ = read_manifest(layout.job_dir(run.dir, group) / MANIFEST_FILE)
+    assert [(l.calc_id, l.n, l.kind, l.level) for l in manifest.calculations] == \
+        [('pes/c0', 2, 'manual', 1)]
+
+
 @pytest.mark.parametrize('content, message', [
     (None, 'no claim'),
     (json.dumps({'n': 1, 'job_id': '1000', 'host': 'node01', 'pid': 77, 'since': 'x'}),
+     'the claim is not empty'),
+    # As left by an interrupted release, but for another attempt than the next one.
+    (json.dumps({'n': 2, 'job_id': None, 'host': None, 'pid': None, 'since': None}),
      'the claim is not empty'),
 ])
 def test_release_claim_refuses_a_claim_with_content(run, content, message):
@@ -635,10 +669,11 @@ def test_settings_changed_after_prepare_stop_the_step(run, phase):
     assert statuses(orch.run_pass()) == {'pes': 'failed'}  # until retry
 
 
-@pytest.mark.parametrize('phase', ['submit_step', 'run_pass'])
-def test_group_written_before_settings_changed_is_not_submitted(run, monkeypatch, phase):
-    # The group of the step was written and registered, its jobs not submitted yet
-    # (e.g. a submission resolved as without job, a refusal cleared, a crash).
+def pending_group_of_pes(run, monkeypatch):
+    """pes prepared, its group written and registered, its jobs not submitted; the orchestrator.
+
+    As after a submission resolved as without job, a refusal cleared or a crash.
+    """
     write_entry(run.dir, SYSTEM, 'match')
     orch = orchestrator(run, ['pes'])
     orch.prepare_step(SYSTEM, 'pes')
@@ -646,6 +681,12 @@ def test_group_written_before_settings_changed_is_not_submitted(run, monkeypatch
         patch.setattr(run.manager, 'submit', lambda *args, **kwargs: [])
         orch.submit_step(SYSTEM, 'pes')
     assert run.manager.missing_jobs(f'{SYSTEM}.pes.1') == 2 and run.slurm.submitted == 0
+    return orch
+
+
+@pytest.mark.parametrize('phase', ['submit_step', 'run_pass'])
+def test_group_written_before_settings_changed_is_not_submitted(run, monkeypatch, phase):
+    orch = pending_group_of_pes(run, monkeypatch)
     orch.steps['pes'].fingerprint = OTHER
     if phase == 'submit_step':
         pes, _ = orch.submit_step(SYSTEM, 'pes')
@@ -654,6 +695,33 @@ def test_group_written_before_settings_changed_is_not_submitted(run, monkeypatch
     assert pes.status == 'failed' and pes.reason.startswith('settings changed')
     assert run.slurm.submitted == 0
     orch.run_pass()  # the step stays failed, its group is not submitted
+    assert run.slurm.submitted == 0
+
+
+def test_group_of_a_preparation_before_retry_is_not_submitted(run, monkeypatch):
+    orch = pending_group_of_pes(run, monkeypatch)
+    orch.steps['pes'].fingerprint = OTHER
+    assert statuses(orch.run_pass()) == {'pes': 'failed'}
+    orch.retry(SYSTEM, 'pes')  # nothing prepared now: the group is of the preparation before
+    assert statuses(orch.run_pass()) == {'pes': 'failed'}  # its calculations are still there
+    orch.run_pass()
+    assert run.slurm.submitted == 0
+
+
+@pytest.mark.parametrize('phase', ['submit_step', 'run_pass'])
+def test_group_of_a_step_whose_plan_fails_is_not_submitted(run, monkeypatch, phase):
+    orch = pending_group_of_pes(run, monkeypatch)
+
+    def plan(run_dir, system):
+        raise RuntimeError('settings not readable')
+    monkeypatch.setattr(orch.steps['pes'], 'plan', plan)
+    if phase == 'submit_step':
+        pes, _ = orch.submit_step(SYSTEM, 'pes')
+    else:
+        (pes,) = orch.run_pass().steps
+    assert pes.status == 'failed' and 'settings not readable' in pes.reason
+    assert run.slurm.submitted == 0
+    orch.run_pass()
     assert run.slurm.submitted == 0
 
 

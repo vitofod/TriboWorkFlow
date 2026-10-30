@@ -71,6 +71,15 @@ def read_claim(path):
     return claim
 
 
+def released_claim(n):
+    """Claim written by the archiving of an empty claim: the number ``n`` of its attempt alone.
+
+    No worker writes it: a claim with this content is the one of an
+    archiving interrupted before the record had attempt ``n``.
+    """
+    return {**dict.fromkeys(_CLAIM_KEYS), 'n': n}
+
+
 def _check_digest(path, recorded, where):
     if recorded is not None and file_digest(path) != recorded:
         raise ArchiveError(f'{path}: its digest differs from the one recorded for {where}; '
@@ -125,8 +134,7 @@ def archive_attempt(run_dir, system, calc_id, launch=None):
                            f'{system}/{calc_id} ({launch.system}/{launch.calc_id}); nothing was '
                            'changed')
     if claim is None:
-        claim = dict.fromkeys(_CLAIM_KEYS)
-        claim['n'] = n
+        claim = released_claim(n)
         write_json(claim_path, claim)
 
     # 2. Attempt n in the record.

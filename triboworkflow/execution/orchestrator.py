@@ -9,7 +9,8 @@ The steps of each system follow the graph of the entries they read and write
 entries of ``pes`` and ``match``. A pass (``Orchestrator.run_pass``):
 
 1. runs a cycle of the job manager (``JobManager.cycle``): jobs recovered,
-   states asked, missing jobs submitted;
+   states asked, missing jobs submitted, only for the steps whose
+   calculations prepared are checked current first (``_held_back``);
 2. registers the groups of jobs written and not registered (an interruption
    between writing and registering a group);
 3. for each system, goes through the requested steps in the order of the
@@ -88,7 +89,7 @@ from triboworkflow.core.store import (PrerequisiteError, check_prerequisites, re
 from triboworkflow.core.store.atomic import read_json, write_json
 from triboworkflow.core.store.record import check_keys
 
-from .archive import ArchiveError, archive_attempt, read_claim
+from .archive import ArchiveError, archive_attempt, read_claim, released_claim
 from .jobs import MANIFEST_FILE, SUBMITTED_FILE, Manifest, write_job
 from .layout import CLAIM_FILE, JOBS_DIR, calc_dir, system_dir
 from .policy import decide, manual_launch
@@ -405,24 +406,27 @@ class Orchestrator:
                 return report
 
     def _held_back(self):
-        """Groups not to submit: those of the steps whose settings changed since the preparation.
+        """Groups not to submit: all but those of the steps whose calculations are current.
 
-        Each running step is checked first (``_prepared_current``), so that
-        the jobs still missing from its groups are not submitted by the cycle
-        of the job manager; a step already failed for that keeps its groups
-        held back until ``retry``.
+        The jobs still missing from a group are submitted only while its step
+        has calculations prepared, no error of its own, is not completed, and
+        those calculations still match the settings: each such step is checked
+        first (``_prepared_current``), and fails if they no longer match or
+        its plan cannot be read. The groups of every other step are held back,
+        among them those of a step failed for an error of its own and those of
+        a preparation before ``retry``; so is a group of no step of the run.
+        A group written later in the pass is written after that check.
         """
-        held = set()
+        current = set()
         for system in self.systems:
             for name in self.order:
                 entry = self.entry(system, name)
-                if entry['status'] == 'running' and entry['calculations'] is not None:
-                    self._prepared_current(system, name, entry)
-                if (entry['error'] or '').startswith('StalePreparation'):
-                    prefix = f'{system}.{name}.'
-                    held.update(group for group in self.manager.groups
-                                if group.startswith(prefix))
-        return held
+                if (entry['error'] is None and entry['calculations'] is not None
+                        and entry['status'] != 'completed'
+                        and self._prepared_current(system, name, entry)):
+                    current.add(f'{system}.{name}.')
+        return {group for group in self.manager.groups
+                if not any(group.startswith(prefix) for prefix in current)}
 
     def _register_written_groups(self):
         """Register the groups written and neither registered nor submitted."""
@@ -842,7 +846,9 @@ class Orchestrator:
         the record plus one, and its launch from the groups that list it
         (``launch_for``); its process stays unknown, so the calculation then
         needs the user and is relaunched with ``relaunch``. The scheduler is
-        not asked.
+        not asked. A release interrupted leaves the claim with the number of
+        the attempt alone (``released_claim``), still not in the record: it
+        is completed by releasing the claim again.
 
         Parameters
         ----------
@@ -861,17 +867,18 @@ class Orchestrator:
         ------
         OrchestratorError
             If no step of the system has the calculation, it has no claim or
-            its claim is not empty, or the launch of the attempt is not known.
+            its claim is neither empty nor the one of a release interrupted,
+            or the launch of the attempt is not known.
         """
         self._step_of(system, calc_id)
         path = calc_dir(self.run_dir, system, calc_id) / CLAIM_FILE
         where = f'{system}/{calc_id}'
         if not path.is_file():
             raise OrchestratorError(f'{where}: no claim to release')
-        if path.stat().st_size != 0:
+        n = len(read_record(system_dir(self.run_dir, system), calc_id).attempts) + 1
+        if path.stat().st_size != 0 and read_claim(path) != released_claim(n):
             raise OrchestratorError(f'{where}: the claim is not empty; its job tells when its '
                                     'worker is over, and the reconciliation follows it')
-        n = len(read_record(system_dir(self.run_dir, system), calc_id).attempts) + 1
         try:
             launch = launch_for(self.run_dir, system, calc_id, n, group)
         except LaunchError as error:

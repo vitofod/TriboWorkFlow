@@ -21,9 +21,17 @@ pid that now belongs to another program (its command line, where the system
 shows it, does not run this package) counts as a process that no longer runs.
 A holder removes the lock only while it still holds its token.
 
+A lock is replaced only by the process holding ``<run>/run.lock.takeover``,
+also created with ``O_EXCL``: under it the lock is read again and removed
+only if it is still the one left, then created anew with ``O_EXCL``. Two
+processes that find the same lock left therefore never both hold the run. A
+takeover file left by a process stopped while replacing the lock is never
+removed here: while it is there a lock left is not replaced, and the message
+says to remove it by hand after checking; a free run is taken as usual.
+
 ``RunLock.adopt`` hands a lock over to another process: the orchestrator in
 the background takes the lock that ``daemon.start`` created for it with the
-token of its start, and writes its own pid in it.
+token of its start, and writes its own pid in it, holding the takeover file.
 
 Examples
 --------
@@ -32,12 +40,14 @@ Examples
 ...     orchestrator.relaunch(system, 'pes_scf/aa')
 """
 
+import contextlib
 import datetime
 import json
 import logging
 import os
 import secrets
 import socket
+import time
 from pathlib import Path
 
 from triboworkflow.core.store.atomic import write_json
@@ -45,6 +55,10 @@ from triboworkflow.core.store.atomic import write_json
 logger = logging.getLogger(__name__)
 
 LOCK_FILE = 'run.lock'
+# Held by the one process that replaces or rewrites the lock.
+TAKEOVER_FILE = 'run.lock.takeover'
+# Seconds a process waits for another one to end its replacement of the lock.
+TAKEOVER_WAIT = 1.0
 # Text found in the command line of every process of the package.
 PACKAGE = 'triboworkflow'
 FIELDS = ('pid', 'host', 'since', 'command', 'token')
@@ -126,6 +140,42 @@ def _refusal(path, data):
             'background ends with "triboworkflow stop"')
 
 
+@contextlib.contextmanager
+def _takeover(run_dir, poll=0.05):
+    """Hold ``<run>/run.lock.takeover`` while replacing or rewriting the lock of a run.
+
+    The file is created with ``O_EXCL``, so one process at a time changes a
+    lock it does not create. One held for more than ``TAKEOVER_WAIT`` seconds
+    belongs to a process that stopped while replacing the lock: it is never
+    removed here, since whether that process runs is not known.
+
+    Raises
+    ------
+    RunLockError
+        If the file is still there after ``TAKEOVER_WAIT`` seconds.
+    """
+    path = Path(run_dir) / TAKEOVER_FILE
+    deadline = time.monotonic() + TAKEOVER_WAIT
+    while True:
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise RunLockError(
+                    f'{path} exists: another command of the run is replacing its lock, or one '
+                    f'stopped while doing it; remove {path} by hand only after checking that '
+                    'no command of the run runs') from None
+            time.sleep(poll)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            fh.write(json.dumps({'pid': os.getpid(), 'host': socket.gethostname(),
+                                 'since': _now()}) + '\n')
+        yield
+    finally:
+        path.unlink(missing_ok=True)
+
+
 class RunLock:
     """Lock of a run, held by one process at a time.
 
@@ -179,10 +229,13 @@ class RunLock:
                     continue  # removed meanwhile
                 if not _stale(data):
                     raise RunLockError(_refusal(self.path, data)) from None
-                logger.warning('%s left by %s: pid %s no longer runs on %s; the lock is replaced',
-                               self.path, data.get('command'), data.get('pid'), data.get('host'))
-                if _read(self.path) == data:
-                    self.path.unlink(missing_ok=True)
+                with _takeover(self.path.parent):
+                    # Read again: another process may have replaced it meanwhile.
+                    if _read(self.path) == data:
+                        logger.warning('%s left by %s: pid %s no longer runs on %s; the lock is '
+                                       'replaced', self.path, data.get('command'), data.get('pid'),
+                                       data.get('host'))
+                        self.path.unlink(missing_ok=True)
         else:
             raise RunLockError(f'{self.path} was created again meanwhile: another command of '
                                'the run is starting')
@@ -222,12 +275,14 @@ class RunLock:
         Raises
         ------
         RunLockError
-            If the lock is missing or holds another token.
+            If the lock is missing or holds another token, or another
+            process is replacing it.
         """
         lock = cls(run_dir, None, token)
-        data = _read(lock.path)
-        if not data or data.get('token') != token:
-            raise RunLockError(f'{lock.path} is not the one created for this process')
-        lock.command = data.get('command')
-        write_json(lock.path, {**data, 'pid': os.getpid()})
+        with _takeover(run_dir):
+            data = _read(lock.path)
+            if not data or data.get('token') != token:
+                raise RunLockError(f'{lock.path} is not the one created for this process')
+            lock.command = data.get('command')
+            write_json(lock.path, {**data, 'pid': os.getpid()})
         return lock
