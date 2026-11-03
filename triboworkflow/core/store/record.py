@@ -17,8 +17,8 @@ SCF converged, the geometry converged or does not apply, and the output was
 parsed; a parsed output always leaves its results in the record. For whoever
 looks at a calculation, ``Status.summary`` sums the states up in one word.
 The results of a record stand for a calculation only if the record is
-complete, has results, its fingerprint equals the one expected and its
-energy model is fully known (``can_reuse``). Which results each kind of
+complete, has results, its fingerprint equals the one expected, its energy
+model is fully known and its output agrees with it (``can_reuse``). Which results each kind of
 calculation must have is checked by the parser of its engine.
 
 The energy model is written by the engine. A null value in it marks a part
@@ -26,16 +26,26 @@ that is not known, e.g. the expected checksum of a pseudopotential not
 given: the inputs can still be prepared and run, but such a record is never
 reused and its energies are never combined (``check_energy_model``).
 
-The states and the results describe the last run. Each run is also kept as
-an ``Attempt``: where and when it ran, the time limit, the input and the
-output with their digests, the exit code, the state of the job, the reason
-of the stop and the states at its end.
+What the output tells of the energy model is written by the parser in
+``observed``, with the keys and the form of the energy model (e.g. the
+version of the engine, the checksum of each pseudopotential). Each value of
+``observed`` whose key is also in the energy model is compared with it
+(``identity_differences``): an output that differs is kept, with its results
+and its states, but it does not stand for its energy model, so it is never
+reused and its energies are never combined. A parsed output always leaves
+``observed``, empty if the engine observes nothing.
+
+The states, the results and ``observed`` describe the last run. Each run is
+also kept as an ``Attempt``: where and when it ran, the time limit, the input
+and the output with their digests, the exit code, the state of the job, the
+reason of the stop, why its output could not be parsed and the states at its
+end.
 
 Notes
 -----
-The engine version read from the output (``Engine.version``) is recorded and
-not compared here: the version expected, when the engine has one, is part of
-the energy model.
+The engine version read from the output (``Engine.version``) is recorded as
+printed; the engine writes in ``observed`` the form that is compared with
+the version expected.
 """
 
 import copy
@@ -48,7 +58,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from .atomic import StoreError, check_json_value, read_json, write_json
 from .fingerprint import canonical_json, check_fingerprint, content_digest
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 RECORD_FILE = 'record.json'
 
 PROCESS_STATES = ('pending', 'running', 'ended', 'crashed', 'killed')
@@ -58,11 +68,12 @@ PARSING_STATES = ('ok', 'failed')
 SUMMARY_STATES = ('pending', 'running', 'completed', 'not_converged', 'crashed', 'unknown')
 
 _RECORD_KEYS = ('schema_version', 'calc_id', 'system', 'step', 'label', 'calc_type', 'engine',
-                'energy_model', 'fingerprint', 'status', 'attempts', 'results', 'files')
+                'energy_model', 'fingerprint', 'status', 'attempts', 'results', 'observed',
+                'files')
 _STATUS_KEYS = ('process', 'scf', 'geometry', 'parsing')
 _ATTEMPT_KEYS = ('n', 'job_id', 'host', 'started', 'ended', 'max_seconds', 'max_seconds_cap',
                  'input', 'output', 'exit_code', 'job_state', 'stop_reason', 'clean_stop',
-                 'status', 'remedies')
+                 'parse_error', 'status', 'remedies')
 
 
 def check_name(value, where):
@@ -316,6 +327,9 @@ class Attempt:
         Why the run stopped, as read from the output.
     clean_stop : bool or None, optional
         Whether the engine closed the run, as read from the output.
+    parse_error : str or None, optional
+        Why the output could not be parsed, written by the parser; given if
+        and only if ``status.parsing`` is ``'failed'``.
     status : Status, optional
         States of the calculation at the end of this attempt.
     remedies : dict, optional
@@ -337,6 +351,7 @@ class Attempt:
     job_state: str | None = None
     stop_reason: str | None = None
     clean_stop: bool | None = None
+    parse_error: str | None = None
     status: Status = field(default_factory=Status)
     remedies: dict = field(default_factory=dict)
 
@@ -363,6 +378,11 @@ class Attempt:
                              f'not {self.clean_stop!r}')
         if not isinstance(self.status, Status):
             raise StoreError('attempts.status: a Status is required')
+        _optional_text(self.parse_error, 'attempts.parse_error')
+        if (self.parse_error is not None) != (self.status.parsing == 'failed'):
+            raise StoreError(f'attempts.parse_error: {self.parse_error!r} with status.parsing '
+                             f'{self.status.parsing!r}; the reason is given if and only if the '
+                             'parsing failed')
         if not isinstance(self.remedies, dict):
             raise StoreError('attempts.remedies: a JSON object is required')
         check_json_value(self.remedies, 'attempts.remedies')
@@ -377,7 +397,8 @@ class Attempt:
                 'output': None if self.output is None else self.output.to_dict(),
                 'exit_code': self.exit_code, 'job_state': self.job_state,
                 'stop_reason': self.stop_reason, 'clean_stop': self.clean_stop,
-                'status': _status_dict(self.status), 'remedies': copy.deepcopy(self.remedies)}
+                'parse_error': self.parse_error, 'status': _status_dict(self.status),
+                'remedies': copy.deepcopy(self.remedies)}
 
     @classmethod
     def from_dict(cls, data):
@@ -419,6 +440,10 @@ class Record:
         Runs made so far, numbered 1, 2, ... in order.
     results : dict or None, optional
         Results read from the output; None until read.
+    observed : dict or None, optional
+        What the output tells of the energy model, with its keys and form,
+        written by the parser (module notes); None until read, a dict once
+        ``status.parsing`` is ``'ok'``.
     files : dict, optional
         {role: file name relative to the calculation directory}, e.g.
         ``{'input': 'input.pwi', 'output': 'output.pwo'}``.
@@ -439,6 +464,7 @@ class Record:
     status: Status = field(default_factory=Status)
     attempts: tuple = ()
     results: dict | None = None
+    observed: dict | None = None
     files: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -468,6 +494,13 @@ class Record:
         elif self.status.parsing == 'ok':
             raise StoreError('status.parsing is "ok" but results is null: a parsed output must '
                              'leave its results in the record')
+        if self.observed is not None:
+            if not isinstance(self.observed, dict):
+                raise StoreError('observed: a JSON object or null is required')
+            check_json_value(self.observed, 'observed')
+        elif self.status.parsing == 'ok':
+            raise StoreError('status.parsing is "ok" but observed is null: a parsed output must '
+                             'leave what it tells of the energy model in the record')
         if not isinstance(self.files, dict):
             raise StoreError('files: a JSON object is required')
         for role, name in self.files.items():
@@ -476,6 +509,7 @@ class Record:
         object.__setattr__(self, 'energy_model', copy.deepcopy(self.energy_model))
         object.__setattr__(self, 'attempts', attempts)
         object.__setattr__(self, 'results', copy.deepcopy(self.results))
+        object.__setattr__(self, 'observed', copy.deepcopy(self.observed))
         object.__setattr__(self, 'files', dict(self.files))
 
     @property
@@ -513,6 +547,7 @@ class Record:
             'status': _status_dict(self.status),
             'attempts': [a.to_dict() for a in self.attempts],
             'results': copy.deepcopy(self.results),
+            'observed': copy.deepcopy(self.observed),
             'files': dict(self.files),
         }
 
@@ -548,7 +583,8 @@ class Record:
                          calc_type=data['calc_type'], engine=Engine(**engine),
                          energy_model=data['energy_model'], fingerprint=data['fingerprint'],
                          status=Status(**status), attempts=tuple(attempts),
-                         results=data['results'], files=data['files'])
+                         results=data['results'], observed=data['observed'],
+                         files=data['files'])
             if data['calc_id'] != record.calc_id:
                 raise StoreError(f'calc_id: {data["calc_id"]!r} is not "<step>/<label>" '
                                  f'= {record.calc_id!r}')
@@ -642,6 +678,46 @@ def unknown_parts(energy_model):
     return found
 
 
+def identity_differences(record):
+    """Where the output of a record differs from its energy model.
+
+    Each value of ``record.observed`` is compared with the value at the same
+    path of ``record.energy_model``; keys that the energy model does not have
+    are not compared. Two lists of different length differ as a whole.
+
+    Parameters
+    ----------
+    record : Record
+
+    Returns
+    -------
+    list of str
+        One sentence per difference, e.g. ``"species[0].md5: expected 'ab...',
+        observed 'cd...'"``; empty when nothing differs or nothing was
+        observed.
+    """
+    found = []
+
+    def compare(expected, observed, path):
+        if isinstance(observed, dict) and isinstance(expected, dict):
+            for key, item in observed.items():
+                if key in expected:
+                    compare(expected[key], item, f'{path}.{key}' if path else key)
+        elif isinstance(observed, list) and isinstance(expected, list):
+            if len(observed) != len(expected):
+                found.append(f'{path}: expected {len(expected)} entries, observed '
+                             f'{len(observed)}')
+            else:
+                for i, (e, o) in enumerate(zip(expected, observed)):
+                    compare(e, o, f'{path}[{i}]')
+        elif observed != expected:
+            found.append(f'{path}: expected {expected!r}, observed {observed!r}')
+
+    if record.observed is not None:
+        compare(record.energy_model, record.observed, '')
+    return found
+
+
 def reuse_problem(record, fingerprint):
     """Why a record does not stand for a calculation with the given fingerprint.
 
@@ -667,6 +743,9 @@ def reuse_problem(record, fingerprint):
     unknown = unknown_parts(record.energy_model)
     if unknown:
         return f'energy model not known ({", ".join(unknown)})'
+    differences = identity_differences(record)
+    if differences:
+        return f'output of another energy model ({"; ".join(differences)})'
     return None
 
 
@@ -683,8 +762,9 @@ def can_reuse(record, fingerprint):
     Returns
     -------
     bool
-        True only for a complete record with that fingerprint, with results
-        and with an energy model fully known (``unknown_parts`` empty).
+        True only for a complete record with that fingerprint, with results,
+        with an energy model fully known (``unknown_parts`` empty) and an
+        output that agrees with it (``identity_differences`` empty).
     """
     return reuse_problem(record, fingerprint) is None
 
@@ -694,14 +774,17 @@ def check_energy_model(records):
 
     The energy model of a record is its engine (name and program) together
     with its ``energy_model``. A model with parts not known
-    (``unknown_parts``) is never shared, not even with an identical one.
+    (``unknown_parts``) is never shared, not even with an identical one, and
+    neither is a record whose output differs from its model
+    (``identity_differences``).
 
     Raises
     ------
     StoreError
-        If a record has parts of its energy model not known, or the records
-        have more than one energy model; the message lists the calculations
-        and the parts not known, or the calculations of each model.
+        If a record has parts of its energy model not known or an output of
+        another model, or the records have more than one energy model; the
+        message lists the calculations and the parts not known or the
+        differences, or the calculations of each model.
     """
     records = list(records)
     unknown = []
@@ -712,6 +795,14 @@ def check_energy_model(records):
     if unknown:
         raise StoreError('energies of an energy model not known cannot be combined: '
                          f'{"; ".join(unknown)}')
+    other = []
+    for record in records:
+        differences = identity_differences(record)
+        if differences:
+            other.append(f'{record.calc_id} ({"; ".join(differences)})')
+    if other:
+        raise StoreError('energies of outputs of another energy model cannot be combined: '
+                         f'{"; ".join(other)}')
     groups = {}
     for record in records:
         key = (record.engine.name, record.engine.program, canonical_json(record.energy_model))

@@ -59,11 +59,13 @@ def make_record(step='pes_scf', label='aa', fingerprint=FP_A, status=None, resul
         results = {'nsites': 4,
                    'output': {'energy': -10.5, 'structure': {'@class': 'Structure', 'id': label}},
                    'input': {'structure': {'@class': 'Structure', 'id': 'in'}}}
+    if status.parsing == 'ok':
+        kwargs.setdefault('observed', {'ecutwfc': 40.0})
+    kwargs.setdefault('energy_model', {'pseudopotentials': {'Cu': FP_B, 'Ni': FP_B},
+                                       'ecutwfc': 40.0, 'ecutrho': 320.0, 'kpoints': [6, 6, 1],
+                                       'smearing': 'mv', 'nspin': 1, 'vdw_corr': 'none'})
     return store.Record(system=SYSTEM, step=step, label=label, calc_type='slab_from_scratch',
                         engine=store.Engine('qe', 'pw.x', '7.2'),
-                        energy_model={'pseudopotentials': {'Cu': FP_B, 'Ni': FP_B},
-                                      'ecutwfc': 40.0, 'ecutrho': 320.0, 'kpoints': [6, 6, 1],
-                                      'smearing': 'mv', 'nspin': 1, 'vdw_corr': 'none'},
                         fingerprint=fingerprint, status=status, results=results,
                         files={'input': 'input.pwi', 'output': 'output.pwo'}, **kwargs)
 
@@ -314,17 +316,19 @@ def test_record_round_trip(system_dir):
     data = read_json(path)
     assert list(data) == ['schema_version', 'calc_id', 'system', 'step', 'label', 'calc_type',
                           'engine', 'energy_model', 'fingerprint', 'status', 'attempts',
-                          'results', 'files']
-    assert data['calc_id'] == 'pes_scf/aa' and data['schema_version'] == 2
+                          'results', 'observed', 'files']
+    assert data['calc_id'] == 'pes_scf/aa' and data['schema_version'] == 3
+    assert data['observed'] == {'ecutwfc': 40.0}
     assert list(data['attempts'][0]) == ['n', 'job_id', 'host', 'started', 'ended',
                                          'max_seconds', 'max_seconds_cap', 'input', 'output',
                                          'exit_code', 'job_state', 'stop_reason', 'clean_stop',
-                                         'status', 'remedies']
+                                         'parse_error', 'status', 'remedies']
     assert data['attempts'][0]['input'] == {'path': 'attempts/1/run.pwi', 'digest': DIGEST}
     assert data['attempts'][1] == {
         'n': 2, 'job_id': '4522', 'host': None, 'started': None, 'ended': None,
         'max_seconds': None, 'max_seconds_cap': None, 'input': None, 'output': None,
         'exit_code': None, 'job_state': None, 'stop_reason': None, 'clean_stop': None,
+        'parse_error': None,
         'status': {'process': None, 'scf': None, 'geometry': None, 'parsing': None},
         'remedies': {}}
     assert store.read_record(system_dir, 'pes_scf/aa') == record
@@ -428,7 +432,8 @@ INVALID_RECORDS = [
     ('unknown key', lambda d: d.update(extra=1)),
     ('missing key', lambda d: d.pop('files')),
     ('schema version 1', lambda d: d.update(schema_version=1)),
-    ('schema version 3', lambda d: d.update(schema_version=3)),
+    ('schema version 2', lambda d: d.update(schema_version=2)),
+    ('schema version 4', lambda d: d.update(schema_version=4)),
     ('schema version bool', lambda d: d.update(schema_version=True)),
     ('calc_id', lambda d: d.update(calc_id='pes_scf/ab')),
     ('step with slash', lambda d: d.update(step='pes/scf', calc_id='pes/scf/aa')),
@@ -451,6 +456,11 @@ INVALID_RECORDS = [
     ('attempt number', lambda d: with_attempt(d, lambda a: a.update(n=2))),
     ('attempt unknown key', lambda d: with_attempt(d, lambda a: a.update(pid=12))),
     ('results type', lambda d: d.update(results=[1])),
+    ('observed type', lambda d: d.update(observed=[1])),
+    ('observed null once parsed', lambda d: d.update(observed=None)),
+    ('observed key missing', lambda d: d.pop('observed')),
+    ('attempt parse error without failure',
+     lambda d: with_attempt(d, lambda a: a.update(parse_error='no energy'))),
     ('absolute file', lambda d: d['files'].update(output='/tmp/output.pwo')),
     ('file outside', lambda d: d['files'].update(output='../output.pwo')),
     ('empty calc_type', lambda d: d.update(calc_type='')),
@@ -552,6 +562,97 @@ def test_energy_models_are_not_mixed():
     engine = dataclasses.replace(second, engine=store.Engine('cp2k', 'cp2k.psmp'))
     with pytest.raises(StoreError):
         store.check_energy_model([first, engine])
+
+
+# -- what the output tells of the energy model ----------------------------------
+
+MODEL = {'version': '7.2', 'species': [{'label': 'Cu', 'pseudopotential': 'Cu.UPF', 'md5': 'a' * 32},
+                                       {'label': 'Ni', 'pseudopotential': 'Ni.UPF', 'md5': 'b' * 32}],
+         'k_points': {'mode': 'kdens', 'kdens': 12.0}}
+
+
+def observed_record(observed, energy_model=MODEL, label='aa'):
+    return make_record(label=label, energy_model=energy_model, observed=observed)
+
+
+def species(md5_ni='b' * 32, **ni):
+    return [{'label': 'Cu', 'pseudopotential': 'Cu.UPF', 'md5': 'a' * 32, 'path': '/p/Cu.UPF'},
+            {'label': 'Ni', 'pseudopotential': 'Ni.UPF', 'md5': md5_ni, 'path': '/p/Ni.UPF', **ni}]
+
+
+@pytest.mark.parametrize('observed, differences', [
+    ({}, []),
+    ({'version': '7.2', 'species': species()}, []),
+    # Keys that the energy model does not have are not compared.
+    ({'version': '7.2', 'species': species(), 'host': 'leonardo'}, []),
+    ({'version': '7.3', 'species': species()}, ["version: expected '7.2', observed '7.3'"]),
+    ({'version': '7.2', 'species': species(md5_ni='c' * 32)},
+     [f"species[1].md5: expected '{'b' * 32}', observed '{'c' * 32}'"]),
+    ({'species': species(md5_ni=None)}, [f"species[1].md5: expected '{'b' * 32}', observed None"]),
+    ({'species': species(label='Ni1')}, ["species[1].label: expected 'Ni', observed 'Ni1'"]),
+    ({'species': species()[:1]}, ['species: expected 2 entries, observed 1']),
+    ({'k_points': 'kdens'}, ["k_points: expected {'mode': 'kdens', 'kdens': 12.0}, observed "
+                             "'kdens'"]),
+])
+def test_identity_differences(observed, differences):
+    record = observed_record(observed)
+    assert store.identity_differences(record) == differences
+    assert store.can_reuse(record, FP_A) == (not differences)
+    if differences:
+        assert store.reuse_problem(record, FP_A) == \
+            f'output of another energy model ({"; ".join(differences)})'
+
+
+def test_nothing_observed_before_the_output_is_parsed():
+    record = make_record(status=store.Status('ended', 'converged', 'n/a', None), results=None,
+                         energy_model=MODEL)
+    assert record.observed is None and store.identity_differences(record) == []
+
+
+def test_energy_model_not_known_is_told_before_the_differences():
+    model = {**MODEL, 'version': None}
+    record = observed_record({'version': '7.2', 'species': species(md5_ni='c' * 32)}, model)
+    assert store.reuse_problem(record, FP_A) == 'energy model not known (version)'
+
+
+def test_energies_of_an_output_of_another_energy_model_are_not_combined():
+    same = [observed_record({'version': '7.2', 'species': species()}, label=label)
+            for label in ('aa', 'ab')]
+    store.check_energy_model(same)
+    other = observed_record({'version': '7.3.1', 'species': species()}, label='ac')
+    with pytest.raises(StoreError, match="outputs of another energy model cannot be combined: "
+                                         "pes_scf/ac \\(version: expected '7.2', observed "
+                                         "'7.3.1'\\)"):
+        store.check_energy_model(same + [other])
+
+
+def test_observed_round_trip(system_dir):
+    record = observed_record({'version': '7.2', 'species': species()})
+    store.write_record(system_dir, record)
+    assert store.read_record(system_dir, 'pes_scf/aa').observed == record.observed
+    data = record.to_dict()
+    data['observed']['version'] = '0.0'
+    assert record.observed['version'] == '7.2'
+
+
+@pytest.mark.parametrize('parsing, parse_error', [('failed', 'no total energy'), (None, None),
+                                                  ('ok', None)])
+def test_attempt_parse_error_with_a_failed_parsing_only(parsing, parse_error):
+    attempt = full_attempt(status=store.Status('ended', 'converged', 'n/a', parsing),
+                           parse_error=parse_error)
+    assert store.Attempt.from_dict(attempt.to_dict()) == attempt
+
+
+@pytest.mark.parametrize('parsing, parse_error, message', [
+    ('failed', None, 'given if and only if the parsing failed'),
+    ('ok', 'no total energy', 'given if and only if the parsing failed'),
+    (None, 'no total energy', 'given if and only if the parsing failed'),
+    ('failed', '', 'attempts.parse_error: a non-empty string'),
+])
+def test_attempt_rejects_a_parse_error_without_a_failed_parsing(parsing, parse_error, message):
+    with pytest.raises(StoreError, match=message):
+        full_attempt(status=store.Status('ended', 'converged', 'n/a', parsing),
+                     parse_error=parse_error)
 
 
 # An energy model whose expected version and checksum of one pseudopotential are not known.
@@ -1176,6 +1277,10 @@ def test_tasks_view_is_read_only_and_complete(system_dir):
         db.query_db(legacy.TASKS, fltr=task)
     store.write_record(system_dir, make_record(label='aa', results={'task_label': 'x'}))
     with pytest.raises(StoreError, match='cannot hold'):
+        db.query_db(legacy.TASKS, fltr=task)
+    store.write_record(system_dir, make_record(label='aa', observed={'ecutwfc': 45.0}))
+    with pytest.raises(StoreError, match="another energy model \\(ecutwfc: expected 40.0, "
+                                         "observed 45.0\\)"):
         db.query_db(legacy.TASKS, fltr=task)
 
 

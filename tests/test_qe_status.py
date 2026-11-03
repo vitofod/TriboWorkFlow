@@ -285,25 +285,37 @@ def test_unknown_calculation_is_an_error():
 
 
 @pytest.mark.parametrize('version, validated', [('7.1', True), ('7.2', True), ('7.3', False),
-                                                ('7.3.1', False)])
+                                                ('7.3.1', False), ('7.2.2', True)])
 def test_supported_versions(version, validated):
     status = pw_status(text(header(version), scf_cycle('converged'), JOB_DONE), 'scf')
-    assert (status.version, status.version_validated) == (version, validated)
+    assert (status.version, status.version_supported, status.version_validated) == \
+        (version, True, validated)
+    assert qe.version_warning(version) is None
 
 
-@pytest.mark.parametrize('version', ['6.8', '7.0', '7.4', '8.1', '7', 'x.y', ''])
-def test_other_versions_are_an_error(version):
-    with pytest.raises(PwOutputError, match='version'):
-        pw_status(text(header(version), scf_cycle('converged'), JOB_DONE), 'scf')
+@pytest.mark.parametrize('version', ['6.8', '7.0', '7.4', '8.1', '8.0.1', '7', 'x.y'])
+def test_other_versions_are_read_with_a_warning(version):
+    status = pw_status(text(header(version), scf_cycle('converged'), JOB_DONE), 'scf')
+    assert (status.version, status.process, status.scf, status.stop_reason) == \
+        (version, 'ended', 'converged', 'completed')
+    assert not status.version_supported and not status.version_validated
+    assert qe.version_warning(version) == (
+        f'pw.x {version}: the workflow is built to work with QE 7.1.x, 7.2.x, 7.3.x; with '
+        f'version {version} the results are not guaranteed and may hold errors: check them')
+
+
+def test_header_without_a_version_is_an_error():
+    with pytest.raises(PwOutputError, match='no version'):
+        pw_status(text(header(''), scf_cycle('converged'), JOB_DONE), 'scf')
 
 
 def test_version_is_that_of_the_last_run():
     old = text(header('6.8'), scf_cycle('converged'), JOB_DONE)
     new = text(header('7.2'), scf_cycle('converged'), JOB_DONE)
     status = pw_status(old + new, 'scf')
-    assert (status.version, status.runs) == ('7.2', 2)
-    with pytest.raises(PwOutputError, match="'6.8'"):
-        pw_status(new + old, 'scf')
+    assert (status.version, status.runs, status.version_supported) == ('7.2', 2, True)
+    status = pw_status(new + old, 'scf')
+    assert (status.version, status.runs, status.version_supported) == ('6.8', 2, False)
 
 
 def test_read_pw_status_from_a_file(tmp_path):

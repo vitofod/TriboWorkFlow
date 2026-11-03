@@ -225,6 +225,20 @@ def test_advice_on_the_values_changed_by_the_relaunches(edits, notes, caplog):
     assert [record.getMessage() for record in caplog.records] == notes
 
 
+@pytest.mark.parametrize('version, warned', [
+    ('7.1', False), ('7.2', False), ('7.3', False), ('7.1.2', False), ('7.3.1', False),
+    ('7.0', True), ('7.4', True), ('8.0', True), ('8.1.2', True), ('6.8', True),
+])
+def test_qe_versions_accepted_with_a_warning_outside_those_supported(version, warned, caplog):
+    caplog.set_level('WARNING')
+    settings = settings_from_dict(edited(WORKFLOW, {'qe.version': version}))
+    assert settings.qe.version == version
+    notes = [record.getMessage() for record in caplog.records]
+    assert notes == ([f"qe.version = '{version}': the workflow is built to work with QE 7.1.x, "
+                      f'7.2.x, 7.3.x; with version {version} the results are not guaranteed and '
+                      'may hold errors: check them'] if warned else [])
+
+
 @pytest.mark.parametrize('k_points', [
     {'mode': 'gamma'},
     {'mode': 'automatic', 'grid': [8, 8, 1], 'offset': [1, 1, 0]},
@@ -434,7 +448,10 @@ ERRORS = [
     ('inter-params-key', W, {'interface.inter_params.vacuum': 15.0}, 'interface.inter_params.vacuum',
      'allowed keys: max_area, '),
     # [qe]
-    ('qe-version', W, {'qe.version': '6.8'}, 'qe.version', "'6.8' is not allowed"),
+    ('qe-version', W, {'qe.version': '7.2MaX'}, 'qe.version',
+     "'7.2MaX' is not a version of pw.x: give major.minor or major.minor.patch"),
+    ('qe-version-one-part', W, {'qe.version': '7'}, 'qe.version', 'not a version of pw.x'),
+    ('qe-version-v', W, {'qe.version': 'v.7.2'}, 'qe.version', 'not a version of pw.x'),
     ('qe-version-number', W, {'qe.version': 7.2}, 'qe.version', 'expected str, got 7.2'),
     ('qe-version-missing', W, {'qe.version': DELETE}, 'qe.version',
      'required by the steps that run pw.x'),

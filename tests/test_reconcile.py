@@ -11,9 +11,12 @@ leaves. The other schedulers are read from a registry written by the test.
 
 import pytest
 
+import pwo_helpers as pwo
 from run_helpers import (DROP, HEADER, POLL, SCF_DONE, SCF_MAX_SECONDS, SCF_TRUNCATED, SINCE,
                          SYSTEM, Run, text)
 from triboworkflow.core import store
+from triboworkflow.core.structures import extxyz_text
+from triboworkflow.engines.qe.results import RY_TO_EV
 from triboworkflow.execution import layout
 from triboworkflow.execution.archive import archive_attempt
 from triboworkflow.execution.jobs import Launch
@@ -113,17 +116,46 @@ def test_job_queued_or_running_is_followed_without_copies(run):
 
 def test_finished_and_reusable_is_recorded_as_completed(run):
     # The worker was killed after pw.x closed the run, before writing its end.
+    # The output has no header and the directory no input structure: the
+    # results are not read, and the calculation is completed all the same.
     calc_id, job_id = started(run, 'TIMEOUT', output=SCF_DONE)
     state = run.reconcile(calc_id)
     assert (state.state, state.fixed, state.released) == ('completed', True, False)
     (attempt,) = run.record(calc_id).attempts
-    assert attempt.status == run.record(calc_id).status == store.Status('ended', 'converged', 'n/a')
+    assert attempt.status == run.record(calc_id).status == \
+        store.Status('ended', 'converged', 'n/a', 'failed')
+    assert attempt.parse_error.startswith('input structure not read: ')
+    assert run.record(calc_id).results is None
     assert (attempt.job_state, attempt.stop_reason, attempt.clean_stop) == ('TIMEOUT', 'completed',
                                                                           True)
     assert (attempt.exit_code, attempt.ended) == (None, None)
     path = run.path(calc_id)
     assert attempt.output == store.AttemptFile('output.pwo', store.file_digest(path / 'output.pwo'))
     assert attempt.input == store.AttemptFile('run.pwi', store.file_digest(path / 'run.pwi'))
+
+
+def test_results_read_when_the_attempt_is_fixed(run, caplog):
+    s = pwo.structure()
+    calc_id = run.calc()
+    (run.path(calc_id) / layout.STRUCTURE_IN_FILE).write_text(extxyz_text(s))
+    (job_id,) = run.group('g1', Launch.initial(SYSTEM, calc_id))
+    run.poll(**{job_id: 'RUNNING'})
+    run.start(calc_id, job_id, output=pwo.pw_output(s, version='8.0', forces=pwo_forces(s)))
+    run.poll(60, **{job_id: 'TIMEOUT'})
+    caplog.set_level('WARNING')
+    assert run.reconcile(calc_id).state == 'completed'
+    record = run.record(calc_id)
+    assert record.status == store.Status('ended', 'converged', 'n/a', 'ok')
+    assert record.attempts[-1].parse_error is None
+    assert record.results['output']['energy'] == -31.1 * RY_TO_EV
+    assert (record.engine.version, record.observed['version']) == ('8.0', '8.0')
+    assert (run.path(calc_id) / layout.STRUCTURE_OUT_FILE).is_file()
+    assert any('pw.x 8.0: the workflow is built to work with QE 7.1.x, 7.2.x, 7.3.x'
+               in r.getMessage() for r in caplog.records)
+
+
+def pwo_forces(s):
+    return [(0.001, 0.0, -0.001)] * len(s)
 
 
 @pytest.mark.parametrize('job_state, process, outcome', [

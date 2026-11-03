@@ -23,7 +23,8 @@ running it are six steps, each completed before the next begins:
    attempt ``n`` was made in the meantime;
 2. the record gets attempt ``n`` with the job, the host, the start time, the
    time limit and the launch of the manifest (kind, level and parameters
-   changed, in ``remedies``), and the process ``running``;
+   changed, in ``remedies``), and the process ``running``; the results,
+   ``observed`` and the engine version of the previous run are cleared;
 3. ``run.pwi`` is written: ``input.pwi`` with ``max_seconds`` set to the
    time limit of the attempt; ``input.pwi`` is never changed;
 4. ``output.pwo`` is created with ``O_EXCL``: an output already there belongs
@@ -31,11 +32,16 @@ running it are six steps, each completed before the next begins:
 5. ``<run_command> -in run.pwi >> output.pwo`` runs in the calculation
    directory, with bash;
 6. the record gets the end time, the exit code, the digests of the two
-   files, the states read from the output, the reason of the stop and
-   whether pw.x closed the run. An output without a closing line gives the
-   process ``crashed``, since the worker saw the command end; so does an
-   empty output. An output that cannot be read as pw.x output leaves the
-   states unknown.
+   files, the states read from the output, the reason of the stop, whether
+   pw.x closed the run and the version it printed. An output without a
+   closing line gives the process ``crashed``, since the worker saw the
+   command end; so does an empty output. An output that cannot be read as
+   pw.x output leaves the states unknown. When the calculation is over with
+   the SCF and the geometry converged, its results are read
+   (``parsing.py``): the record gets ``parsing``, the results and
+   ``observed``, and ``structure_out.extxyz`` is written; an output that
+   cannot be parsed leaves the reason in the attempt. A version of pw.x
+   outside 7.1.x-7.3.x is read with a warning in the log.
 
 The claim, ``run.pwi`` and ``output.pwo`` stay in place: they are moved to
 ``attempts/<n>/`` and the claim removed only by the archiving of the attempt
@@ -83,12 +89,14 @@ from ase.io.espresso import read_fortran_namelist
 
 from triboworkflow.core.store import (Attempt, AttemptFile, Status, file_digest, read_record,
                                       write_record)
+from triboworkflow.engines.qe.results import Parsed
 from triboworkflow.engines.qe.status import (CALCULATIONS, PwOutputError, read_pw_status,
-                                             record_status)
+                                             record_status, version_warning)
 
 from .jobs import read_manifest
 from .layout import (CLAIM_FILE, INPUT_FILE, OUTPUT_FILE, RUN_INPUT_FILE, calc_dir,
                      system_dir)
+from .parsing import parse_calculation, with_parsed
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +357,8 @@ class Worker:
                           status=Status(process='running'), remedies=launch.remedies())
         write_record(system_dir(self.run_dir, system),
                      dataclasses.replace(record, status=Status(process='running'), results=None,
+                                         observed=None,
+                                         engine=dataclasses.replace(record.engine, version=None),
                                          attempts=record.attempts + (attempt,)))
         # 3. Input of the attempt.
         (path / RUN_INPUT_FILE).write_text(run_text)
@@ -413,8 +423,15 @@ class Worker:
         return run_text, calculation, max_seconds, cap
 
     def _finish(self, system, calc_id, path, n, calculation, exit_code):
-        """Write the end of attempt ``n`` in the record."""
+        """Write the end of attempt ``n`` in the record, with the results of its output."""
         ended = _now()
+        sdir = system_dir(self.run_dir, system)
+        record = read_record(sdir, calc_id)
+        last = record.attempts[-1] if record.attempts else None
+        if last is None or last.n != n:
+            raise WorkerError(f'{system}/{calc_id}: the last attempt in the record is not '
+                              f'{n}; the end of attempt {n} is not written')
+        version = None
         try:
             pw = read_pw_status(path / OUTPUT_FILE, calculation)
         except PwOutputError as error:
@@ -427,19 +444,24 @@ class Worker:
         else:
             status, stop_reason, clean_stop = record_status(pw, 'finished'), pw.stop_reason, \
                 pw.clean_stop
-        sdir = system_dir(self.run_dir, system)
-        record = read_record(sdir, calc_id)
-        last = record.attempts[-1] if record.attempts else None
-        if last is None or last.n != n:
-            raise WorkerError(f'{system}/{calc_id}: the last attempt in the record is not '
-                              f'{n}; the end of attempt {n} is not written')
+            version = pw.version
+            note = version_warning(version)
+            if note is not None:
+                logger.warning('%s/%s: %s', system, calc_id, note)
+        parsed = Parsed(None)
+        if status.summary == 'completed':
+            try:
+                parsed = parse_calculation(path, calculation, record.energy_model)
+            except (OSError, PwOutputError) as error:
+                parsed = Parsed('failed', reason=f'output not read: {error}')
+            if parsed.parsing == 'failed':
+                logger.warning('%s/%s: output not parsed: %s', system, calc_id, parsed.reason)
         done = dataclasses.replace(
             last, ended=ended, exit_code=exit_code,
             input=AttemptFile(RUN_INPUT_FILE, file_digest(path / RUN_INPUT_FILE)),
             output=AttemptFile(OUTPUT_FILE, file_digest(path / OUTPUT_FILE)),
             stop_reason=stop_reason, clean_stop=clean_stop, status=status)
-        write_record(sdir, dataclasses.replace(record, status=status,
-                                               attempts=record.attempts[:-1] + (done,)))
+        write_record(sdir, with_parsed(record, done, parsed, version))
 
 
 def main(argv=None):

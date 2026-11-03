@@ -334,7 +334,7 @@ def record(settings, label='aa'):
                         engine=store.Engine('qe', 'pw.x', '7.2'), energy_model=model,
                         fingerprint=input_fingerprint(pw, model),
                         status=store.Status('ended', 'converged', 'converged', 'ok'),
-                        results={'energy': -10.0})
+                        results={'energy': -10.0}, observed={})
 
 
 @pytest.mark.parametrize('version, md5, problem', [

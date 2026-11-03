@@ -28,8 +28,8 @@ from .atomic import StoreError, check_json_value, read_json, write_json, write_t
 from .fingerprint import (canonical_json, check_fingerprint, content_digest, file_digest,
                           fingerprint)
 from .record import (Attempt, AttemptFile, Engine, Record, Status, can_reuse,
-                     check_energy_model, iter_records, read_record, record_path, reuse_problem,
-                     unknown_parts, write_record)
+                     check_energy_model, identity_differences, iter_records, read_record,
+                     record_path, reuse_problem, unknown_parts, write_record)
 from .system import (LockError, PrerequisiteError, Provenance, SystemDocument, SystemWriter,
                      check_prerequisites, entry_is_current, is_done, read_system)
 
@@ -37,6 +37,7 @@ __all__ = ['Attempt', 'AttemptFile', 'Engine', 'LockError', 'PrerequisiteError',
            'Status', 'StoreError', 'SystemDocument', 'SystemWriter', 'can_reuse',
            'canonical_json', 'check_energy_model', 'check_fingerprint', 'check_json_value',
            'check_prerequisites', 'content_digest', 'entry_is_current', 'file_digest',
-           'fingerprint', 'is_done', 'iter_records', 'read_json', 'read_record', 'read_system',
+           'fingerprint', 'identity_differences', 'is_done', 'iter_records', 'read_json',
+           'read_record', 'read_system',
            'record_path', 'reuse_problem', 'unknown_parts', 'write_json', 'write_record',
            'write_text']

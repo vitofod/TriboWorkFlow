@@ -54,10 +54,13 @@ explicitly, and is used only where the output says nothing.
 
 Notes
 -----
-Versions 7.1, 7.2 and 7.3 are read; any other version is an error. The
-lines were checked on real outputs of 7.1 and 7.2. Those of the step limit,
-of ``max_seconds``, of a stop by request and of a failed optimizer come from
-the source code of 7.2 and were not checked on real outputs.
+The workflow is built for versions 7.1.x, 7.2.x and 7.3.x
+(``SUPPORTED_VERSIONS``). The outputs of any other version are read with the
+same lines; ``version_warning`` gives the warning the callers log for them,
+since the results are not guaranteed. The lines were checked on real outputs
+of 7.1 and 7.2. Those of the step limit, of ``max_seconds``, of a stop by
+request and of a failed optimizer come from the source code of 7.2 and were
+not checked on real outputs.
 
 The checks start from those of Xsorb (``xsorb/calculations/results.py``,
 geometry optimizations) and SCS (``labelling/QuantumEspresso/qe.py``, SCF).
@@ -193,9 +196,34 @@ class PwStatus:
         return self.process == 'ended'
 
     @property
+    def version_supported(self):
+        """True when the version is one the workflow is built for (``SUPPORTED_VERSIONS``)."""
+        return _release(self.version) in SUPPORTED_VERSIONS
+
+    @property
     def version_validated(self):
         """True when the version is one checked on real outputs."""
         return _release(self.version) in VALIDATED_VERSIONS
+
+
+def version_warning(version):
+    """Warning for the output of a version of pw.x the workflow is not built for.
+
+    Parameters
+    ----------
+    version : str
+        Version printed by pw.x (``PwStatus.version``).
+
+    Returns
+    -------
+    str or None
+        The message, None for a ``7.1.x``, ``7.2.x`` or ``7.3.x``.
+    """
+    if _release(version) in SUPPORTED_VERSIONS:
+        return None
+    return (f'pw.x {version}: the workflow is built to work with QE '
+            f'{", ".join(v + ".x" for v in SUPPORTED_VERSIONS)}; with version {version} the '
+            'results are not guaranteed and may hold errors: check them')
 
 
 def _release(version):
@@ -235,9 +263,8 @@ def _last_run(text):
         raise PwOutputError(f'no "{_RUN_START}" line: not a pw.x output')
     run = lines[starts[-1]:]
     version = run[0].lstrip()[len(_RUN_START):].split(' starts')[0].strip()
-    if _release(version) not in SUPPORTED_VERSIONS:
-        raise PwOutputError(f'pw.x version {version!r} of the last run is not read; '
-                            f'versions read: {", ".join(SUPPORTED_VERSIONS)}')
+    if not version:
+        raise PwOutputError(f'no version after "{_RUN_START}" in the header of the last run')
     return run, version, len(starts)
 
 
@@ -376,9 +403,10 @@ def pw_status(text, calculation):
     ValueError
         If ``calculation`` is not ``'scf'`` or ``'relax'``.
     PwOutputError
-        If the text has no pw.x header, the version of the last run is not
-        one of ``SUPPORTED_VERSIONS``, or the summary of the run disagrees
-        with ``calculation``.
+        If the text has no pw.x header, the header of the last run has no
+        version, or the summary of the run disagrees with ``calculation``.
+        A version outside ``SUPPORTED_VERSIONS`` is read
+        (``version_warning``).
     """
     if calculation not in CALCULATIONS:
         raise ValueError(f'calculation: {calculation!r} is not one of {", ".join(CALCULATIONS)}')

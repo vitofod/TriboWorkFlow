@@ -17,11 +17,15 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+import pwo_helpers as pwo
 from triboworkflow.core import store
+from triboworkflow.core.structures import extxyz_text, read_structure
 from triboworkflow.execution import layout
-from triboworkflow.execution.jobs import MANIFEST_FILE, Launch, Manifest, write_job
+from triboworkflow.execution.archive import archive_attempt
+from triboworkflow.execution.jobs import MANIFEST_FILE, Launch, Manifest, read_manifest, write_job
 from triboworkflow.execution.worker import (Worker, WorkerError, job_id_from_environment,
                                             read_input, restart_count_from_environment,
                                             with_max_seconds)
@@ -237,7 +241,7 @@ def test_attempt_recorded(run):
     record = record_of(run, 'aa')
     (attempt,) = record.attempts
     assert attempt.remedies == {'kind': 'initial', 'level': 1, 'values': {}, 'initial_values': {}}
-    assert record.status == attempt.status == store.Status('ended', 'converged', 'n/a')
+    assert record.status == attempt.status == store.Status('ended', 'converged', 'n/a', 'failed')
     assert (attempt.n, attempt.job_id, attempt.max_seconds, attempt.max_seconds_cap) == \
         (1, '4521', WALLTIME - MARGIN - 101, None)
     assert attempt.host == worker.host and attempt.started <= attempt.ended
@@ -247,7 +251,11 @@ def test_attempt_recorded(run):
                                                store.file_digest(path / layout.OUTPUT_FILE))
     assert (attempt.exit_code, attempt.job_state, attempt.stop_reason, attempt.clean_stop) == \
         (0, None, 'completed', True)
-    assert record.results is None
+    # A synthetic output without header and no input structure: not parsed.
+    assert record.status.parsing == 'failed'
+    assert attempt.parse_error.startswith('input structure not read: ')
+    assert record.results is None and record.observed is None
+    assert record.engine.version == '7.2'
 
 
 @posix_only
@@ -342,6 +350,105 @@ def test_output_that_is_not_pw_output(run, caplog):
     assert attempt.status == store.Status() and record_of(run, 'aa').status == store.Status()
     assert (attempt.exit_code, attempt.stop_reason, attempt.clean_stop) == (139, None, None)
     assert 'pes_scf/aa' in caplog.text
+
+
+# --- results of the output -------------------------------------------------------------
+
+FORCES = ((0.001, -0.002, 0.003), (-0.001, 0.002, -0.003))
+
+
+def with_structure(run, s, label='aa'):
+    """``structure_in.extxyz`` of ``s`` in the directory of a calculation built by ``run``."""
+    (calc_path(run, label) / layout.STRUCTURE_IN_FILE).write_text(extxyz_text(s))
+
+
+@posix_only
+@pytest.mark.parametrize('calculation', ['scf', 'relax'])
+def test_results_read_at_the_end_of_the_attempt(run, calculation, caplog):
+    s = pwo.structure(if_pos=[[1, 1, 1], [1, 1, 1]])
+    manifest = run(output=pwo.pw_output(s, calculation, forces=FORCES),
+                   input_text=pwi(calculation))
+    with_structure(run, s)
+    caplog.set_level('WARNING')
+    Worker(manifest, clock=Clock(0.0)).run()
+    record = record_of(run, 'aa')
+    geometry = 'converged' if calculation == 'relax' else 'n/a'
+    assert record.status == record.attempts[-1].status == \
+        store.Status('ended', 'converged', geometry, 'ok')
+    assert record.attempts[-1].parse_error is None
+    assert record.results['nsites'] == 2 and len(record.results['output']['forces']) == 2
+    assert record.observed['version'] == record.engine.version == '7.2'
+    assert record.observed['species'][0]['md5'] == pwo.MD5_FE
+    final = read_structure(calc_path(run, 'aa') / layout.STRUCTURE_OUT_FILE)
+    expected = pwo.relaxed(s) if calculation == 'relax' else pwo.structure_in(s).cart_coords
+    assert np.allclose(final.cart_coords, expected, atol=1e-8)
+    assert final.labels == ['Fe1', 'H']
+    assert caplog.records == []
+
+
+@posix_only
+def test_output_that_cannot_be_parsed_leaves_the_reason(run, caplog):
+    s = pwo.structure()
+    manifest = run(output=pwo.pw_output(s, 'relax'), input_text=pwi('relax'))  # no forces
+    with_structure(run, s)
+    Worker(manifest, clock=Clock(0.0)).run()
+    record = record_of(run, 'aa')
+    assert record.status == store.Status('ended', 'converged', 'converged', 'failed')
+    assert record.attempts[-1].parse_error == 'no forces in the last SCF cycle of a relaxation'
+    assert record.results is None and record.observed['version'] == '7.2'
+    assert not (calc_path(run, 'aa') / layout.STRUCTURE_OUT_FILE).exists()
+    assert 'pes_scf/aa: output not parsed: no forces' in caplog.text
+
+
+@posix_only
+def test_output_not_converged_is_not_parsed(run):
+    s = pwo.structure()
+    text = pwo.pw_output(s).replace('     convergence has been achieved in   7 iterations',
+                                    '     convergence NOT achieved after 100 iterations: stopping')
+    manifest = run(output=text)
+    with_structure(run, s)
+    Worker(manifest, clock=Clock(0.0)).run()
+    record = record_of(run, 'aa')
+    assert record.status == store.Status('ended', 'not_converged', 'n/a', None)
+    assert (record.results, record.observed, record.attempts[-1].parse_error) == (None,) * 3
+    assert record.engine.version == '7.2'
+
+
+@posix_only
+def test_version_outside_those_supported_is_read_with_a_warning(run, caplog):
+    s = pwo.structure()
+    manifest = run(output=pwo.pw_output(s, version='8.0', forces=FORCES))
+    with_structure(run, s)
+    Worker(manifest, clock=Clock(0.0)).run()
+    record = record_of(run, 'aa')
+    assert record.status.parsing == 'ok' and record.engine.version == '8.0'
+    assert ('pes_scf/aa: pw.x 8.0: the workflow is built to work with QE 7.1.x, 7.2.x, 7.3.x; '
+            'with version 8.0 the results are not guaranteed and may hold errors: check them'
+            in caplog.text)
+
+
+@posix_only
+def test_new_attempt_clears_the_results_and_archives_the_final_structure(run):
+    s = pwo.structure()
+    manifest = run(output=pwo.pw_output(s, forces=FORCES))
+    with_structure(run, s)
+    Worker(manifest, clock=Clock(0.0)).run()
+    path = calc_path(run, 'aa')
+    final = (path / layout.STRUCTURE_OUT_FILE).read_bytes()
+    assert archive_attempt(run.run_dir, SYSTEM, 'pes_scf/aa') == 1
+    assert (path / 'attempts' / '1' / layout.STRUCTURE_OUT_FILE).read_bytes() == final
+    assert not (path / layout.STRUCTURE_OUT_FILE).exists()
+    # The second attempt runs a truncated output: nothing of the first one stays.
+    (path / 'fake.json').write_text(json.dumps({'log': str(run.log), 'output': SCF_TRUNCATED}))
+    second = write_job(run.run_dir, Manifest(
+        name='again', scheduler='slurm', run_command=read_manifest(manifest)[0].run_command,
+        walltime=WALLTIME, max_seconds_margin=MARGIN,
+        calculations=(Launch(SYSTEM, 'pes_scf/aa', 2, 'unchanged', 1, {}, {}),)),
+        run.run_dir.parent / 'job.sh') / MANIFEST_FILE
+    Worker(second, clock=Clock(0.0)).run()
+    record = record_of(run, 'aa')
+    assert record.status == store.Status('crashed', None, 'n/a', None)
+    assert (record.results, record.observed, record.engine.version) == (None, None, '7.2')
 
 
 def add_attempts(run, label, count):

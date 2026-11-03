@@ -38,16 +38,17 @@ MLIP) never run locally.
 
 | Key | Content |
 |---|---|
-| `schema_version` | 2 |
+| `schema_version` | 3 |
 | `calc_id` | `<step>/<label>`: the directory of the calculation within the system |
 | `system`, `step`, `label` | names of the three directories; no `/`, `\`, NUL, `.` or `..` |
 | `calc_type` | kind of calculation, which fixes its constraints |
-| `engine` | `name`, `program`, `version` (null until read from the output) |
+| `engine` | `name`, `program`, `version` (as printed in the output; null until read) |
 | `energy_model` | written by the engine, not empty: pseudopotentials and their digests or the MLIP model, cutoffs, k-points, smearing, spin, vdW; a null marks a part not known |
 | `fingerprint` | `sha256:` and 64 hex digits: digest of the normalized input and of the energy model |
 | `status` | `process`, `scf`, `geometry`, `parsing`, each null until known |
 | `attempts` | one entry per run, numbered from 1 (below) |
 | `results` | results read from the output, or null; never null once `parsing` is `ok` |
+| `observed` | what the output tells of the energy model, with the keys and the form of `energy_model` (written by the parser), or null; never null once `parsing` is `ok`, empty if the engine observes nothing |
 | `files` | `{role: file name}` relative to the calculation directory |
 
 Unknown or missing keys, another schema version and invalid values are
@@ -80,18 +81,29 @@ not enter it); the separate states tell the details.
 A record is complete when `process` is `ended`, `scf` is `converged`,
 `geometry` is `converged` or `n/a`, and `parsing` is `ok`. `can_reuse(record,
 fingerprint)` is true only for a complete record with results, with that
-fingerprint and with an energy model fully known, so deciding reuse and
-reading the results always agree; `reuse_problem` tells why a record cannot
-be reused. Which results each kind of calculation must have (an energy,
-finite forces, ...) is checked by the parser of its engine. The version read
-from the output (`engine.version`) is recorded and not compared here: the
-version expected, when the engine has one, is part of the energy model.
+fingerprint, with an energy model fully known and with an output that agrees
+with it, so deciding reuse and reading the results always agree;
+`reuse_problem` tells why a record cannot be reused. Which results each kind
+of calculation must have (an energy, finite forces, ...) is checked by the
+parser of its engine.
 
 A null value in `energy_model` marks a part of the model that is not known,
 e.g. the expected checksum of a pseudopotential not given in the settings
 (`unknown_parts` lists their paths). Such a calculation can be prepared and
 run, but its results are never reused and its energy is never combined with
 others.
+
+`identity_differences(record)` compares each value of `observed` with the
+value at the same path of `energy_model` (keys the energy model does not
+have are not compared; two lists of different length differ as a whole),
+e.g. `species[0].md5: expected '...', observed '...'`. An output that
+differs keeps its results and `parsing` `ok`, but does not stand for its
+energy model: it is never reused, never combined, and the `tasks` view
+refuses it. Absence (a null in `energy_model`) and difference are told
+apart. For pw.x (`engines/qe/results.py`) `observed` holds the version, with
+as many components as the version expected (`7.3` stands for every `7.3.x`,
+`7.3.1` for that one only), and for each species its label, the name of its
+UPF file, its checksum and the path printed.
 
 `record.results_digest` identifies the results themselves: a calculation run
 again with the same input, or an output read again, that gives different
@@ -116,6 +128,7 @@ source establishes it:
 | `job_state` | state of the job as printed by the scheduler, written when the reconciliation fixes an attempt whose worker did not end it (for a requeued job, the state of its new run) | reconciliation |
 | `stop_reason` | why the run stopped, read from the output | output |
 | `clean_stop` | whether the engine closed the run, read from the output | output |
+| `parse_error` | why the output could not be parsed; given if and only if `status.parsing` is `failed` | parser |
 | `status` | `process`, `scf`, `geometry`, `parsing` at the end of the attempt | output, job |
 | `remedies` | launch of the attempt: `kind` (`initial`, `unchanged`, `remedy`, `manual`), `level` of the remedies, `values` of the level and `initial_values` (effective values at level 1), both empty at level 1; empty when not known | worker, reconciliation |
 
@@ -126,9 +139,11 @@ The relaunches count their attempts from `remedies`, so the record alone
 tells how many unchanged relaunches were made at the current level.
 
 `check_energy_model(records)` raises an error when the records do not share
-one energy model (engine name and program, and `energy_model`), or when the
+one energy model (engine name and program, and `energy_model`), when the
 energy model of one of them is not fully known, even if identical to the
-others: energies of different or unknown models never enter one difference.
+others, or when the output of one of them differs from its energy model
+(`identity_differences`): energies of different or unknown models never
+enter one difference.
 
 ## Fingerprints
 
@@ -285,7 +300,8 @@ parameters.
 These calls write the system document only: records, and the attempts they
 keep, are never touched by them.
 
-The `tasks` view returns, for a complete record, its `results` with
+The `tasks` view returns, for a complete record whose output agrees with its
+energy model, its `results` with
 `task_label`, `task_id` and `dir_name`, all equal to the `calc_id`;
 `dir_name` is the directory of the calculation relative to the system, true
 also after the run is copied elsewhere. Files of a calculation (e.g. a charge

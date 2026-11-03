@@ -36,6 +36,7 @@ list indices included.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -46,8 +47,12 @@ NAMELISTS = ('CONTROL', 'SYSTEM', 'ELECTRONS', 'IONS')
 # Scheduler names of Xsorb's SCHEDULER_CONFIG (xsorb/io/scheduler.py:13-71).
 SCHEDULERS = ('slurm', 'pbs', 'torque', 'lsf', 'sge', 'htcondor', 'condor')
 ENGINES = ('qe',)
-# Versions of pw.x whose output engines/qe/status.py reads.
+# Releases of pw.x (major.minor) the workflow is built and tested for: any
+# 7.1.x, 7.2.x, 7.3.x. Other versions are accepted with a warning, as their
+# outputs are read (engines/qe/status.py).
 QE_VERSIONS = ('7.1', '7.2', '7.3')
+# A version of pw.x as it prints it: major.minor or major.minor.patch.
+QE_VERSION_FORMAT = re.compile(r'[0-9]+\.[0-9]+(\.[0-9]+)?')
 # Steps of the interface workflow, in the order of the graph of the
 # orchestrator (execution/orchestrator.py, INTERFACE_GRAPH).
 INTERFACE_STEPS = ('match', 'pes', 'plotpes', 'shear', 'adhesion', 'ppes', 'charge')
@@ -446,8 +451,12 @@ class QEParams:
     Attributes
     ----------
     version : str or None
-        Version of pw.x, one of ``QE_VERSIONS``. Required by the interface
-        workflow when a step that runs calculations uses ``qe``.
+        Version of pw.x, as it prints it: ``major.minor`` (e.g. ``'7.2'``),
+        which stands for every ``7.2.x``, or ``major.minor.patch`` (e.g.
+        ``'7.3.1'``), which stands for that one only. Versions outside
+        ``QE_VERSIONS`` are accepted with a warning (``advice``). Required by
+        the interface workflow when a step that runs calculations uses
+        ``qe``.
     upf_md5 : str or None
         Manifest of the expected MD5 checksums of the UPF files, relative to
         the folder of the settings file, in the format of ``md5sum``
@@ -461,8 +470,24 @@ class QEParams:
 
     def check(self, path):
         """Validate the table; errors name ``path``."""
-        if self.version is not None:
-            _choice(f'{path}.version', self.version, QE_VERSIONS)
+        if self.version is not None and not QE_VERSION_FORMAT.fullmatch(self.version):
+            raise SettingsError(f'{path}.version', f'{self.version!r} is not a version of pw.x: '
+                                'give major.minor or major.minor.patch, e.g. "7.2" or "7.3.1"')
+
+    def advice(self, path):
+        """A version outside ``QE_VERSIONS``.
+
+        Returns
+        -------
+        list of str
+            One message when ``version`` is not a ``7.1.x``, ``7.2.x`` or
+            ``7.3.x``; empty otherwise.
+        """
+        if self.version is None or '.'.join(self.version.split('.')[:2]) in QE_VERSIONS:
+            return []
+        return [f'{path}.version = {self.version!r}: the workflow is built to work with QE '
+                f'{", ".join(v + ".x" for v in QE_VERSIONS)}; with version {self.version} the '
+                'results are not guaranteed and may hold errors: check them']
 
 
 # --- execution on HPC -----------------------------------------------------------
@@ -722,7 +747,7 @@ class Settings:
             if any(self.interface.engine_for(step) == 'qe' for step in self.interface.steps
                    if step in STEPS_WITH_ENGINE):
                 _required('qe.version', self.qe.version, 'by the steps that run pw.x: the '
-                          f'version expected on the HPC, one of {", ".join(QE_VERSIONS)}')
+                          'version expected on the HPC, e.g. "7.2" or "7.3.1"')
         if not self.atomic_species:
             raise SettingsError('atomic_species', 'give at least one species')
         seen = {}

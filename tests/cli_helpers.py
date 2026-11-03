@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from run_helpers import FP, SCF_DONE, SINCE, Slurm
+from run_helpers import FP, SCF_DONE, SINCE, Slurm, parsed_fields
 from triboworkflow.cli import run as cli_run
 from triboworkflow.core import store
 from triboworkflow.core.settings.schema import INTERFACE_STEPS
@@ -101,8 +101,8 @@ def complete(run_dir, calc_id, job_id='900', **status):
          'since': SINCE}) + '\n')
     (path / layout.RUN_INPUT_FILE).write_text((path / layout.INPUT_FILE).read_text())
     (path / layout.OUTPUT_FILE).write_text(SCF_DONE)
-    fields = {'status': store.Status('ended', 'converged', 'n/a'), 'stop_reason': 'completed',
-              'clean_stop': True, **status}
+    fields = {'status': store.Status('ended', 'converged', 'n/a', 'ok'),
+              'stop_reason': 'completed', 'clean_stop': True, **status}
     attempt = store.Attempt(n, job_id=job_id, host='node01', started=SINCE, ended=SINCE,
                             exit_code=0, input=store.AttemptFile('run.pwi'),
                             output=store.AttemptFile('output.pwo'),
@@ -110,7 +110,8 @@ def complete(run_dir, calc_id, job_id='900', **status):
                             **fields)
     store.write_record(sdir, store.Record(**{**record.__dict__,
                                              'attempts': record.attempts + (attempt,),
-                                             'status': attempt.status}))
+                                             'status': attempt.status,
+                                             **parsed_fields(attempt.status)}))
 
 
 @pytest.fixture

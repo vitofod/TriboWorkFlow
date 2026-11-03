@@ -13,10 +13,11 @@ A run keeps the systems and the jobs that run their calculations::
     │       ├── structure_in.extxyz  its structure, with the constraints of the input
     │       ├── run.pwi              input of the current attempt
     │       ├── output.pwo           output of the current attempt
+    │       ├── structure_out.extxyz final structure, once the output is parsed
     │       ├── claim                taken by the worker running the attempt
     │       ├── record.json
     │       ├── OUT/                 outdir of pw.x
-    │       └── attempts/<n>/        run.pwi and output.pwo of attempt n
+    │       └── attempts/<n>/        run.pwi, output.pwo and structure_out.extxyz of attempt n
     ├── jobs/<name>/                 one group of jobs
     │   ├── manifest.json            calculations of the group and how to run them
     │   ├── jobscript.sh             jobscript submitted for each job
@@ -49,6 +50,7 @@ INPUT_FILE = 'input.pwi'
 STRUCTURE_IN_FILE = 'structure_in.extxyz'
 RUN_INPUT_FILE = 'run.pwi'
 OUTPUT_FILE = 'output.pwo'
+STRUCTURE_OUT_FILE = 'structure_out.extxyz'
 CLAIM_FILE = 'claim'
 OUTDIR = 'OUT'
 ATTEMPTS_DIR = 'attempts'
@@ -56,7 +58,8 @@ REPLACEMENT_FILE = 'replacement.json'
 
 __all__ = ['ATTEMPTS_DIR', 'CLAIM_FILE', 'INPUT_FILE', 'JOBS_DIR', 'JOBS_REGISTRY_FILE',
            'OUTDIR', 'OUTPUT_FILE', 'RECORD_FILE', 'REPLACED_DIR', 'REPLACEMENT_FILE',
-           'RUN_INPUT_FILE', 'STRUCTURE_IN_FILE', 'SYSTEMS_DIR', 'attempt_dir', 'calc_dir',
+           'RUN_INPUT_FILE', 'STRUCTURE_IN_FILE', 'STRUCTURE_OUT_FILE', 'SYSTEMS_DIR',
+           'attempt_dir', 'calc_dir',
            'calc_prefix', 'job_dir', 'replaced_dir', 'system_dir']
 
 

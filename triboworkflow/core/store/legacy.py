@@ -26,8 +26,8 @@ is an error, never a guess:
   queries return nothing;
 - the collection is either the one given for the system's documents or
   ``'tasks'``, a read-only view of the records of the system: one task
-  document per complete record, found by ``task_label``, which is the
-  ``calc_id`` of the record;
+  document per complete record whose output agrees with its energy model,
+  found by ``task_label``, which is the ``calc_id`` of the record;
 - updates use ``'$set'`` only. With ``to_mongodb=True`` (the default) the
   data are merged leaf by leaf, as dotted ``$set`` keys would merge them, so
   an empty dict changes nothing; with ``to_mongodb=False`` the top-level key
@@ -70,7 +70,7 @@ from pathlib import Path
 from triboworkflow.vendored.highput.database.dbtools import read_multiple_entry
 
 from .atomic import StoreError, check_json_value
-from .record import read_record
+from .record import identity_differences, read_record
 from .system import Provenance, SystemDocument, entry_is_current, entry_path
 
 logger = logging.getLogger(__name__)
@@ -373,12 +373,17 @@ def task_document(record):
     Raises
     ------
     StoreError
-        If the record is not complete, or its results already hold one of
-        those three keys.
+        If the record is not complete, its output differs from its energy
+        model (``record.identity_differences``), or its results already hold
+        one of those three keys.
     """
     if not record.is_complete or record.results is None:
         raise StoreError(f'record {record.calc_id} is not complete ({record.status}): its '
                          'results cannot be used')
+    differences = identity_differences(record)
+    if differences:
+        raise StoreError(f'record {record.calc_id}: the output is of another energy model '
+                         f'({"; ".join(differences)}): its results cannot be used')
     clash = [key for key in TASK_KEYS if key in record.results]
     if clash:
         raise StoreError(f'record {record.calc_id}: results cannot hold {", ".join(clash)}')

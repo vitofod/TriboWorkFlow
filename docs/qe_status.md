@@ -2,7 +2,8 @@
 
 `triboworkflow.engines.qe.status` tells, from the output of `pw.x`, whether a
 `scf` or `relax` calculation is over and, if it is not, why it stopped. It
-reads no energy, force or structure: those belong to the parser.
+reads no energy, force or structure: those belong to the parser
+([qe_results.md](qe_results.md)).
 
 ```python
 from triboworkflow.engines.qe.status import read_pw_status, record_status
@@ -16,7 +17,7 @@ status = record_status(pw, job='killed')     # states for the record
 An output may hold several runs, appended one after the other when a
 calculation is restarted; each begins with `Program PWSCF v.<version> starts
 on ...`. Only the last run is read, and `runs` counts them all. A text
-without that line is an error.
+without that line, or whose last run prints no version, is an error.
 
 pw.x prints `nstep` in its summary only for an ionic relaxation: if the
 summary is complete and disagrees with the calculation given by the caller,
@@ -77,8 +78,8 @@ several processes is read once, the last one.
 
 ## States of the record
 
-`record_status(pw, job)` gives the `Status` of the record (`parsing` stays
-null for the parser). The output decides whenever it can; what the scheduler
+`record_status(pw, job)` gives the `Status` of the record (`parsing` is set
+by the parser). The output decides whenever it can; what the scheduler
 reports about the job is passed explicitly and gives only the process of a
 truncated output, while the SCF and the geometry stay as read:
 
@@ -95,9 +96,13 @@ geometry converged, `not_converged` for any other stop with `JOB DONE.`
 
 ## Versions
 
-Versions 7.1, 7.2 and 7.3 are read; any other is an error.
-`version_validated` is true for 7.1 and 7.2, whose lines were checked on real
-outputs, the error of pw.x and the values of the summary included. The lines
+The workflow is built to work with QE 7.1.x, 7.2.x and 7.3.x
+(`version_supported`). The outputs of any other version are read with the
+same lines, and the worker and the reconciliation log the warning of
+`version_warning(version)`: with that version the results are not
+guaranteed, and the user checks them. `version_validated` is true for 7.1
+and 7.2, whose lines were checked on real outputs, the error of pw.x and the
+values of the summary included. The lines
 of the step limit, of `max_seconds`, of a stop by request and of a failed
 optimizer come from the source code of 7.2 and were not checked on real
 outputs. `scf_must_converge = .false.` and `vc-relax` are

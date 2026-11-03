@@ -68,6 +68,16 @@ SCF_DONE = text(HEADER, CONVERGED, JOB_DONE)
 SCF_MAX_SECONDS = text(HEADER, MAX_SECONDS, JOB_DONE)
 SCF_TRUNCATED = text(HEADER)
 
+# What the parser leaves in the record of an output read with parsing 'ok'.
+RESULTS = {'nsites': 2, 'input': {'structure': {}}, 'output': {'structure': {}, 'energy': -423.1}}
+
+
+def parsed_fields(status):
+    """Results and ``observed`` of a record whose last attempt ended with ``status``."""
+    if status.parsing == 'ok':
+        return {'results': RESULTS, 'observed': {}}
+    return {'results': None, 'observed': None}
+
 
 def pwi(calculation='scf', **values):
     """Input of a calculation; ``nstep`` in ``&CONTROL``, ``mixing_beta`` in ``&ELECTRONS``."""
@@ -208,13 +218,13 @@ class Run:
             (self.path(calc_id) / layout.OUTPUT_FILE).write_text(output)
 
     def finish(self, calc_id, **fields):
-        """End of the last attempt as the worker writes it."""
+        """End of the last attempt as the worker writes it, results included."""
         record = self.record(calc_id)
         done = store.Attempt(**{**record.attempts[-1].__dict__, 'ended': SINCE, 'exit_code': 0,
                                 **fields})
         store.write_record(self.sdir, store.Record(**{
             **record.__dict__, 'attempts': record.attempts[:-1] + (done,),
-            'status': done.status}))
+            'status': done.status, **parsed_fields(done.status)}))
 
     def poll(self, seconds=0, **states):
         """Move the clock, set job states, run a cycle of the manager."""

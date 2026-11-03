@@ -72,7 +72,9 @@ the state of its new run), the states read from the output with
 of the stop and the clean stop read from the output, and the digests of
 ``run.pwi`` and ``output.pwo``. The exit code and the end time stay null:
 the worker did not see the command end. An output that pw.x closed decides
-the states whatever the job did. A claim of an attempt that the record does
+the states whatever the job did. When those states say that the calculation
+is over and converged, its results are read as the worker does
+(``parsing.py``), with the version printed. A claim of an attempt that the record does
 not have (the worker stopped between the claim and the record) gets the
 attempt, with the launch of its group, once the run of its job is over.
 
@@ -96,6 +98,7 @@ Outcome of an ended attempt (``attempt_outcome``):
 import dataclasses
 import datetime
 import json
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -103,16 +106,21 @@ from pathlib import Path
 from triboworkflow.core.guard import hpc_only
 from triboworkflow.core.store import (Attempt, AttemptFile, Status, file_digest, read_record,
                                       write_record)
-from triboworkflow.engines.qe.status import PwOutputError, read_pw_status, record_status
+from triboworkflow.engines.qe.results import Parsed
+from triboworkflow.engines.qe.status import (PwOutputError, read_pw_status, record_status,
+                                             version_warning)
 
 from .archive import RESTART_COUNT_KEY, read_claim, released_in_part
 from .jobs import MANIFEST_FILE, is_withdrawn, read_manifest
 from .layout import (CLAIM_FILE, INPUT_FILE, JOBS_DIR, OUTPUT_FILE, RUN_INPUT_FILE, calc_dir,
                      job_dir, system_dir)
 from .manager import HOLD_MESSAGES
+from .parsing import parse_calculation, with_parsed
 from .replacement import retired_launches
 from .scheduler import REVERSIBLE_STATES, JobSchedulerError
 from .worker import WorkerError, read_input
+
+logger = logging.getLogger(__name__)
 
 STATES = ('new', 'pending', 'running', 'held', 'completed', 'unchanged', 'remedy', 'manual',
           'uncertain', 'not_taken')
@@ -437,17 +445,24 @@ class Reconciler:
         if verdict != 'over':
             return state(verdict, detail)
         try:
-            status, stop, clean = self._end_from_output(path, self._job_end(detail))
+            status, stop, clean, parsed, version = self._end_from_output(
+                path, self._job_end(detail), record.energy_model)
         except (OSError, ValueError, WorkerError) as error:
             return state('uncertain', f'end of attempt {n} not read: {error}')
+        note = version_warning(version) if version is not None else None
+        if note is not None:
+            logger.warning('%s/%s: %s', system, calc_id, note)
+        if parsed.parsing == 'failed':
+            logger.warning('%s/%s: output not parsed: %s', system, calc_id, parsed.reason)
         files = {name: (AttemptFile(name, file_digest(path / name)) if (path / name).is_file()
                         else getattr(last, role))
                  for name, role in ((RUN_INPUT_FILE, 'input'), (OUTPUT_FILE, 'output'))}
         done = dataclasses.replace(last, job_state=detail, status=status, stop_reason=stop,
                                    clean_stop=clean, input=files[RUN_INPUT_FILE],
                                    output=files[OUTPUT_FILE])
-        self._write(system, record, record.attempts[:-1] + (done,), status)
-        return dataclasses.replace(state(*self._outcome(path, done)), fixed=True)
+        fixed = with_parsed(record, done, parsed, version)
+        write_record(system_dir(self.run_dir, system), fixed)
+        return dataclasses.replace(state(*self._outcome(path, fixed.attempts[-1])), fixed=True)
 
     def _claim_without_attempt(self, system, calc_id, path, record, claim, state):
         """A claim of attempt ``k + 1``: the worker stopped (or is) before writing it."""
@@ -592,17 +607,31 @@ class Reconciler:
         killed = KILLED_STATES.get(scheduler.scheduler_name, ())
         return 'killed' if scheduler.state_name(state) in killed else 'finished'
 
-    def _end_from_output(self, path, job):
-        """Status, reason of the stop and clean stop of an attempt whose job ended."""
+    def _end_from_output(self, path, job, energy_model):
+        """End of an attempt whose job ended, from its output.
+
+        Returns
+        -------
+        tuple
+            Status, reason of the stop, clean stop, reading of the results
+            (``Parsed``) and version printed (None without a readable output).
+        """
         calculation, _ = read_input(path / INPUT_FILE)
         output = path / OUTPUT_FILE
         if not output.is_file() or output.stat().st_size == 0:
-            return Status(process=_PROCESS_FROM_JOB[job]), None, None
+            return Status(process=_PROCESS_FROM_JOB[job]), None, None, Parsed(None), None
         try:
             pw = read_pw_status(output, calculation)
         except PwOutputError:
-            return Status(), None, None
-        return record_status(pw, job), pw.stop_reason, pw.clean_stop
+            return Status(), None, None, Parsed(None), None
+        status = record_status(pw, job)
+        parsed = Parsed(None)
+        if status.summary == 'completed':
+            try:
+                parsed = parse_calculation(path, calculation, energy_model)
+            except (OSError, PwOutputError) as error:
+                parsed = Parsed('failed', reason=f'output not read: {error}')
+        return status, pw.stop_reason, pw.clean_stop, parsed, pw.version
 
     # --- groups ----------------------------------------------------------------
 

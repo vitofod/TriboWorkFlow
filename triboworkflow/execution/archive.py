@@ -14,7 +14,9 @@ attempt is archived:
 2. a record without attempt ``n`` (a worker stopped before writing it) gets
    it, with what the claim tells (job, host, time) and the rest null;
 3. ``run.pwi`` and ``output.pwo`` are moved to ``attempts/<n>/`` with
-   ``os.replace``, after checking them against the digests recorded;
+   ``os.replace``, after checking them against the digests recorded, and
+   ``structure_out.extxyz`` with them when the output was parsed (it has no
+   digest: it is read again from the output when needed);
 4. attempt ``n`` in the record gets the archived paths and their digests;
 5. the claim is removed, last.
 
@@ -36,8 +38,8 @@ import os
 from triboworkflow.core.store import Attempt, AttemptFile, file_digest, read_record, write_record
 from triboworkflow.core.store.atomic import write_json
 
-from .layout import (ATTEMPTS_DIR, CLAIM_FILE, OUTPUT_FILE, RUN_INPUT_FILE, attempt_dir,
-                     calc_dir, system_dir)
+from .layout import (ATTEMPTS_DIR, CLAIM_FILE, OUTPUT_FILE, RUN_INPUT_FILE, STRUCTURE_OUT_FILE,
+                     attempt_dir, calc_dir, system_dir)
 
 _CLAIM_KEYS = ('n', 'job_id', 'host', 'pid', 'since')
 RESTART_COUNT_KEY = 'restart_count'
@@ -184,15 +186,17 @@ def archive_attempt(run_dir, system, calc_id, launch=None):
     # 3. Files to the archive, once all of them are checked.
     archive = attempt_dir(path, n)
     recorded = {RUN_INPUT_FILE: attempt.input, OUTPUT_FILE: attempt.output}
-    for name in (RUN_INPUT_FILE, OUTPUT_FILE):
+    for name in (RUN_INPUT_FILE, OUTPUT_FILE, STRUCTURE_OUT_FILE):
         source, target = path / name, archive / name
         if source.exists() and target.exists():
             raise ArchiveError(f'{source} and {target} both exist; nothing was moved or deleted')
+        if name not in recorded:
+            continue
         digest = recorded[name].digest if recorded[name] is not None else None
         for found in (source, target):
             if found.exists():
                 _check_digest(found, digest, f'attempt {n}')
-    for name in (RUN_INPUT_FILE, OUTPUT_FILE):
+    for name in (RUN_INPUT_FILE, OUTPUT_FILE, STRUCTURE_OUT_FILE):
         if (path / name).exists():
             archive.mkdir(parents=True, exist_ok=True)
             os.replace(path / name, archive / name)

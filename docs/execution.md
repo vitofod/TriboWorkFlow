@@ -20,10 +20,11 @@ yet written in the inputs, so a relaunch above level 1 is not submitted.
 │       ├── structure_in.extxyz  its structure, with the constraints of the input
 │       ├── run.pwi              input of the current attempt
 │       ├── output.pwo           output of the current attempt
+│       ├── structure_out.extxyz final structure, once the output is parsed
 │       ├── claim                taken by the worker running the attempt
 │       ├── record.json
 │       ├── OUT/                 outdir of pw.x
-│       └── attempts/<n>/        run.pwi and output.pwo of attempt n
+│       └── attempts/<n>/        run.pwi, output.pwo and structure_out.extxyz of attempt n
 ├── jobs/<name>/                 one group of jobs
 │   ├── manifest.json
 │   ├── jobscript.sh
@@ -186,14 +187,21 @@ other worker has taken it:
    restart count of the job (`restart_count`, from `SLURM_RESTART_COUNT`,
    null when not set), the host, the pid and the time;
 2. adds attempt `n` to the record, with the process `running` and the launch
-   of the manifest in `remedies`;
+   of the manifest in `remedies`, and clears the results, `observed` and the
+   engine version of the run before;
 3. writes `run.pwi`, a copy of `input.pwi` with `max_seconds` set;
 4. creates `output.pwo` with `O_EXCL`;
 5. runs `<run_command> -in run.pwi >> output.pwo` with bash, in the
    calculation directory;
 6. records the end time, the exit code, the digests of `run.pwi` and
-   `output.pwo`, the states read from the output, the reason of the stop and
-   whether pw.x closed the run.
+   `output.pwo`, the states read from the output, the reason of the stop,
+   whether pw.x closed the run and the version it printed; when the
+   calculation is over with the SCF and the geometry converged, it reads the
+   results (`execution/parsing.py`, [qe_results.md](qe_results.md)): the
+   record gets `parsing`, the results and `observed`, the directory
+   `structure_out.extxyz`, and an output that cannot be parsed leaves its
+   reason in the attempt (`parse_error`) and in the log. A version of pw.x
+   outside 7.1.x–7.3.x gives a warning in the log.
 
 If something is wrong before step 2 (no record, a calculation other than
 `scf` or `relax`, files of an earlier attempt still in place, a launch above
@@ -216,8 +224,8 @@ The `walltime` of `[execution]` must be the one of the jobscript. In
 
 Before a calculation runs again, its last attempt is archived
 (`execution/archive.py`): `run.pwi` and `output.pwo` move to `attempts/<n>/`
-after a check of their digests, the record gets the new paths, and the claim
-is removed last. An interrupted archiving is completed by running it again.
+after a check of their digests, with `structure_out.extxyz` when the output
+was parsed, the record gets the new paths, and the claim is removed last. An interrupted archiving is completed by running it again.
 An attempt still recorded as `running` is not archived; `OUT/` is not
 touched. An attempt is archived only when it is relaunched.
 
@@ -268,7 +276,8 @@ The fixed attempt gets the state of the job as printed, the states read from
 the output (the process `killed` when the scheduler stopped or requeued the
 job, `crashed` otherwise, unless pw.x closed the run), the reason of the
 stop and the digests of its files. The output decides when pw.x closed the
-run: a calculation whose worker was killed after pw.x ended is completed.
+run: a calculation whose worker was killed after pw.x ended is completed,
+and its results are read as the worker reads them.
 
 How the job ended decides when the output does not:
 
@@ -373,8 +382,9 @@ state: `prepare_step` (as the start in a pass, without the scheduler),
 `submit_step` (a cycle of the jobs, then the step followed and its launches
 submitted, without the analysis) and `analyse_step` (the analysis, decided
 from the files alone: each calculation must have a claim, if any, of its last
-attempt, no group listing a next attempt, and its last attempt ended
-completed; never the scheduler). Phases run by hand and passes take turns on
+attempt, no group listing a next attempt, its last attempt ended completed,
+and results that can be used: its output parsed, its energy model fully
+known and its output agreeing with it (`can_reuse`); never the scheduler). Phases run by hand and passes take turns on
 a run. A relaunch by hand (`Orchestrator.relaunch`) is refused, with nothing
 written, when the settings changed since its step was prepared.
 

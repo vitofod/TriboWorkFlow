@@ -91,7 +91,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from triboworkflow.core.store import (PrerequisiteError, check_prerequisites, read_record,
-                                      read_system)
+                                      read_system, reuse_problem)
 from triboworkflow.core.store.atomic import read_json, write_json
 from triboworkflow.core.store.record import check_keys
 
@@ -875,8 +875,12 @@ class Orchestrator:
 
         Done: the record has attempts, any claim is the one of the last
         attempt, no group lists a next attempt, the last attempt is not
-        recorded as running and ended completed (``Status.summary``). Only
-        files are read: claims, records and manifests.
+        recorded as running and ended completed (``Status.summary``), and the
+        results of the record can be used (``can_reuse`` with its own
+        fingerprint, which ``_prepared_current`` has compared with the
+        settings): its output was parsed, its energy model is fully known and
+        the output agrees with it. Only files are read: claims, records and
+        manifests.
         """
         sdir = system_dir(self.run_dir, system)
         launches = run_launches(self.run_dir)
@@ -903,6 +907,13 @@ class Orchestrator:
                 why = f'attempt {k} recorded as running: its job may still run'
             elif record.attempts[-1].status.summary != 'completed':
                 why = f'attempt {k} {record.attempts[-1].status.summary}'
+            elif record.status.parsing is None:
+                why = f'attempt {k} completed, its output not parsed'
+            elif record.status.parsing == 'failed':
+                why = (f'attempt {k} completed, its output not parsed: '
+                       f'{record.attempts[-1].parse_error}')
+            elif (problem := reuse_problem(record, record.fingerprint)) is not None:
+                why = f'attempt {k} completed, its results cannot be used: {problem}'
             else:
                 continue
             missing.append(f'{calc_id}: {why}')

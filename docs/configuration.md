@@ -216,7 +216,7 @@ The `pw.x` expected on the machine that runs the calculations.
 
 | Key | Type | | Notes |
 |---|---|---|---|
-| `version` | str | R with `[interface]` | `7.1`, `7.2`, `7.3`; required when a step that runs calculations uses `qe` |
+| `version` | str | R with `[interface]` | as `pw.x` prints it: `major.minor` (e.g. `7.2`, every `7.2.x`) or `major.minor.patch` (e.g. `7.3.1`, that one only); required when a step that runs calculations uses `qe` |
 | `upf_md5` | str | — | manifest of the expected MD5 checksums of the UPF files, relative to the folder of this file |
 
 - The manifest has the format of `md5sum`: one line `<checksum>  <file>`
@@ -225,9 +225,17 @@ The `pw.x` expected on the machine that runs the calculations.
   same checksum of each UPF file and prints it in the output. Every UPF file
   of `[[atomic_species]]` must be in it, once; other files may be listed.
   It is read when an input is generated.
+- The workflow is built to work with QE 7.1.x, 7.2.x and 7.3.x. Another
+  version (e.g. `8.0`) is accepted with a warning: the results are not
+  guaranteed and may hold errors, so check them. The outputs of any version
+  are read, with the same warning in the log.
 - Version and checksums enter the energy model of every calculation (see
   [Fingerprint and energy model](#fingerprint-and-energy-model)); the path
-  of the manifest does not.
+  of the manifest does not. Each output is compared with them: the version
+  printed by `pw.x`, on the components given (`7.3` matches `7.3.1`, `7.3.1`
+  does not match `7.3.2`), and the label, UPF file and checksum of every
+  species. An output that differs keeps its results, but they are never
+  reused nor combined.
 - **Without `version` or without `upf_md5`** the energy model is not fully
   known. The inputs are generated and the calculations can run, but their
   results are never reused and their energies are never combined

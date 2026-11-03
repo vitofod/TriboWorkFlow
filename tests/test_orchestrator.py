@@ -11,6 +11,7 @@ workers are simulated by writing the claims and the attempts they would
 leave; the jobs are set to their states by the test.
 """
 
+import dataclasses
 import json
 
 import pytest
@@ -105,19 +106,25 @@ def orchestrator(run, requested=ALL, versions=None, manager=None, steps=None):
 
 
 OUTCOMES = {
-    'completed': dict(status=store.Status('ended', 'converged', 'n/a'), stop_reason='completed',
-                      clean_stop=True),
+    'completed': dict(status=store.Status('ended', 'converged', 'n/a', 'ok'),
+                      stop_reason='completed', clean_stop=True),
     'crashed': dict(status=store.Status('crashed', None, 'n/a'), stop_reason='truncated',
                     exit_code=137, clean_stop=False),
     'user_request': dict(status=store.Status('ended', None, 'n/a'), stop_reason='user_request',
                          clean_stop=True),
     'not_converged': dict(status=store.Status('ended', 'not_converged', 'n/a'),
                           stop_reason='scf_not_converged', clean_stop=True),
+    'not_parsed': dict(status=store.Status('ended', 'converged', 'n/a'), stop_reason='completed',
+                       clean_stop=True),
+    'parse_failed': dict(status=store.Status('ended', 'converged', 'n/a', 'failed'),
+                         parse_error='no "!    total energy" in the last SCF cycle',
+                         stop_reason='completed', clean_stop=True),
 }
 
 
 OUTPUTS = {'completed': SCF_DONE, 'crashed': SCF_TRUNCATED, 'user_request': SCF_DONE,
-           'not_converged': text(header(mixing_beta=0.4), NOT_CONVERGED, JOB_DONE)}
+           'not_converged': text(header(mixing_beta=0.4), NOT_CONVERGED, JOB_DONE),
+           'not_parsed': SCF_DONE, 'parse_failed': SCF_DONE}
 
 
 def work(run, outcome='completed', only=None):
@@ -852,6 +859,11 @@ def snapshot(run):
     ('empty claim', 'empty claim'),
     ('crashed', 'attempt 1 crashed'),
     ('not taken', f'attempt 1 listed in group {SYSTEM}.pes.1, not taken yet'),
+    ('not_parsed', 'attempt 1 completed, its output not parsed'),
+    ('parse_failed', 'attempt 1 completed, its output not parsed: no "!    total energy" in the '
+                     'last SCF cycle'),
+    ('other model', 'attempt 1 completed, its results cannot be used: output of another energy '
+                    'model (ecutwfc: expected 40.0, observed 45.0)'),
 ])
 def test_analyse_step_uses_only_the_files(run, case, reason):
     orch = prepared_pes(run)
@@ -866,6 +878,12 @@ def test_analyse_step_uses_only_the_files(run, case, reason):
             run.claim('pes/c0', 1, '900')
         elif case == 'empty claim':
             (run.path('pes/c0') / layout.CLAIM_FILE).write_text('')
+        elif case in ('not_parsed', 'parse_failed'):
+            complete_by_hand(run, 'pes/c0', outcome=case)
+        elif case == 'other model':
+            complete_by_hand(run, 'pes/c0')
+            store.write_record(run.sdir, dataclasses.replace(run.record('pes/c0'),
+                                                             observed={'ecutwfc': 45.0}))
         else:
             complete_by_hand(run, 'pes/c0', outcome='crashed')
     before, queries = snapshot(run), run.slurm.queries
