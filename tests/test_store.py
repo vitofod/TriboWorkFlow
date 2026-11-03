@@ -35,7 +35,7 @@ import pytest
 
 from triboworkflow.core import store
 from triboworkflow.core.store import legacy
-from triboworkflow.core.store.atomic import read_json, write_json
+from triboworkflow.core.store.atomic import read_json, write_json, write_text
 
 StoreError = store.StoreError
 Provenance = store.Provenance
@@ -104,6 +104,18 @@ def test_write_json_round_trip(tmp_path):
     assert stored['sigma'][:3] == [{'@float': 'Infinity'}, {'@float': '-Infinity'},
                                    {'@float': 'NaN'}]
     assert b'\r\n' not in path.read_bytes()
+    assert list(tmp_path.glob('.*.tmp')) == []
+
+
+def test_write_text(tmp_path):
+    path = tmp_path / 'input.pwi'
+    write_text(path, "&CONTROL\n   prefix = 'Å'\n/\n")
+    assert path.read_bytes() == "&CONTROL\n   prefix = 'Å'\n/\n".encode('utf-8')
+    write_text(path, 'second\n')  # replaced as a whole
+    assert path.read_text(encoding='utf-8') == 'second\n'
+    with pytest.raises(StoreError, match='a str is required'):
+        write_text(path, b'bytes')
+    assert path.read_text(encoding='utf-8') == 'second\n'
     assert list(tmp_path.glob('.*.tmp')) == []
 
 
@@ -542,6 +554,47 @@ def test_energy_models_are_not_mixed():
         store.check_energy_model([first, engine])
 
 
+# An energy model whose expected version and checksum of one pseudopotential are not known.
+NOT_KNOWN = {'version': None, 'species': [{'upf': 'Cu.UPF', 'md5': FP_B},
+                                          {'upf': 'Ni.UPF', 'md5': None}], 'ecutwfc': 40.0}
+
+
+def test_unknown_parts_are_the_nulls_of_the_energy_model():
+    assert store.unknown_parts(make_record().energy_model) == []
+    assert store.unknown_parts(NOT_KNOWN) == ['version', 'species[1].md5']
+    assert store.unknown_parts({'a': [None, {'b': None}], 'c': 0, 'd': '', 'e': [], 'f': False}) == [
+        'a[0]', 'a[1].b']
+
+
+def test_reuse_problem_tells_why():
+    record = make_record()
+    assert store.reuse_problem(record, FP_A) is None
+    assert store.reuse_problem(None, FP_A) == 'no record'
+    assert store.reuse_problem(record, FP_B) == 'another fingerprint'
+    running = make_record(status=store.Status('running'))
+    assert store.reuse_problem(running, FP_A) == 'not complete or without results'
+    unknown = dataclasses.replace(record, energy_model=NOT_KNOWN)
+    assert store.reuse_problem(unknown, FP_A) == 'energy model not known (version, species[1].md5)'
+
+
+def test_record_with_an_energy_model_not_known_is_never_reused(system_dir):
+    record = dataclasses.replace(make_record(), energy_model=NOT_KNOWN)
+    assert record.is_complete and record.results is not None
+    assert not store.can_reuse(record, FP_A)
+    store.write_record(system_dir, record)
+    assert store.read_record(system_dir, record.calc_id).energy_model == NOT_KNOWN
+
+
+def test_energies_of_a_model_not_known_are_never_combined():
+    first, second = (dataclasses.replace(make_record(label=label), energy_model=NOT_KNOWN)
+                     for label in ('aa', 'ab'))
+    with pytest.raises(StoreError, match=r'not known cannot be combined: pes_scf/aa \(version, '
+                                         r'species\[1\]\.md5\); pes_scf/ab'):
+        store.check_energy_model([first, second])
+    with pytest.raises(StoreError, match='pes_scf/ab'):
+        store.check_energy_model(iter([make_record(), second]))
+
+
 # -- aggregated document -------------------------------------------------------
 
 def test_leaf_merge_on_the_paths_of_the_interface_steps():
@@ -696,6 +749,19 @@ def test_with_results_takes_exactly_the_reusable_records(system_dir):
             expected.with_results(records)
     with pytest.raises(StoreError, match='not in calculations'):
         dataclasses.replace(expected, results={'pes_scf/zz': FP_A})
+    unknown = dataclasses.replace(ab, energy_model=NOT_KNOWN)
+    with pytest.raises(StoreError, match='pes_scf/ab: energy model not known .*cannot be consumed'):
+        expected.with_results([aa, unknown])
+
+
+def test_analysis_of_records_not_known_is_not_done(system_dir):
+    doc = _with_pes(system_dir)
+    path, expected = ['pes_scf', 'energy'], _pes_provenance()
+    doc.set_provenance(path, _consumed(system_dir, expected))
+    assert store.is_done(doc, path, expected, system_dir)
+    store.write_record(system_dir, dataclasses.replace(make_record(label='ab'),
+                                                       energy_model=NOT_KNOWN))
+    assert not store.is_done(doc, path, expected, system_dir)
 
 
 def test_is_done_needs_a_non_empty_entry(system_dir):

@@ -21,9 +21,10 @@ from triboworkflow.core.settings import settings_from_dict
 from triboworkflow.core.store import StoreError
 from triboworkflow.execution import layout
 from triboworkflow.execution import scheduler as scheduler_module
-from triboworkflow.execution.jobs import (JOBSCRIPT_FILE, MANIFEST_FILE, SUBMITTED_FILE, JobError,
-                                          Launch, Manifest, jobscript_path, read_manifest,
-                                          submit_jobs, worker_line, write_job)
+from triboworkflow.execution.jobs import (JOBSCRIPT_FILE, MANIFEST_FILE, PENDING_KEY,
+                                          SUBMITTED_FILE, JobError, Launch, Manifest,
+                                          jobscript_path, read_manifest, submit_jobs,
+                                          surely_not_created, worker_line, write_job)
 from triboworkflow.execution.scheduler import JobScheduler
 
 EXAMPLES = Path(__file__).resolve().parents[1] / 'examples'
@@ -303,6 +304,66 @@ def test_failed_submission_keeps_the_jobs_already_submitted(run_dir, jobscript, 
     with pytest.raises(scheduler_module.JobSchedulerError, match='QOSMaxSubmitJobPerUserLimit'):
         submit_jobs(path, JobScheduler('slurm'), 3)
     assert json.loads((path / SUBMITTED_FILE).read_text()) == {'job_ids': ['201']}
+
+
+def test_pending_is_written_before_each_submission(run_dir, jobscript, monkeypatch):
+    path = write_job(run_dir, manifest(), jobscript)
+    seen, ids = [], iter(['301', '302'])
+
+    def run(cmd, **kwargs):
+        seen.append(json.loads((path / SUBMITTED_FILE).read_text()))
+        return subprocess.CompletedProcess(cmd, 0, stdout=f'Submitted batch job {next(ids)}\n')
+
+    monkeypatch.setattr(scheduler_module.subprocess, 'run', run)
+    stamps = iter(['2026-11-02T10:00:00+01:00', '2026-11-02T10:00:05+01:00'])
+    assert submit_jobs(path, JobScheduler('slurm'), 2, now=lambda: next(stamps)) == ['301', '302']
+    assert seen == [{'job_ids': [], PENDING_KEY: '2026-11-02T10:00:00+01:00'},
+                    {'job_ids': ['301'], PENDING_KEY: '2026-11-02T10:00:05+01:00'}]
+    assert json.loads((path / SUBMITTED_FILE).read_text()) == {'job_ids': ['301', '302']}
+
+
+def test_interrupted_submission_leaves_pending(run_dir, jobscript, monkeypatch):
+    path = write_job(run_dir, manifest(), jobscript)
+
+    def run(cmd, **kwargs):
+        raise KeyboardInterrupt  # the process stops while sbatch runs
+
+    monkeypatch.setattr(scheduler_module.subprocess, 'run', run)
+    with pytest.raises(KeyboardInterrupt):
+        submit_jobs(path, JobScheduler('slurm'), 1, now=lambda: '2026-11-02T10:00:00+01:00')
+    assert json.loads((path / SUBMITTED_FILE).read_text()) == \
+        {'job_ids': [], PENDING_KEY: '2026-11-02T10:00:00+01:00'}
+    with pytest.raises(JobError, match='has no outcome recorded'):
+        submit_jobs(path, JobScheduler('slurm'), 1)
+
+
+def test_submission_of_outcome_not_known_leaves_pending(run_dir, jobscript, monkeypatch):
+    def run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, 30)
+
+    monkeypatch.setattr(scheduler_module.subprocess, 'run', run)
+    path = write_job(run_dir, manifest(), jobscript)
+    with pytest.raises(scheduler_module.JobSchedulerError) as error:
+        submit_jobs(path, JobScheduler('slurm'), 1, now=lambda: '2026-11-02T10:00:00+01:00')
+    assert error.value.accepted is None and not surely_not_created(error.value)
+    assert json.loads((path / SUBMITTED_FILE).read_text())[PENDING_KEY] == \
+        '2026-11-02T10:00:00+01:00'
+
+
+def test_refused_submission_clears_pending(run_dir, jobscript, monkeypatch):
+    def run(cmd, **kwargs):
+        raise subprocess.CalledProcessError(1, cmd, stderr='invalid account')
+
+    monkeypatch.setattr(scheduler_module.subprocess, 'run', run)
+    path = write_job(run_dir, manifest(), jobscript)
+    with pytest.raises(scheduler_module.JobSchedulerError) as error:
+        submit_jobs(path, JobScheduler('slurm'), 1)
+    assert surely_not_created(error.value)
+    assert not (path / SUBMITTED_FILE).exists()  # no job was ever submitted
+    (path / SUBMITTED_FILE).write_text('{"job_ids": []}')
+    with pytest.raises(scheduler_module.JobSchedulerError):
+        submit_jobs(path, JobScheduler('slurm'), 1)
+    assert json.loads((path / SUBMITTED_FILE).read_text()) == {'job_ids': []}
 
 
 def test_submission_away_from_hpc(run_dir, jobscript, monkeypatch):

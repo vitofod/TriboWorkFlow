@@ -1,0 +1,70 @@
+# Author: Vito Foderà
+# Created: 2026-11-02
+#
+# Settings of the reference relax example, with every placeholder filled.
+#
+# example_relax.pwi is the reference pw.x input with its placeholders filled
+# and its comments removed; this file gives the same parameters. The values
+# that fill the placeholders are illustrative only, not recommendations: the
+# cell (a = 4.5212, b = 3.7698 Å, chosen so that the bonds across the cell
+# edges are as long as those inside, 15 Å along z), the cutoffs, the species
+# C with its UPF file, the prefix and vdw_corr. The structure, with the last
+# atom fixed, is read from example_relax.pwi.
+
+schema_version = 1
+
+[structure]
+file = "example_relax.pwi"
+format = "pwi"
+
+[structure.constraints]
+read_from_file = true
+default_if_pos = [1, 1, 1]
+
+[namelists.CONTROL]
+calculation = "relax"
+title = "A_title"
+prefix = "A_prefix"
+restart_mode = "from_scratch"
+nstep = 150
+outdir = "path/to/output_dir"
+max_seconds = 84600
+tstress = false
+pseudo_dir = "path/to/PSEUDO"
+disk_io = "low"
+etot_conv_thr = 1.0e-4
+forc_conv_thr = 1.0e-3
+
+[namelists.SYSTEM]
+ecutwfc = 45.0
+ecutrho = 360.0
+occupations = "smearing"
+degauss = 0.01
+smearing = "mv"
+nspin = 2
+vdw_corr = "none"
+
+[namelists.ELECTRONS]
+electron_maxstep = 200
+conv_thr = 1.0e-6
+mixing_mode = "local-TF"
+mixing_beta = 0.3
+diagonalization = "david"
+
+[namelists.IONS]
+ion_dynamics = "bfgs"
+
+[[atomic_species]]
+label = "C"
+mass = 12.011
+pseudopotential = "C.pbe-n-kjpaw_psl.1.0.0.UPF"
+starting_magnetization = 0.5
+
+[k_points]
+mode = "automatic"
+grid = [8, 8, 1]
+offset = [0, 0, 0]
+
+[generation]
+file_prefix = "input.pwi"
+overwrite = false

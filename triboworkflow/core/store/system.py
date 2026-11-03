@@ -26,7 +26,8 @@ step records a new provenance.
 
 An entry is done (``is_done``) when it exists, is not empty and its recorded
 provenance is the one expected now, with every calculation it used still
-backed by a complete record with the same fingerprint and the same results it
+backed by a record that can be reused (``can_reuse``: complete, with the same
+fingerprint and an energy model fully known) and holds the same results it
 consumed. Changing a calculation or its results, an input read from another
 entry or a file, or a processing parameter (an interpolation setting, a MEP
 setting, a seed) therefore invalidates the analysis that used it; nothing is
@@ -58,7 +59,8 @@ from pathlib import Path
 from .atomic import StoreError, check_json_value, read_json, write_json
 from .fingerprint import (canonical_json, check_fingerprint, content_digest, file_digest,
                           fingerprint)
-from .record import can_reuse, check_keys, check_name, read_record, split_calc_id
+from .record import (can_reuse, check_keys, check_name, read_record, reuse_problem,
+                     split_calc_id)
 
 SCHEMA_VERSION = 1
 SYSTEM_FILE = 'system.json'
@@ -219,9 +221,10 @@ class Provenance:
             if expected is None or record.calc_id in results:
                 raise StoreError(f'record {record.calc_id}: not a calculation of this '
                                  'provenance, or given twice')
-            if not can_reuse(record, expected):
-                raise StoreError(f'record {record.calc_id}: not complete, without results or '
-                                 'with another fingerprint; its results cannot be consumed')
+            problem = reuse_problem(record, expected)
+            if problem:
+                raise StoreError(f'record {record.calc_id}: {problem}; its results cannot be '
+                                 'consumed')
             results[record.calc_id] = record.results_digest
         missing = sorted(set(self.calculations) - set(results))
         if missing:

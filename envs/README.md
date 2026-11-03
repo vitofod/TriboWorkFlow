@@ -8,7 +8,7 @@ in WSL2 (Ubuntu 22.04, x86_64):
 | Purpose | runs the original TribChem code and produces the golden values | runs TriboWorkFlow and its tests |
 | venv | `~/.venvs/tribchem-storico` | `~/.venvs/tribchem` |
 | Python | 3.12.4 | 3.12 (3.12.13 from the system `python3.12`) |
-| Lock | `historic/requirements.lock` (105 packages) | `dev/requirements.lock` (44 packages) |
+| Lock | `historic/requirements.lock` (105 packages) | `dev/requirements.lock` (45 packages) |
 | Build | `historic/create_env.sh <TribChem source root>` | `dev/create_env.sh` |
 | Tests | `python -m pytest tests/historic` | `python -m pytest` |
 
@@ -165,7 +165,12 @@ settings into dataclasses as in Xsorb (Xsorb requires `dacite>=1.8.1`).
 that the two locks differ only in ASE and dacite.
 
 `dev/create_env.sh` synchronises the venv with the lock (packages not in
-the lock are removed) and installs TriboWorkFlow in editable mode.
+the lock are removed) and installs TriboWorkFlow in editable mode, which
+also creates the `triboworkflow` command. The installation runs without
+build isolation and without an index, with the setuptools of the lock
+(70.3.0, as in the historic lock), so it downloads nothing and leaves the
+venv equal to the lock. After a change to `[project.scripts]` in
+`pyproject.toml`, run `create_env.sh` again.
 
 ## Updating the locks
 

@@ -40,6 +40,7 @@ Example:
         from triboworkflow.execution.layout import system_dir
         from triboworkflow.execution.lock import holder
         from triboworkflow.execution.orchestrator import Step
+        from triboworkflow.execution.replacement import unfinished
 
         from .run import build_orchestrator, run_steps, system_name
 
@@ -47,6 +48,10 @@ Example:
         print(f'Run {run_dir.resolve()}, system {system}')
         print(f'Orchestrator: {daemon.status(run_dir).message}')
         print(f'Lock: {_lock(holder(run_dir))}')
+        for replacement in unfinished(run_dir):
+            print(f'Replacement of {replacement.system}/{replacement.step} not completed '
+                  f'({replacement.path}): run "triboworkflow prepare {replacement.step} '
+                  '--replace" to complete it')
 
         def named(name):
             step = Step()  # nothing is run: the state is only read
@@ -87,6 +92,8 @@ Example:
             print(f'  group {name}: {count} submissions of outcome not known; look for the job '
                   f'in the queue, then "triboworkflow resolve-submission {name} --job-id ID" '
                   'or "--no-job"')
+        for name in jobs.withdrawn:
+            print(f'  group {name}: withdrawn before any of its jobs was submitted')
         if args.calcs:
             sdir = system_dir(run_dir, system)
             print('Calculations')

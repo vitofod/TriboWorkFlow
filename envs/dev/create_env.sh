@@ -5,7 +5,8 @@
 # Optional variables: UV (uv executable), VENV, PYTHON (interpreter for a new venv).
 #
 # The venv is synchronised with the lock file: packages that are not in the
-# lock are removed. TriboWorkFlow is then installed in editable mode.
+# lock are removed. TriboWorkFlow is then installed in editable mode with the
+# setuptools of the lock (no build isolation, nothing downloaded).
 set -euo pipefail
 
 UV=${UV:-uv}
@@ -18,7 +19,7 @@ if [ ! -x "$VENV/bin/python" ]; then
     "$PYTHON" -m venv "$VENV"
 fi
 "$UV" pip sync --python "$VENV/bin/python" --require-hashes "$HERE/requirements.lock"
-"$UV" pip install --python "$VENV/bin/python" --no-deps -e "$REPO"
+"$UV" pip install --python "$VENV/bin/python" --no-index --no-deps --no-build-isolation -e "$REPO"
 "$UV" pip check --python "$VENV/bin/python"
 
 echo "development environment ready: $VENV"

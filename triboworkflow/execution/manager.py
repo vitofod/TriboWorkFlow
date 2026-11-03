@@ -11,6 +11,8 @@ jobs it asks for, the submissions that failed and the state of each job, in
 1. recovers the ids in ``jobs/<name>/submitted.json`` that the registry does
    not have yet, e.g. after an interruption between a submission and the
    update of the registry, so that a submitted job is never submitted again;
+   a submission interrupted before its id was written (``pending``) becomes
+   one of outcome not known;
 2. asks the scheduler the state of each job whose state may still change
    (``JobScheduler.get_job_state``), also of the jobs that need attention;
 3. submits the jobs still missing from each group: ``min(count,
@@ -26,6 +28,12 @@ been created (e.g. ``sbatch`` timed out), the submission is kept as one of
 outcome not known: it takes the place of a job in the group, stops the
 submissions of the group, survives a restart, and is resolved by
 ``resolve_submission``, with the id of the job if it is found.
+
+A group none of whose jobs was ever submitted can be withdrawn
+(``withdraw``), e.g. when the calculations it lists are replaced: no job in
+the registry, no submission of outcome not known, no id and no ``pending`` in
+``submitted.json``. A withdrawn group is never submitted again; it stays on
+disk, listed apart in the summary.
 
 Each job is ``waiting``, ``held``, ``ended`` or needs ``attention``:
 
@@ -78,13 +86,17 @@ from triboworkflow.core.guard import hpc_only
 from triboworkflow.core.store.atomic import read_json, write_json
 from triboworkflow.core.store.record import check_keys
 
-from .jobs import MANIFEST_FILE, SUBMITTED_FILE, JobError, read_manifest, submit_jobs
+from .jobs import (MANIFEST_FILE, PENDING_KEY, SUBMITTED_FILE, WITHDRAWN_FILE, JobError,
+                   is_withdrawn, read_manifest, submit_jobs, surely_not_created)
 from .layout import JOBS_DIR, JOBS_REGISTRY_FILE, job_dir
 from .scheduler import JobSchedulerError
 
 logger = logging.getLogger(__name__)
 
 REGISTRY_VERSION = 2
+
+# Error of a submission interrupted before its outcome was recorded.
+INTERRUPTED = 'submission interrupted before its outcome was recorded: the job may exist'
 
 _REGISTRY_KEYS = ('schema_version', 'groups', 'jobs')
 _GROUP_KEYS = ('planned', 'refused', 'unknown')
@@ -132,7 +144,10 @@ class JobsSummary:
     unknown : dict
         Number of submissions of outcome not known of each group that has some.
     complete, incomplete : list of str
-        Names of the complete groups and of the others.
+        Names of the complete groups and of the others, withdrawn groups
+        apart.
+    withdrawn : list of str
+        Names of the withdrawn groups (``JobManager.withdraw``).
     """
 
     waiting: list
@@ -145,6 +160,7 @@ class JobsSummary:
     unknown: dict
     complete: list
     incomplete: list
+    withdrawn: list
 
 
 class JobManager:
@@ -303,9 +319,160 @@ class JobManager:
         return max(group['planned'] - len(self.group_jobs(name)) - len(group['unknown']), 0)
 
     def clear_refusal(self, name):
-        """Let a group whose submission was refused be submitted again by ``submit``."""
-        self._group(name)['refused'] = None
+        """Let a group whose submission was refused be submitted again by ``submit``.
+
+        Raises
+        ------
+        JobManagerError
+            If the group is not registered or was withdrawn.
+        """
+        group = self._group(name)
+        if is_withdrawn(job_dir(self.run_dir, name)):
+            raise JobManagerError(f'group {name!r} was withdrawn: it is never submitted again')
+        group['refused'] = None
         self._save()
+
+    def withdrawal_problem(self, name):
+        """Why a group may have a job, or None if none of its jobs was ever submitted.
+
+        Read from the registry and from ``submitted.json`` only. A group
+        already withdrawn has no problem.
+
+        Returns
+        -------
+        str or None
+        """
+        path = job_dir(self.run_dir, name)
+        if is_withdrawn(path):
+            return None
+        receipt = path / SUBMITTED_FILE
+        if receipt.is_file():
+            data = read_json(receipt)
+            if data['job_ids']:
+                return f'jobs submitted: {", ".join(data["job_ids"])}'
+            if data.get(PENDING_KEY) is not None:
+                return (f'the submission started at {data[PENDING_KEY]} has no outcome recorded: '
+                        'the job may exist')
+        if name in self.groups:
+            job_ids = self.group_jobs(name)
+            if job_ids:
+                return f'jobs registered: {", ".join(job_ids)}'
+            if self.groups[name]['unknown']:
+                return (f'{len(self.groups[name]["unknown"])} submissions of outcome not known: '
+                        'the job may exist')
+        return None
+
+    def open_reason(self, name):
+        """Why a job of a group may still run or be submitted, or None if the group is complete.
+
+        Read from the registry and from ``submitted.json`` only, as the last
+        query of the scheduler left them.
+
+        Returns
+        -------
+        str or None
+        """
+        receipt = job_dir(self.run_dir, name) / SUBMITTED_FILE
+        data = read_json(receipt) if receipt.is_file() else {'job_ids': []}
+        if data.get(PENDING_KEY) is not None:
+            return (f'the submission started at {data[PENDING_KEY]} has no outcome recorded: '
+                    'the job may exist')
+        if name not in self.groups:
+            return (f'jobs submitted and not registered yet ({", ".join(data["job_ids"])}): a '
+                    'cycle of the job manager on the HPC machine follows them')
+        if self.group_complete(name):
+            return None
+        group = self.groups[name]
+        if group['unknown']:
+            return (f'{len(group["unknown"])} submissions of outcome not known: the job may '
+                    f'exist (resolve-submission {name})')
+        running = [f'{job_id} {job["state"]}' for job_id, job in self.jobs.items()
+                   if job['group'] == name and not (job['reported'] is True and job['error'] is None
+                                                    and self.scheduler.is_final(job['state']))]
+        if running:
+            return (f'jobs not in a final state confirmed by the last query: {", ".join(running)}; '
+                    'once they are over, query them again on the HPC machine (e.g. "triboworkflow '
+                    'start")')
+        if group['refused'] is not None:
+            return 'a submission was refused after other jobs: one may still be submitted'
+        return f'{self.missing_jobs(name)} jobs still to submit'
+
+    def partly_submitted(self, name):
+        """A group submitted in part, whose jobs submitted are all over.
+
+        Such a group is neither complete, since jobs of it were never
+        submitted (refused, or held back), nor can it be withdrawn, since
+        some were; its other jobs may still be submitted.
+
+        Returns
+        -------
+        tuple or None
+            ``(submitted, not submitted, refused)``: the jobs submitted, the
+            jobs never submitted and whether the last submission was refused;
+            None for any other group.
+        """
+        if name not in self.groups or self.group_complete(name):
+            return None
+        receipt = job_dir(self.run_dir, name) / SUBMITTED_FILE
+        if receipt.is_file() and read_json(receipt).get(PENDING_KEY) is not None:
+            return None
+        group, job_ids = self.groups[name], self.group_jobs(name)
+        over = all(self.jobs[j]['reported'] is True and self.jobs[j]['error'] is None
+                   and self.scheduler.is_final(self.jobs[j]['state']) for j in job_ids)
+        missing = self.missing_jobs(name)
+        if not job_ids or group['unknown'] or not over or not missing:
+            return None
+        return len(job_ids), missing, group['refused'] is not None
+
+    def withdraw(self, name, reason):
+        """Withdraw a group none of whose jobs was ever submitted: it is never submitted.
+
+        Writes ``jobs/<name>/withdrawn.json`` (time and reason); nothing is
+        done for a group already withdrawn.
+
+        Parameters
+        ----------
+        name : str
+            Name of the group, registered or not.
+        reason : str
+            Why the group is withdrawn.
+
+        Raises
+        ------
+        JobManagerError
+            If the group has no manifest, or one of its jobs may exist
+            (``withdrawal_problem``).
+        """
+        path = job_dir(self.run_dir, name)
+        if not (path / MANIFEST_FILE).is_file():
+            raise JobManagerError(f'group {name!r} has no manifest in {path}')
+        problem = self.withdrawal_problem(name)
+        if problem is not None:
+            raise JobManagerError(f'group {name!r} cannot be withdrawn: {problem}')
+        if not is_withdrawn(path) and not self.scheduler.dry_run:
+            write_json(path / WITHDRAWN_FILE, {'at': self._stamp(), 'reason': reason})
+            logger.info('Group %s withdrawn: %s', name, reason)
+
+    def withdrawn(self):
+        """Names of the withdrawn groups of the run, registered or not."""
+        root = self.run_dir / JOBS_DIR
+        return sorted(p.name for p in root.iterdir() if is_withdrawn(p)) if root.is_dir() else []
+
+    def _unknown_from_pending(self, name, error):
+        """Record the submission of ``pending`` as one of outcome not known, then clear it.
+
+        The registry is written before ``submitted.json``: after an
+        interruption in between, the same time is not added twice.
+        """
+        receipt = job_dir(self.run_dir, name) / SUBMITTED_FILE
+        data = read_json(receipt) if receipt.is_file() else {'job_ids': []}
+        at = data.get(PENDING_KEY) or self._stamp()
+        group = self.groups[name]
+        if not any(submission['at'] == at for submission in group['unknown']):
+            group['unknown'].append({'error': error, 'at': at})
+        self._save()
+        if data.get(PENDING_KEY) is not None and not self.scheduler.dry_run:
+            write_json(receipt, {k: v for k, v in data.items() if k != PENDING_KEY})
 
     def resolve_submission(self, name, job_id=None):
         """Resolve the oldest submission of outcome not known of a group.
@@ -346,7 +513,9 @@ class JobManager:
 
         A group with ``submitted.json`` that is not registered (e.g. submitted
         by hand) is registered with the jobs already submitted, so that none
-        is added to it.
+        is added to it. A submission interrupted before its id was written
+        (``pending``) becomes one of outcome not known, to be resolved by
+        ``resolve_submission``.
 
         Returns
         -------
@@ -358,15 +527,24 @@ class JobManager:
         names = sorted(p.name for p in jobs_root.iterdir() if (p / SUBMITTED_FILE).is_file()) \
             if jobs_root.is_dir() else []
         for name in names:
-            job_ids = read_json(job_dir(self.run_dir, name) / SUBMITTED_FILE)['job_ids']
+            data = read_json(job_dir(self.run_dir, name) / SUBMITTED_FILE)
+            job_ids = data['job_ids']
             if name not in self.groups:
                 self.groups[name] = {'planned': len(job_ids), 'refused': None, 'unknown': []}
                 logger.warning('Group %s was not registered: %d submitted jobs recovered',
                                name, len(job_ids))
+            if job_ids and is_withdrawn(job_dir(self.run_dir, name)):
+                logger.error('Group %s was withdrawn and has submitted jobs: %s; they are followed',
+                             name, ', '.join(job_ids))
             for job_id in job_ids:
                 if job_id not in self.jobs:
                     self._add_job(job_id, name)
                     recovered.append(job_id)
+            if data.get(PENDING_KEY) is not None:
+                logger.error('Group %s: submission started at %s interrupted before its outcome '
+                             'was recorded; the job may exist and it is not submitted again',
+                             name, data[PENDING_KEY])
+                self._unknown_from_pending(name, INTERRUPTED)
         if recovered:
             logger.warning('Jobs submitted and missing from the registry, recovered: %s',
                            ', '.join(recovered))
@@ -432,19 +610,21 @@ class JobManager:
         submitted = []
         for name, group in self.groups.items():
             missing = self.missing_jobs(name)
-            if name in skip or group['refused'] is not None or group['unknown'] or missing == 0:
+            if (name in skip or group['refused'] is not None or group['unknown'] or missing == 0
+                    or is_withdrawn(job_dir(self.run_dir, name))):
                 continue
             try:
-                job_ids = submit_jobs(job_dir(self.run_dir, name), self.scheduler, missing)
+                job_ids = submit_jobs(job_dir(self.run_dir, name), self.scheduler, missing,
+                                      self._stamp)
             except JobSchedulerError as error:
-                if getattr(error, 'accepted', False) is None:
-                    group['unknown'].append({'error': str(error), 'at': self._stamp()})
+                if surely_not_created(error):
+                    group['refused'] = str(error)
+                    self._save()
+                    logger.error('Submission in group %s refused, not retried: %s', name, error)
+                else:
+                    self._unknown_from_pending(name, str(error))
                     logger.error('Submission in group %s of outcome not known: the job may '
                                  'exist; it is not submitted again: %s', name, error)
-                else:
-                    group['refused'] = str(error)
-                    logger.error('Submission in group %s refused, not retried: %s', name, error)
-                self._save()
                 self.recover()  # jobs submitted before the failure
                 continue
             for job_id in job_ids:
@@ -479,9 +659,11 @@ class JobManager:
                         and self.scheduler.is_final(self.jobs[j]['state']) for j in job_ids))
 
     def summary(self):
-        """Jobs by status, jobs to submit, failed submissions and groups complete or not."""
+        """Jobs by status, jobs to submit, failed submissions and groups complete, not, withdrawn."""
         status = {job_id: self.job_status(job_id) for job_id in self.jobs}
-        complete = [name for name in self.groups if self.group_complete(name)]
+        withdrawn = self.withdrawn()
+        groups = [name for name in self.groups if name not in withdrawn]
+        complete = [name for name in groups if self.group_complete(name)]
         return JobsSummary(
             waiting=[j for j, s in status.items() if s == 'waiting'],
             ended=[j for j, s in status.items() if s == 'ended'],
@@ -491,14 +673,16 @@ class JobManager:
                   for j, s in status.items() if s == 'held'},
             uncertain=[j for j, job in self.jobs.items()
                        if job['error'] is not None or job['reported'] is False],
-            to_submit=sum(self.missing_jobs(name) for name, group in self.groups.items()
-                          if group['refused'] is None and not group['unknown']),
-            refused={name: group['refused'] for name, group in self.groups.items()
-                     if group['refused'] is not None},
+            to_submit=sum(self.missing_jobs(name) for name in groups
+                          if self.groups[name]['refused'] is None
+                          and not self.groups[name]['unknown']),
+            refused={name: self.groups[name]['refused'] for name in groups
+                     if self.groups[name]['refused'] is not None},
             unknown={name: len(group['unknown']) for name, group in self.groups.items()
                      if group['unknown']},
             complete=complete,
-            incomplete=[name for name in self.groups if name not in complete])
+            incomplete=[name for name in groups if name not in complete],
+            withdrawn=withdrawn)
 
     def cycle(self, skip=()):
         """Recover, poll and submit (but the groups in ``skip``); return the ``summary``."""

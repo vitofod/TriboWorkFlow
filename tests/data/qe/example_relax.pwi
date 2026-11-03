@@ -1,0 +1,57 @@
+&CONTROL
+  calculation = 'relax'
+  title = 'A_title'
+  prefix = 'A_prefix'
+  restart_mode = 'from_scratch'
+  nstep = 150
+  outdir = 'path/to/output_dir'
+  max_seconds = 84600
+  tstress = .false.
+  pseudo_dir = 'path/to/PSEUDO'
+  disk_io = 'low'
+  etot_conv_thr = 1.0D-4
+  forc_conv_thr = 1.0D-3
+/
+&SYSTEM
+  ibrav = 0
+  nat = 6
+  ntyp = 1
+  ecutwfc = 45.0
+  ecutrho = 360.0
+  occupations = 'smearing'
+  degauss = 0.01
+  smearing = 'mv'
+  nspin = 2
+  starting_magnetization(1) = 0.5
+  vdw_corr = 'none'
+/
+&ELECTRONS
+  electron_maxstep = 200
+  conv_thr = 1e-06
+  mixing_mode = 'local-TF'
+  mixing_beta = 0.3
+  diagonalization = 'david'
+/
+
+&IONS
+  ion_dynamics = 'bfgs'
+/
+
+CELL_PARAMETERS angstrom
+   4.521200000   0.000000000   0.000000000
+   0.000000000   3.769800000   0.000000000
+   0.000000000   0.000000000  15.000000000
+
+ATOMIC_SPECIES
+C  12.011  C.pbe-n-kjpaw_psl.1.0.0.UPF
+
+ATOMIC_POSITIONS angstrom
+C             2.9832215737       -0.0000000000       -0.4999928178
+C             0.7225654893        1.1512591343       -0.5000035911
+C             1.5319741421        0.0000000000       -0.4999928178
+C             3.7926302265        1.1512591343       -0.5000035911
+C             0.7225654893        2.6184948379       -0.5000035911
+C             3.7926302265        2.6184948379       -0.5000035911 0 0 0
+
+K_POINTS automatic
+8 8 1  0 0 0

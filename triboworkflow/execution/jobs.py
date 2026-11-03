@@ -13,7 +13,12 @@ lives in ``<run>/jobs/<name>/`` (see ``layout.py``):
   (scheduler, command, walltime, time margin);
 - ``jobscript.sh``: the jobscript of the user, copied unchanged, with one
   line added at the end that starts the worker on the manifest;
-- ``submitted.json``: the ids of the jobs submitted so far.
+- ``submitted.json``: the ids of the jobs submitted so far and, while a
+  submission runs, the time it started (``pending``). A ``pending`` left by
+  an interruption tells that a job may exist without its id;
+- ``withdrawn.json``: written when the group is withdrawn before any of its
+  jobs was submitted (``JobManager.withdraw``); a withdrawn group is never
+  submitted and its launches no longer count for any calculation.
 
 The jobscript of the user is never changed. The jobs of a group differ only
 by their ids.
@@ -33,7 +38,9 @@ calculations, with a worker that loops over them, follows SCS
 (``labelling/QuantumEspresso/qe.py``, ``labelling/labelling.py``).
 """
 
+import contextlib
 import copy
+import datetime
 import logging
 import os
 import shlex
@@ -41,11 +48,12 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from triboworkflow.core.guard import hpc_only
+from triboworkflow.core.guard import NotOnHPCError, hpc_only
 from triboworkflow.core.store.atomic import check_json_value, read_json, write_json
 from triboworkflow.core.store.record import check_keys, check_name, split_calc_id
 
 from .layout import INPUT_FILE, calc_dir, job_dir
+from .scheduler import JobSchedulerError
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +61,11 @@ MANIFEST_VERSION = 2
 MANIFEST_FILE = 'manifest.json'
 JOBSCRIPT_FILE = 'jobscript.sh'
 SUBMITTED_FILE = 'submitted.json'
+WITHDRAWN_FILE = 'withdrawn.json'
+
+# Key of submitted.json with the start of a submission whose outcome is not
+# recorded yet.
+PENDING_KEY = 'pending'
 
 # Module started by the line added to the jobscript.
 WORKER_MODULE = 'triboworkflow.execution.worker'
@@ -384,16 +397,39 @@ def write_job(run_dir, manifest, jobscript, python=None):
     return path
 
 
-def submit_jobs(path, scheduler, count):
+def is_withdrawn(path):
+    """Whether the group in directory ``path`` was withdrawn (``withdrawn.json``)."""
+    return (Path(path) / WITHDRAWN_FILE).is_file()
+
+
+def surely_not_created(error):
+    """Whether a failed submission surely created no job.
+
+    True when the command is missing (``NotOnHPCError``) or the scheduler
+    refused the job (``JobSubmissionError.accepted`` False, or an error that
+    does not tell); False when the job may exist (``accepted`` None).
+    """
+    return isinstance(error, NotOnHPCError) or getattr(error, 'accepted', False) is not None
+
+
+def _local_stamp():
+    return datetime.datetime.now().astimezone().isoformat(timespec='seconds')
+
+
+def submit_jobs(path, scheduler, count, now=None):
     """Submit the jobscript of a group once per worker.
 
     ``count`` workers are asked for, but never more than the calculations of
     the group: a worker without a calculation to take would only exit. The
-    reduction is logged. Each job id is added to ``submitted.json`` as soon
-    as the job is submitted. Submissions run from the directory of the
-    group, where the scheduler writes the logs of the jobs. In a dry run
-    nothing is submitted or written, and the commands are left in
-    ``scheduler.commands``.
+    reduction is logged. Before each submission ``submitted.json`` gets the
+    time it starts (``pending``); the job id replaces it as soon as the job
+    is submitted, so that an interruption in between leaves the trace of a
+    job that may exist. A failure that surely created no job removes it; a
+    failure after which the job may exist leaves it to the caller
+    (``JobManager``), which records the submission as one of outcome not
+    known. Submissions run from the directory of the group, where the
+    scheduler writes the logs of the jobs. In a dry run nothing is submitted
+    or written, and the commands are left in ``scheduler.commands``.
 
     Parameters
     ----------
@@ -403,6 +439,9 @@ def submit_jobs(path, scheduler, count):
         Scheduler of the jobs.
     count : int
         Number of workers chosen by the user (``groups`` of ``[execution]``).
+    now : callable or None, optional
+        Time of a submission that starts, as an ISO 8601 string; the local
+        time by default.
 
     Returns
     -------
@@ -412,6 +451,9 @@ def submit_jobs(path, scheduler, count):
 
     Raises
     ------
+    JobError
+        If ``count`` is not valid, the group is not written, or
+        ``submitted.json`` holds a submission whose outcome is not recorded.
     NotOnHPCError
         If the submission command of the scheduler is not found.
     JobSchedulerError
@@ -430,13 +472,29 @@ def submit_jobs(path, scheduler, count):
         logger.warning('Group %s: %d jobs submitted instead of %d, one per calculation',
                        manifest.name, jobs, count)
     submitted = path / SUBMITTED_FILE
+    stamp = now or _local_stamp
     job_ids = []
     for _ in range(jobs):
-        with hpc_only(scheduler.scheduler_name):
-            job_id = scheduler.submit_job(str(jobscript), cwd=path)
-        job_ids.append(job_id)
+        data = None
         if not scheduler.dry_run:
-            data = read_json(submitted) if submitted.exists() else {'job_ids': []}
-            data['job_ids'].append(job_id)
-            write_json(submitted, data)
+            existed = submitted.exists()
+            data = read_json(submitted) if existed else {'job_ids': []}
+            if data.get(PENDING_KEY) is not None:
+                raise JobError(f'{submitted}: the submission started at {data[PENDING_KEY]} has '
+                               'no outcome recorded; the job manager records it first (recover)')
+            write_json(submitted, {**data, PENDING_KEY: stamp()})
+        try:
+            with hpc_only(scheduler.scheduler_name):
+                job_id = scheduler.submit_job(str(jobscript), cwd=path)
+        except (NotOnHPCError, JobSchedulerError) as error:
+            if data is not None and surely_not_created(error):
+                if existed or data['job_ids']:
+                    write_json(submitted, data)
+                else:
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(submitted)
+            raise
+        job_ids.append(job_id)
+        if data is not None:
+            write_json(submitted, {**data, 'job_ids': data['job_ids'] + [job_id]})
     return job_ids

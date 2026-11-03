@@ -36,6 +36,7 @@ To remove: the POSCAR reader is the one of TribChem's custom-slab Firetask
 ``structure.opt`` of TribChem slab documents.
 """
 
+import io
 import json
 import re
 from pathlib import Path
@@ -213,6 +214,32 @@ def _read_xyz(path, frame, cell):
     atoms = _frame(path, 'xyz', frame)
     atoms.cell, atoms.pbc = np.asarray(cell, float), True
     return to_structure(atoms)
+
+
+def read_extxyz_text(text):
+    """Structure of the text of an extxyz file, as ``read_structure`` reads the file.
+
+    Parameters
+    ----------
+    text : str
+        One structure, with its periodic cell.
+
+    Returns
+    -------
+    pymatgen.core.structure.Structure
+
+    Raises
+    ------
+    StructureError
+        If the text cannot be read as extxyz or has no periodic cell.
+    """
+    try:
+        return _read_extxyz(io.StringIO(text), 0, None)
+    except StructureError:
+        raise
+    # OSError: ASE's XYZError, raised for a text that is not extxyz.
+    except (ValueError, KeyError, IndexError, StopIteration, OSError) as error:
+        raise StructureError(f'cannot read it as extxyz: {type(error).__name__}: {error}') from None
 
 
 def _read_extxyz(path, frame, cell):

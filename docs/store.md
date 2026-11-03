@@ -43,7 +43,7 @@ MLIP) never run locally.
 | `system`, `step`, `label` | names of the three directories; no `/`, `\`, NUL, `.` or `..` |
 | `calc_type` | kind of calculation, which fixes its constraints |
 | `engine` | `name`, `program`, `version` (null until read from the output) |
-| `energy_model` | written by the engine, not empty: pseudopotentials and their digests or the MLIP model, cutoffs, k-points, smearing, spin, vdW |
+| `energy_model` | written by the engine, not empty: pseudopotentials and their digests or the MLIP model, cutoffs, k-points, smearing, spin, vdW; a null marks a part not known |
 | `fingerprint` | `sha256:` and 64 hex digits: digest of the normalized input and of the energy model |
 | `status` | `process`, `scf`, `geometry`, `parsing`, each null until known |
 | `attempts` | one entry per run, numbered from 1 (below) |
@@ -79,12 +79,19 @@ not enter it); the separate states tell the details.
 
 A record is complete when `process` is `ended`, `scf` is `converged`,
 `geometry` is `converged` or `n/a`, and `parsing` is `ok`. `can_reuse(record,
-fingerprint)` is true only for a complete record with results and with that
-fingerprint, so deciding reuse and reading the results always agree. Which
-results each kind of calculation must have (an energy, finite forces, ...)
-is checked by the parser of its engine. The engine version is recorded;
-whether a different version prevents reuse is not decided yet, and
-`can_reuse` does not look at it.
+fingerprint)` is true only for a complete record with results, with that
+fingerprint and with an energy model fully known, so deciding reuse and
+reading the results always agree; `reuse_problem` tells why a record cannot
+be reused. Which results each kind of calculation must have (an energy,
+finite forces, ...) is checked by the parser of its engine. The version read
+from the output (`engine.version`) is recorded and not compared here: the
+version expected, when the engine has one, is part of the energy model.
+
+A null value in `energy_model` marks a part of the model that is not known,
+e.g. the expected checksum of a pseudopotential not given in the settings
+(`unknown_parts` lists their paths). Such a calculation can be prepared and
+run, but its results are never reused and its energy is never combined with
+others.
 
 `record.results_digest` identifies the results themselves: a calculation run
 again with the same input, or an output read again, that gives different
@@ -119,8 +126,9 @@ The relaunches count their attempts from `remedies`, so the record alone
 tells how many unchanged relaunches were made at the current level.
 
 `check_energy_model(records)` raises an error when the records do not share
-one energy model (engine name and program, and `energy_model`): energies of
-different models never enter one difference.
+one energy model (engine name and program, and `energy_model`), or when the
+energy model of one of them is not fully known, even if identical to the
+others: energies of different or unknown models never enter one difference.
 
 ## Fingerprints
 

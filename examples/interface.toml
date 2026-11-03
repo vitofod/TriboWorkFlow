@@ -91,6 +91,14 @@ starting_magnetization = 0.5
 mode = "kdens"                     # Grid from the density, once the cell is known.
 kdens = 7.5                        # k-points per 1/angstrom of each reciprocal vector.
 
+# The pw.x expected on the HPC. Without upf_md5 the calculations are prepared
+# and run, but their results are never reused and their energies never
+# combined automatically.
+[qe]
+version = "7.2"                    # Required: 7.1 | 7.2 | 7.3, compared with the output.
+upf_md5 = "pseudo.md5"             # Expected MD5 of the UPF files, relative to this file;
+                                   # made with: md5sum *.UPF > pseudo.md5 (in pseudo_dir).
+
 [execution]
 scheduler = "slurm"
 jobscript = "jobscript.sh"         # Relative to this file; copied with the worker line added.

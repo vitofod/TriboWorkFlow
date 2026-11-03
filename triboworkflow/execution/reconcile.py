@@ -36,7 +36,11 @@ outcome was not known) is asked to the scheduler.
 A group of jobs makes progress when a worker takes at least one of the
 attempts it lists. When the last group for the next attempt of a
 calculation ended without progress, the calculation is ``manual``, with the
-jobs of the group and their states: what stopped them is not deduced.
+jobs of the group and their states: what stopped them is not deduced. The
+groups withdrawn and the launches retired by a replacement of calculations
+(``replacement.py``) do not count for the calculation replaced, which starts
+again from attempt 1; for the other calculations of a group the progress
+recorded by the replacement counts.
 
 An attempt recorded as ``running`` is fixed only when the run of the job
 that wrote its claim is over:
@@ -102,10 +106,11 @@ from triboworkflow.core.store import (Attempt, AttemptFile, Status, file_digest,
 from triboworkflow.engines.qe.status import PwOutputError, read_pw_status, record_status
 
 from .archive import RESTART_COUNT_KEY, read_claim, released_in_part
-from .jobs import MANIFEST_FILE, read_manifest
+from .jobs import MANIFEST_FILE, is_withdrawn, read_manifest
 from .layout import (CLAIM_FILE, INPUT_FILE, JOBS_DIR, OUTPUT_FILE, RUN_INPUT_FILE, calc_dir,
                      job_dir, system_dir)
 from .manager import HOLD_MESSAGES
+from .replacement import retired_launches
 from .scheduler import REVERSIBLE_STATES, JobSchedulerError
 from .worker import WorkerError, read_input
 
@@ -235,42 +240,55 @@ def attempt_outcome(attempt, scheduler):
 
 
 def read_groups(run_dir):
-    """Manifests of the groups of jobs of a run, registered or not.
+    """Manifests of the groups of jobs of a run, registered or not, but the withdrawn ones.
+
+    A withdrawn group (``JobManager.withdraw``) never had a job: its launches
+    count for no calculation.
 
     Returns
     -------
     dict
         Name → ``Manifest``, for every group with a manifest in
-        ``<run>/jobs/``, in the order of the names.
+        ``<run>/jobs/`` and not withdrawn, in the order of the names.
     """
     groups = {}
     root = Path(run_dir) / JOBS_DIR
     if root.is_dir():
         for path in sorted(root.iterdir()):
-            if (path / MANIFEST_FILE).is_file():
+            if (path / MANIFEST_FILE).is_file() and not is_withdrawn(path):
                 manifest, _ = read_manifest(path / MANIFEST_FILE)
                 groups[manifest.name] = manifest
     return groups
 
 
-def launch_index(groups):
+def launch_index(groups, retired=None):
     """Launches of groups of jobs by calculation and attempt.
 
     Parameters
     ----------
     groups : dict
         Name → ``Manifest`` (``read_groups``).
+    retired : dict or None, optional
+        ``{(system, calc_id): {group: progress}}`` (``retired_launches``):
+        the launches of these groups no longer count for the calculation.
 
     Returns
     -------
     dict
         ``{(system, calc_id): {n: [(group name, Launch), ...]}}``.
     """
+    retired = retired or {}
     index = defaultdict(lambda: defaultdict(list))
     for name, manifest in groups.items():
         for launch in manifest.calculations:
-            index[launch.calc][launch.n].append((name, launch))
+            if name not in retired.get(launch.calc, ()):
+                index[launch.calc][launch.n].append((name, launch))
     return index
+
+
+def run_launches(run_dir):
+    """``launch_index`` of the groups of a run, without the launches retired by replacements."""
+    return launch_index(read_groups(run_dir), retired_launches(run_dir))
 
 
 class LaunchError(ValueError):
@@ -309,7 +327,7 @@ def launch_for(run_dir, system, calc_id, n, group=None):
         groups that list it give different launches: the message lists them,
         with kind and level, to choose one.
     """
-    entries = launch_index(read_groups(run_dir)).get((system, calc_id), {}).get(n, [])
+    entries = run_launches(run_dir).get((system, calc_id), {}).get(n, [])
     where = f'attempt {n} of {system}/{calc_id}'
     if not entries:
         raise LaunchError(f'no group lists {where}: its launch is not known')
@@ -348,7 +366,8 @@ class Reconciler:
         self.scheduler = manager.scheduler
         self.polling_interval = polling_interval
         self.groups = read_groups(self.run_dir)
-        self.launches = launch_index(self.groups)
+        self.retired = retired_launches(self.run_dir)
+        self.launches = launch_index(self.groups, self.retired)
 
     def reconcile(self, calculations):
         """``CalcState`` of each ``(system, calc_id)``, in order."""
@@ -594,8 +613,17 @@ class Reconciler:
         return name in self.manager.groups and self.manager.group_complete(name)
 
     def _progress(self, name):
-        """Whether a worker of a group took at least one of the attempts it lists."""
+        """Whether a worker of a group took at least one of the attempts it lists.
+
+        For a calculation replaced since, the progress recorded by the
+        replacement counts, not the attempts of the calculation prepared again.
+        """
         for launch in self.groups[name].calculations:
+            retired = self.retired.get(launch.calc, {})
+            if name in retired:
+                if retired[name]:
+                    return True
+                continue
             path = calc_dir(self.run_dir, launch.system, launch.calc_id)
             try:
                 made = len(read_record(system_dir(self.run_dir, launch.system),

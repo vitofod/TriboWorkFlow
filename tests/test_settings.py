@@ -172,6 +172,11 @@ ACCEPTED = [
     ('no-ecut', W, {'namelists.SYSTEM': {}}),
     ('no-namelists', W, {'namelists': DELETE}),
     ('typo-in-pw-key', W, {'namelists.SYSTEM.ecutwf': 50.0}),
+    # Hubbard is not implemented, but its keys go to pw.x like the others.
+    ('hubbard-keys', W, {'namelists.SYSTEM.lda_plus_u': True, 'namelists.SYSTEM."Hubbard_U(1)"': 4.2,
+                         'namelists.SYSTEM."Hubbard_alpha(1)"': 0.1}),
+    ('alternatives-to-ibrav', W, {'namelists.SYSTEM.space_group': 225,
+                                  'namelists.SYSTEM."starting_ns_eigenvalue(1,1,1)"': 0.0}),
     ('nspin1-magnetization', W, {'namelists.SYSTEM.nspin': 1}),
     ('no-magnetization', W, {'atomic_species[1].starting_magnetization': DELETE}),
     ('magnetization-range', W, {'atomic_species[0].starting_magnetization': 3.0}),
@@ -192,6 +197,10 @@ ACCEPTED = [
                                 'interface.inter_params.best_match': 'strain'}),
     ('bulk-modulus-0', W, {'interface.slabs[0].bulk_modulus': 0.0}),
     ('miller-zero', W, {'interface.slabs[1].miller': [0, 0, 0]}),
+    ('qe-without-manifest', W, {'qe.upf_md5': DELETE}),
+    ('match-only-without-qe', W, {'qe': DELETE, 'interface.steps': ['match', 'shear']}),
+    ('single-without-qe', S, {'qe': DELETE}),
+    ('single-manifest-only', S, {'qe.version': DELETE, 'qe.upf_md5': 'pseudo.md5'}),
 ]
 
 
@@ -344,8 +353,6 @@ ERRORS = [
     ('ntyp', W, {f'{SYSTEM}.ntyp': 2}, f'{SYSTEM}.ntyp', 'from [[atomic_species]]'),
     ('magnetization-in-system', W, {f'{SYSTEM}."starting_magnetization(1)"': 0.5},
      f'{SYSTEM}.starting_magnetization(1)', 'for each species in [[atomic_species]]'),
-    ('lda-plus-u', W, {f'{SYSTEM}.lda_plus_u': True}, f'{SYSTEM}.lda_plus_u', 'Hubbard'),
-    ('hubbard-u', W, {f'{SYSTEM}."Hubbard_U(1)"': 4.2}, f'{SYSTEM}.Hubbard_U(1)', 'Hubbard'),
     ('calculation', S, {f'{CONTROL}.calculation': 'vc-relax'}, f'{CONTROL}.calculation',
      "'vc-relax' is not allowed; allowed values: 'scf', 'relax'"),
     *[(f'nstep-{value!r}', W, {f'{CONTROL}.nstep': value}, f'{CONTROL}.nstep',
@@ -426,6 +433,13 @@ ERRORS = [
      'required with set_bm = true'),
     ('inter-params-key', W, {'interface.inter_params.vacuum': 15.0}, 'interface.inter_params.vacuum',
      'allowed keys: max_area, '),
+    # [qe]
+    ('qe-version', W, {'qe.version': '6.8'}, 'qe.version', "'6.8' is not allowed"),
+    ('qe-version-number', W, {'qe.version': 7.2}, 'qe.version', 'expected str, got 7.2'),
+    ('qe-version-missing', W, {'qe.version': DELETE}, 'qe.version',
+     'required by the steps that run pw.x'),
+    ('qe-missing', W, {'qe': DELETE}, 'qe.version', 'required by the steps that run pw.x'),
+    ('qe-key', W, {'qe.md5': 'pseudo.md5'}, 'qe.md5', 'allowed keys: version, upf_md5'),
 ]
 
 

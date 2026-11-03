@@ -5,7 +5,8 @@
 
 A settings file describes either one calculation (``[structure]``) or the
 interface workflow (``[interface]``), together with the pw.x template
-(``[namelists]``, ``[[atomic_species]]``, ``[k_points]``) and, optionally,
+(``[namelists]``, ``[[atomic_species]]``, ``[k_points]``), the pw.x expected
+(``[qe]``: version and checksums of the pseudopotentials) and, optionally,
 the execution on HPC (``[execution]``). ``loader.py`` fills the dataclasses
 from the TOML tables with dacite and then runs their ``check`` methods.
 
@@ -13,10 +14,12 @@ The namelists are passed to pw.x as given: pw.x applies its own defaults to
 the keys left out and judges the values. The checks only cover what the code
 needs to work: the layout of the file, the keys the input generator writes
 itself, the conventions of the project (``ibrav = 0``, angstrom, ``scf`` and
-``relax`` only, no Hubbard corrections) and the keys that the relaunches
+``relax`` only) and the keys that the relaunches
 change (``RELAUNCH_KEYS``), whose values must make sense and give a warning
 outside the recommended ones (``Namelists.advice``). Values that a step does
-not use are ignored, as pw.x ignores keys that do not apply.
+not use are ignored, as pw.x ignores keys that do not apply. Hubbard
+corrections are not implemented (the generator writes no ``HUBBARD`` card),
+but their keys are not rejected: they go to pw.x like the others.
 
 Placeholders, i.e. empty strings and ``ecutwfc``/``ecutrho`` equal to 0, are
 accepted when a file is loaded and rejected when an input is generated
@@ -43,6 +46,8 @@ NAMELISTS = ('CONTROL', 'SYSTEM', 'ELECTRONS', 'IONS')
 # Scheduler names of Xsorb's SCHEDULER_CONFIG (xsorb/io/scheduler.py:13-71).
 SCHEDULERS = ('slurm', 'pbs', 'torque', 'lsf', 'sge', 'htcondor', 'condor')
 ENGINES = ('qe',)
+# Versions of pw.x whose output engines/qe/status.py reads.
+QE_VERSIONS = ('7.1', '7.2', '7.3')
 # Steps of the interface workflow, in the order of the graph of the
 # orchestrator (execution/orchestrator.py, INTERFACE_GRAPH).
 INTERFACE_STEPS = ('match', 'pes', 'plotpes', 'shear', 'adhesion', 'ppes', 'charge')
@@ -62,16 +67,13 @@ NSTEP_ADVISED, NSTEP_ADVISED_MAX = 150, 250
 MIXING_BETA_ADVISED, MIXING_BETA_ADVISED_MIN = 0.4, 0.1
 
 _CELL = 'ibrav = 0 always: the cell is written in CELL_PARAMETERS from the structure'
-# &SYSTEM keys written by the generator, or excluded by the project.
+# &SYSTEM keys written by the generator.
 GENERATED_SYSTEM_KEYS = {
     'ibrav': _CELL, 'celldm': _CELL, 'a': _CELL, 'b': _CELL, 'c': _CELL,
     'cosab': _CELL, 'cosac': _CELL, 'cosbc': _CELL,
     'nat': 'set by the generator from the structure',
     'ntyp': 'set by the generator from [[atomic_species]]',
     'starting_magnetization': 'set it for each species in [[atomic_species]]',
-    'lda_plus_u': 'Hubbard corrections are not supported',
-    'lda_plus_u_kind': 'Hubbard corrections are not supported',
-    'u_projection_type': 'Hubbard corrections are not supported',
 }
 
 # Hints for keys that are not part of the other tables.
@@ -314,9 +316,8 @@ class Namelists:
                                         'element, e.g. "london_c6(1)"')
         for key in self.SYSTEM:
             name = key_name(key)
-            if name in GENERATED_SYSTEM_KEYS or name.startswith('hubbard_'):
-                reason = GENERATED_SYSTEM_KEYS.get(name, 'Hubbard corrections are not supported')
-                raise SettingsError(f'{path}.SYSTEM.{key}', f'not allowed: {reason}')
+            if name in GENERATED_SYSTEM_KEYS:
+                raise SettingsError(f'{path}.SYSTEM.{key}', f'not allowed: {GENERATED_SYSTEM_KEYS[name]}')
         calculation = self.get('CONTROL', 'calculation')
         if calculation is not None:
             _choice(f'{path}.CONTROL.calculation', calculation, ('scf', 'relax'))
@@ -431,6 +432,37 @@ class GenerationParams:
         """Validate the table; errors name ``path``."""
         _choice(f'{path}.atomic_positions_units', self.atomic_positions_units, ('angstrom',))
         _choice(f'{path}.cell_parameters_units', self.cell_parameters_units, ('angstrom',))
+
+
+@dataclass
+class QEParams:
+    """``[qe]``: the pw.x expected on the machine that runs the calculations.
+
+    Both values enter the energy model of every calculation. Without them the
+    identity of the energy model is not known: the inputs are still
+    generated, but their results are never reused and their energies never
+    combined automatically.
+
+    Attributes
+    ----------
+    version : str or None
+        Version of pw.x, one of ``QE_VERSIONS``. Required by the interface
+        workflow when a step that runs calculations uses ``qe``.
+    upf_md5 : str or None
+        Manifest of the expected MD5 checksums of the UPF files, relative to
+        the folder of the settings file, in the format of ``md5sum``
+        (``<checksum>  <file>`` per line), e.g. made with ``md5sum *.UPF >
+        pseudo.md5`` in the ``pseudo_dir``. It must give the file of every
+        species; read when an input is generated.
+    """
+
+    version: str | None = None
+    upf_md5: str | None = None
+
+    def check(self, path):
+        """Validate the table; errors name ``path``."""
+        if self.version is not None:
+            _choice(f'{path}.version', self.version, QE_VERSIONS)
 
 
 # --- execution on HPC -----------------------------------------------------------
@@ -656,6 +688,8 @@ class Settings:
     generation : GenerationParams or None
         Used with ``structure``.
     execution : ExecutionParams or None
+    qe : QEParams
+        Expected version of pw.x and checksums of the UPF files.
     source : pathlib.Path or None
         File the settings were read from, set by the loader.
     """
@@ -668,6 +702,7 @@ class Settings:
     interface: InterfaceParams | None = None
     generation: GenerationParams | None = None  # used with [structure]
     execution: ExecutionParams | None = None
+    qe: QEParams = field(default_factory=QEParams)
     # File the settings were read from (set by the loader).
     source: Path | None = field(default=None, init=False, repr=False, compare=False)
 
@@ -684,6 +719,10 @@ class Settings:
                 if key_name(key) in PER_CALCULATION:
                     raise SettingsError(f'namelists.CONTROL.{key}', 'not allowed in a workflow: '
                                         'it is set for every calculation')
+            if any(self.interface.engine_for(step) == 'qe' for step in self.interface.steps
+                   if step in STEPS_WITH_ENGINE):
+                _required('qe.version', self.qe.version, 'by the steps that run pw.x: the '
+                          f'version expected on the HPC, one of {", ".join(QE_VERSIONS)}')
         if not self.atomic_species:
             raise SettingsError('atomic_species', 'give at least one species')
         seen = {}

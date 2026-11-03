@@ -1,9 +1,10 @@
 # Author: Vito Foderà
 # Created: 2026-10-23
 
-"""Atomic JSON files and the values they can hold.
+"""Atomic JSON and text files, and the values JSON files can hold.
 
-A file written by ``write_json`` is never seen half-written. The text goes to
+A file written by ``write_json`` or ``write_text`` is never seen
+half-written. The text goes to
 a temporary file in the same directory (``.<name>.<random>.tmp``), is flushed
 to disk and is then renamed over the target with ``os.replace``. A reader
 opens either the old file or the new one. A write interrupted by a crash
@@ -141,7 +142,24 @@ def write_json(path, value):
     path = Path(path)
     check_json_value(value, path.name)
     text = json.dumps(_encode(value), indent=1, ensure_ascii=False, allow_nan=False)
-    data = (text + '\n').encode('utf-8')
+    _write_bytes(path, (text + '\n').encode('utf-8'))
+
+
+def write_text(path, text):
+    """Write a text file atomically, in UTF-8 and with the line ends of ``text``.
+
+    Parameters
+    ----------
+    path : path-like
+        Target file; its directory must exist.
+    text : str
+    """
+    if not isinstance(text, str):
+        raise StoreError(f'{Path(path).name}: a str is required, not {type(text).__name__}')
+    _write_bytes(Path(path), text.encode('utf-8'))
+
+
+def _write_bytes(path, data):
     tmp = path.with_name(f'.{path.name}.{secrets.token_hex(8)}.tmp')
     # Mode 0o666 lets the umask decide the permissions, as for any new file.
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o666)

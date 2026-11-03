@@ -17,6 +17,7 @@ yet written in the inputs, so a relaunch above level 1 is not submitted.
 │   ├── system.json
 │   └── <step>/<label>/          one directory per calculation
 │       ├── input.pwi            input prepared for the calculation, never changed
+│       ├── structure_in.extxyz  its structure, with the constraints of the input
 │       ├── run.pwi              input of the current attempt
 │       ├── output.pwo           output of the current attempt
 │       ├── claim                taken by the worker running the attempt
@@ -26,7 +27,11 @@ yet written in the inputs, so a relaunch above level 1 is not submitted.
 ├── jobs/<name>/                 one group of jobs
 │   ├── manifest.json
 │   ├── jobscript.sh
-│   └── submitted.json
+│   ├── submitted.json
+│   └── withdrawn.json           only for a group withdrawn before any submission
+├── replaced/<system>/<step>/<k>/  one replacement of calculations
+│   ├── replacement.json         journal: what, why, groups withdrawn or retired
+│   └── <step>/<label>/          a calculation replaced, as it was
 ├── jobs.json                    registry of the job manager
 ├── orchestrator.json            steps of each system
 ├── orchestrator.pid             orchestrator running in the background
@@ -62,7 +67,13 @@ jobscript (`execution/jobs.py`):
   environment (modules, virtual environment) and must not launch pw.x
   itself.
 - `submitted.json`: the ids of the jobs, each added right after its
-  submission.
+  submission. Before each submission it gets the time it starts
+  (`pending`), replaced by the id as soon as the scheduler gives it: an
+  interruption in between leaves the trace of a job that may exist, never a
+  job of which nothing is known. A failure that surely created no job
+  removes it.
+- `withdrawn.json`: only for a group withdrawn before any of its jobs was
+  submitted (see *Preparation and replacement*).
 
 `submit_jobs` submits the jobscript once per worker, `groups` times but never
 more than the calculations of the group (the reduction is logged), from the
@@ -126,7 +137,8 @@ registry in `<run>/jobs.json` (written atomically). `add_group(name, count)`
 plans `min(count, calculations)` jobs; each `cycle`:
 
 1. recovers the ids of `submitted.json` missing from the registry, so that a
-   job already submitted is never submitted again;
+   job already submitted is never submitted again; a `pending` left by an
+   interruption becomes a submission of outcome not known;
 2. asks the state of each job that may still change;
 3. submits the jobs still missing from each group. Every registered job
    counts, and so does every submission of outcome not known.
@@ -153,6 +165,13 @@ confirmed by the last query, with no refused submission or submission of
 outcome not known. `run(polling_interval)` repeats the cycle while a job is
 waiting or jobs are to submit; held jobs, jobs that need attention and
 unresolved submissions stay in the summary for the next cycles.
+
+A group none of whose jobs was ever submitted (no job in the registry, no
+submission of outcome not known, no id and no `pending` in `submitted.json`;
+a refusal is allowed) can be withdrawn (`withdraw`): `withdrawn.json` is
+written, the group is never submitted again, `clear_refusal` refuses it, and
+its launches count for no calculation. It stays on disk and is listed apart
+in the summary and by `status`.
 
 ## Worker
 
@@ -358,6 +377,65 @@ attempt, no group listing a next attempt, and its last attempt ended
 completed; never the scheduler). Phases run by hand and passes take turns on
 a run. A relaunch by hand (`Orchestrator.relaunch`) is refused, with nothing
 written, when the settings changed since its step was prepared.
+
+## Preparation and replacement
+
+A step gives its calculations as the settings make them now, nothing written
+(`Step.calculations`; for pw.x, `preparation.workflow_calculation`): input,
+extxyz of the structure with the constraints of the input as `move_mask`
+(for a look in OVITO), and the record with energy model and fingerprint.
+`preparation.prepare_calculations` writes `input.pwi`, `structure_in.extxyz`
+and, last, `record.json`; a directory with the first two and no record is a
+preparation interrupted, written again. The changes made to the settings in
+an input (`nstep = 1` and no `&IONS` in an scf) are logged, one line per
+calculation and change, with the values, in `cli.log` or `orchestrator.log`.
+
+What is on disk is compared first, and nothing is overwritten:
+
+| Found | What happens |
+|---|---|
+| same fingerprint, same input and extxyz | kept as it is |
+| same fingerprint, input different only in keys of the attempts or of the resources (`mixing_beta`, `max_seconds`, …), or extxyz different only in data the input does not take (e.g. `magmom`) | kept, and each difference logged with the value requested and the one kept, e.g. `namelists.CONTROL.max_seconds: requested 3600, kept 300` |
+| another fingerprint, an input different elsewhere (changed by hand), an extxyz whose cell, positions, labels or constraints differ from the input, a file missing, a record that cannot be read, a directory without record with other files | the preparation stops with the list of these calculations and why; nothing is written for the step |
+
+For a step already prepared, `prepare` only logs the calculations that
+differ now. To apply the settings, `prepare <step> --replace`
+(`Orchestrator.replace_step`) replaces every calculation that differs, the
+kept ones included, and leaves those already current. A completed
+calculation that differs only in keys of the attempts is then computed
+again: to avoid it, restore those values before replacing.
+
+Every check comes before any change. The replacement is refused, with the
+reason of each calculation and nothing changed, when a calculation has a
+claim (even empty), or a group of jobs listing it may still run or submit a
+job: a job not in a final state confirmed by the last query, a submission of
+outcome not known or interrupted (`pending`), jobs still to submit. A group
+submitted in part, with some jobs over and the others refused or held back,
+is neither complete nor can it be withdrawn: this version does not replace
+its calculations, and the message says so, with how to go on (settings
+restored, the group let end, then the replacement). Then:
+
+1. the journal `replaced/<system>/<step>/<k>/replacement.json` is written,
+   not done: the calculations, why, the fingerprints before and after, the
+   groups to withdraw and, for each complete group listing a calculation,
+   whether one of its workers took its attempt;
+2. the groups listing a calculation and never submitted are withdrawn;
+3. the directory of each calculation, with its attempts and `OUT/`, moves to
+   `<k>/<step>/<label>/`;
+4. the step goes back to waiting, as with `retry`, and the journal is marked
+   done;
+5. the step is prepared as usual.
+
+From step 1 the launches of the old groups no longer count for the
+calculations replaced (`replacement.retired_launches`): prepared again, they
+start from attempt 1, and an attempt 1 of an old group is not theirs. The
+other calculations of a group keep its launches, and whether the group made
+progress stays the one recorded, so a calculation not taken stays not taken.
+While a journal is not done, every phase, pass and action on the run stops
+and names `prepare <step> --replace`, which completes it: a group already
+withdrawn and a directory already moved are left as they are, the claims of
+the calculations not moved yet are checked again, and nothing is deleted. An
+interruption in step 5 is a preparation interrupted, completed by `prepare`.
 
 ## Lock of the run
 

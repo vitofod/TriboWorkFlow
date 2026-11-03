@@ -17,9 +17,14 @@ SCF converged, the geometry converged or does not apply, and the output was
 parsed; a parsed output always leaves its results in the record. For whoever
 looks at a calculation, ``Status.summary`` sums the states up in one word.
 The results of a record stand for a calculation only if the record is
-complete, has results and its fingerprint equals the one expected
-(``can_reuse``). Which results each kind of calculation must have is checked
-by the parser of its engine.
+complete, has results, its fingerprint equals the one expected and its
+energy model is fully known (``can_reuse``). Which results each kind of
+calculation must have is checked by the parser of its engine.
+
+The energy model is written by the engine. A null value in it marks a part
+that is not known, e.g. the expected checksum of a pseudopotential not
+given: the inputs can still be prepared and run, but such a record is never
+reused and its energies are never combined (``check_energy_model``).
 
 The states and the results describe the last run. Each run is also kept as
 an ``Attempt``: where and when it ran, the time limit, the input and the
@@ -28,8 +33,9 @@ of the stop and the states at its end.
 
 Notes
 -----
-The engine version is recorded. Whether a different version prevents reuse
-is not decided yet, so ``can_reuse`` does not look at it.
+The engine version read from the output (``Engine.version``) is recorded and
+not compared here: the version expected, when the engine has one, is part of
+the energy model.
 """
 
 import copy
@@ -607,6 +613,63 @@ def iter_records(system_dir):
         yield read_record(system_dir, f'{path.parent.parent.name}/{path.parent.name}')
 
 
+def unknown_parts(energy_model):
+    """Parts of an energy model that are not known: its null values.
+
+    Parameters
+    ----------
+    energy_model : dict
+
+    Returns
+    -------
+    list of str
+        Path of each null value, e.g. ``['species[0].md5', 'version']``;
+        empty when the whole model is known.
+    """
+    found = []
+
+    def visit(value, path):
+        if value is None:
+            found.append(path)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                visit(item, f'{path}.{key}' if path else key)
+        elif isinstance(value, (list, tuple)):
+            for i, item in enumerate(value):
+                visit(item, f'{path}[{i}]')
+
+    visit(energy_model, '')
+    return found
+
+
+def reuse_problem(record, fingerprint):
+    """Why a record does not stand for a calculation with the given fingerprint.
+
+    Parameters
+    ----------
+    record : Record or None
+        Record found for the calculation, None if there is none.
+    fingerprint : str
+        Fingerprint expected now for the calculation.
+
+    Returns
+    -------
+    str or None
+        The reason, or None when the record can be reused (``can_reuse``).
+    """
+    check_fingerprint(fingerprint, 'expected fingerprint')
+    if record is None:
+        return 'no record'
+    if record.fingerprint != fingerprint:
+        return 'another fingerprint'
+    if not record.is_complete or record.results is None:
+        return 'not complete or without results'
+    unknown = unknown_parts(record.energy_model)
+    if unknown:
+        return f'energy model not known ({", ".join(unknown)})'
+    return None
+
+
 def can_reuse(record, fingerprint):
     """Whether a record stands for a calculation with the given fingerprint.
 
@@ -620,26 +683,35 @@ def can_reuse(record, fingerprint):
     Returns
     -------
     bool
-        True only for a complete record with that fingerprint and with
-        results.
+        True only for a complete record with that fingerprint, with results
+        and with an energy model fully known (``unknown_parts`` empty).
     """
-    check_fingerprint(fingerprint, 'expected fingerprint')
-    return (record is not None and record.fingerprint == fingerprint and record.is_complete
-            and record.results is not None)
+    return reuse_problem(record, fingerprint) is None
 
 
 def check_energy_model(records):
     """Check that records share one energy model, as any energy difference requires.
 
     The energy model of a record is its engine (name and program) together
-    with its ``energy_model``.
+    with its ``energy_model``. A model with parts not known
+    (``unknown_parts``) is never shared, not even with an identical one.
 
     Raises
     ------
     StoreError
-        If the records have more than one energy model; the message lists the
-        calculations of each.
+        If a record has parts of its energy model not known, or the records
+        have more than one energy model; the message lists the calculations
+        and the parts not known, or the calculations of each model.
     """
+    records = list(records)
+    unknown = []
+    for record in records:
+        parts = unknown_parts(record.energy_model)
+        if parts:
+            unknown.append(f'{record.calc_id} ({", ".join(parts)})')
+    if unknown:
+        raise StoreError('energies of an energy model not known cannot be combined: '
+                         f'{"; ".join(unknown)}')
     groups = {}
     for record in records:
         key = (record.engine.name, record.engine.program, canonical_json(record.energy_model))

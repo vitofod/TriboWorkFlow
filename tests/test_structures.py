@@ -373,6 +373,57 @@ def test_extxyz_selective_dynamics_converted_only_when_cartesian(tmp_path):
         st.write_structure(s, tmp_path / 'b.extxyz')
 
 
+def test_extxyz_text_is_the_file_written(tmp_path):
+    s = fe_structure()
+    st.write_structure(s, tmp_path / 'a.extxyz')
+    text = st.extxyz_text(s)
+    assert text == (tmp_path / 'a.extxyz').read_text()
+    assert_same_structure(st.read_extxyz_text(text), st.read_structure(tmp_path / 'a.extxyz'))
+    with pytest.raises(st.StructureError, match='no periodic cell'):
+        st.read_extxyz_text('1\n\nCu 0 0 0\n')
+
+
+def test_with_if_pos_replaces_the_constraints_of_both_frames(tmp_path):
+    flags = [(0, 0, 1)] * 3
+    s = st.read_structure(poscar(tmp_path))  # selective_dynamics
+    shown = st.with_if_pos(s, flags)
+    assert 'selective_dynamics' in s.site_properties  # the original is not changed
+    assert 'selective_dynamics' not in shown.site_properties
+    assert shown.site_properties['if_pos'] == [[0, 0, 1]] * 3
+    applied = st.with_if_pos(fe_structure(), st.AppliedConstraints([(1, 1, 1)] * 4, ['calc_type'] * 4))
+    assert st.read_extxyz_text(st.extxyz_text(applied)).site_properties['if_pos'] == [[1, 1, 1]] * 4
+    with pytest.raises(st.StructureError, match='3 entries for 4 atoms'):
+        st.with_if_pos(fe_structure(), flags)
+
+
+def test_structure_differences():
+    s = fe_structure()
+    text = st.extxyz_text(s)
+    assert st.structure_differences(text, text) == ([], [])
+    moved = s.copy()
+    moved.translate_sites([1], [0, 0, 0.01], frac_coords=False)
+    relabelled = s.copy()
+    relabelled[0].label = 'Fe3'
+    fixed = st.with_if_pos(s, [(0, 0, 0)] * 4)
+    other_moments = s.copy()
+    other_moments.add_site_property('magmom', [1.0, -1.0, 1.0, -1.0])
+    bigger = Structure(Lattice.from_parameters(2.87, 2.87, 21, 90, 90, 90), s.species,
+                       s.cart_coords, coords_are_cartesian=True, labels=s.labels,
+                       site_properties=s.site_properties)
+    assert st.structure_differences(text, st.extxyz_text(moved)) == (['positions'], [])
+    assert st.structure_differences(text, st.extxyz_text(relabelled)) == (['labels'], [])
+    assert st.structure_differences(text, st.extxyz_text(fixed)) == (['constraints'], [])
+    assert st.structure_differences(text, st.extxyz_text(other_moments)) == ([], ['magmom'])
+    # Positions kept cartesian; a round-off of the conversion may show as well.
+    assert st.structure_differences(text, st.extxyz_text(bigger))[0][0] == 'cell'
+    fewer = s.copy()
+    fewer.remove_sites([3])
+    assert st.structure_differences(text, st.extxyz_text(fewer))[0] == \
+        ['positions', 'labels', 'constraints']
+    with pytest.raises(st.StructureError):
+        st.structure_differences('not an extxyz', text)
+
+
 def test_write_unknown_format(tmp_path):
     with pytest.raises(st.StructureError, match='only xyz and extxyz'):
         st.write_structure(fe_structure(), tmp_path / 'a.cif', 'cif')

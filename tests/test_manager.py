@@ -18,9 +18,9 @@ import pytest
 
 from triboworkflow.core.guard import NotOnHPCError
 from triboworkflow.execution import layout
-from triboworkflow.execution.jobs import (SUBMITTED_FILE, JobError, Launch, Manifest, submit_jobs,
-                                          write_job)
-from triboworkflow.execution.manager import JobManager, JobManagerError
+from triboworkflow.execution.jobs import (PENDING_KEY, SUBMITTED_FILE, WITHDRAWN_FILE, JobError,
+                                          Launch, Manifest, submit_jobs, write_job)
+from triboworkflow.execution.manager import INTERRUPTED, JobManager, JobManagerError
 from triboworkflow.execution.scheduler import SGE_HOLD_TYPES, JobScheduler, JobSchedulerError
 
 CALCS = (('Cu111_Al111', 'pes_scf/aa'), ('Cu111_Al111', 'pes_scf/ab'), ('Cu111_Al111', 'pes_scf/ac'))
@@ -347,6 +347,120 @@ def test_group_submitted_by_hand_is_registered_without_new_jobs(run_dir, manager
     assert jobs.groups == {'batch2': {'planned': 2, 'refused': None, 'unknown': []}}
     assert slurm.count('sbatch') == 2 and summary.to_submit == 0
     assert summary.waiting == ['1000', '1001']
+
+
+def receipt(run_dir, name):
+    return json.loads((layout.job_dir(run_dir, name) / SUBMITTED_FILE).read_text())
+
+
+def interrupt_sbatch(slurm, after=0):
+    """sbatch creates the job, then the process stops before its id is written."""
+    original = slurm._run_command
+
+    def run(cmd, input_data=None, cwd=None):
+        result = original(cmd, input_data, cwd)
+        if cmd[0] == 'sbatch' and slurm.count('sbatch') > after:
+            raise KeyboardInterrupt
+        return result
+
+    slurm._run_command = run
+
+
+def test_interrupted_submission_becomes_of_outcome_not_known(run_dir, manager, slurm, clock):
+    jobs = manager()
+    jobs.add_group('batch1', 2)
+    interrupt_sbatch(slurm, after=1)
+    with pytest.raises(KeyboardInterrupt):
+        jobs.cycle()
+    assert slurm.states == {'1000': 'PENDING', '1001': 'PENDING'}  # job 1001 exists, no id kept
+    assert receipt(run_dir, 'batch1') == {'job_ids': ['1000'], PENDING_KEY: START.isoformat()}
+    restarted = manager()
+    summary = restarted.cycle()
+    assert restarted.group_jobs('batch1') == ['1000'] and slurm.count('sbatch') == 2
+    assert restarted.groups['batch1']['unknown'] == [{'error': INTERRUPTED,
+                                                      'at': START.isoformat()}]
+    assert summary.unknown == {'batch1': 1} and summary.to_submit == 0
+    assert receipt(run_dir, 'batch1') == {'job_ids': ['1000']}
+    restarted.resolve_submission('batch1', '1001')
+    assert receipt(run_dir, 'batch1') == {'job_ids': ['1000', '1001']}
+    assert manager().cycle().waiting == ['1000', '1001'] and slurm.count('sbatch') == 2
+
+
+def test_interruption_after_the_registry_adds_no_second_unknown(run_dir, manager, slurm):
+    jobs = manager()
+    jobs.add_group('batch1', 1)
+    interrupt_sbatch(slurm)
+    with pytest.raises(KeyboardInterrupt):
+        jobs.cycle()
+    restarted = manager()
+    pending = receipt(run_dir, 'batch1')
+    restarted.recover()
+    # As if the process stopped after the registry and before submitted.json.
+    (layout.job_dir(run_dir, 'batch1') / SUBMITTED_FILE).write_text(json.dumps(pending))
+    manager().recover()
+    assert len(registry(run_dir)['groups']['batch1']['unknown']) == 1
+    assert receipt(run_dir, 'batch1') == {'job_ids': []}
+
+
+def test_lost_answer_keeps_the_time_of_its_submission(run_dir, manager, slurm, clock):
+    slurm.lose = 1
+    jobs = manager()
+    jobs.add_group('batch1', 1)
+    jobs.cycle()
+    assert jobs.groups['batch1']['unknown'][0]['at'] == START.isoformat()
+    assert receipt(run_dir, 'batch1') == {'job_ids': []}
+    assert len(manager().groups['batch1']['unknown']) == 1
+
+
+# --- withdrawal ----------------------------------------------------------------------
+
+def test_withdraw_a_group_never_submitted(run_dir, manager, slurm):
+    slurm.refuse = 1
+    jobs = manager()
+    jobs.add_group('batch1', 2)
+    jobs.cycle()  # refused: surely no job
+    jobs.withdraw('batch1', 'calculations replaced')
+    jobs.withdraw('batch2', 'calculations replaced')  # written, never registered
+    data = json.loads((layout.job_dir(run_dir, 'batch1') / WITHDRAWN_FILE).read_text())
+    assert data == {'at': START.isoformat(), 'reason': 'calculations replaced'}
+    summary = manager().cycle()
+    assert slurm.count('sbatch') == 1 and summary.to_submit == 0
+    assert summary.withdrawn == ['batch1', 'batch2']
+    assert summary.complete == summary.incomplete == [] and summary.refused == {}
+    with pytest.raises(JobManagerError, match='was withdrawn'):
+        jobs.clear_refusal('batch1')
+    jobs.withdraw('batch1', 'again')  # already withdrawn: nothing changes
+    assert json.loads((layout.job_dir(run_dir, 'batch1') / WITHDRAWN_FILE).read_text()) == data
+
+
+def test_withdrawal_refused_while_a_job_may_exist(run_dir, manager, slurm):
+    jobs = manager()
+    jobs.add_group('batch1', 1)
+    jobs.cycle()
+    assert jobs.withdrawal_problem('batch1') == 'jobs submitted: 1000'
+    slurm.lose = 1
+    jobs.add_group('batch2', 1)
+    jobs.cycle()
+    assert jobs.withdrawal_problem('batch2') == \
+        '1 submissions of outcome not known: the job may exist'
+    for name, message in (('batch1', 'jobs submitted: 1000'), ('batch2', 'outcome not known')):
+        with pytest.raises(JobManagerError, match=f'cannot be withdrawn: .*{message}'):
+            jobs.withdraw(name, 'replaced')
+    with pytest.raises(JobManagerError, match='has no manifest'):
+        jobs.withdraw('batch3', 'replaced')
+    assert not (layout.job_dir(run_dir, 'batch1') / WITHDRAWN_FILE).exists()
+
+
+def test_withdrawal_refused_with_a_pending_submission(run_dir, manager, slurm):
+    jobs = manager()
+    jobs.add_group('batch1', 1)
+    interrupt_sbatch(slurm)
+    with pytest.raises(KeyboardInterrupt):
+        jobs.cycle()
+    restarted = manager()
+    assert 'has no outcome recorded: the job may exist' in restarted.withdrawal_problem('batch1')
+    restarted.recover()  # the pending submission is now of outcome not known
+    assert 'outcome not known' in restarted.withdrawal_problem('batch1')
 
 
 def test_invalid_registry(run_dir, manager):

@@ -21,6 +21,7 @@ from .command import CustomFormatter, add_run_argument
 # Name and module of each command, in the order of the help.
 COMMANDS = [
     ('check', 'triboworkflow.cli.check'),
+    ('gen', 'triboworkflow.cli.gen'),
     ('status', 'triboworkflow.cli.status'),
     ('prepare', 'triboworkflow.cli.prepare'),
     ('submit', 'triboworkflow.cli.submit'),

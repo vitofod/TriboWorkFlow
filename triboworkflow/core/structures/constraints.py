@@ -242,6 +242,38 @@ def calc_type_if_pos(structure):
                               ['calc_type'] * n)
 
 
+def with_if_pos(structure, if_pos):
+    """Copy of a structure whose constraints are the given ``if_pos`` of every atom.
+
+    The constraints of the structure, in either frame, are replaced: e.g. the
+    extxyz of a calculation then shows the flags written in its input.
+
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+    if_pos : AppliedConstraints or sequence of tuple of int
+        The three pw.x flags of every atom (0 fixed, 1 free).
+
+    Returns
+    -------
+    pymatgen.core.structure.Structure
+
+    Raises
+    ------
+    StructureError
+        If ``if_pos`` does not give one entry per atom.
+    """
+    flags = if_pos.if_pos if isinstance(if_pos, AppliedConstraints) else list(if_pos)
+    if len(flags) != len(structure):
+        raise StructureError(f'if_pos: {len(flags)} entries for {len(structure)} atoms')
+    copy = structure.copy()
+    for key in (IF_POS, SELECTIVE_DYNAMICS):
+        if key in copy.site_properties:
+            copy.remove_site_property(key)
+    copy.add_site_property(IF_POS, [[int(x) for x in f] for f in flags])
+    return copy
+
+
 def _atoms(indices, shown=10):
     text = ', '.join(map(str, indices[:shown]))
     return text + (f' and {len(indices) - shown} more' if len(indices) > shown else '')

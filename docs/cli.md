@@ -62,8 +62,9 @@ CuAl/                       the run
 | Command | What it does |
 |---|---|
 | `check` | reads and validates `config.toml` and prints a summary: system, steps, scheduler, groups, placeholders to fill in; code 1 if the settings are not valid, with the TOML path of the field |
+| `gen SETTINGS.toml` | one calculation, not a run: writes the pw.x input of `[structure]` and the extxyz of its structure next to the settings file (see *One calculation*); nothing is run |
 | `status [--calcs]` | the orchestrator (running, stopped, on another host), who holds the lock of the run, each step with its state, reason and time of its last update, the calculations that need the user and why, the jobs. **It reads only the files: it is the state last saved, not a query to the scheduler.** `--calcs` lists every calculation with its state (`pending`, `running`, `completed`, `not_converged`, `crashed`, `unknown`) |
-| `prepare <step>` | phase 1: checks the entries the step reads and writes its calculations (directories, inputs, records). A missing or stale entry blocks the step with what is missing; nothing is computed in its place |
+| `prepare <step> [--replace]` | phase 1: checks the entries the step reads and writes its calculations (directories, inputs, extxyz of the structures, records). A missing or stale entry blocks the step with what is missing; nothing is computed in its place. A calculation already prepared is never overwritten: one that differs from the settings stops the preparation with the list, one that differs only in keys of the attempts (e.g. `mixing_beta`, `max_seconds`) is kept with the values logged. `--replace` moves every calculation that differs, with its attempts, to `replaced/` and prepares it again (`execution.md`, *Preparation and replacement*) |
 | `analyse <step>` | phase 3, from the files only: every calculation of the step must be done according to its claim, its record and the groups of jobs, with the fingerprint the settings give now; otherwise nothing is written and the error says what is missing for each calculation. For `match`, `plotpes` and `shear` it is the whole step |
 | `retry <step>` | a step failed for an error of its own (while it was prepared or analysed, or because the settings changed after its preparation) starts again |
 | `clear-refusal <group>` | a group whose submission the scheduler refused is submitted again by the next `submit` or pass, once its copy of the jobscript (`jobs/<group>/jobscript.sh`) is fixed |
@@ -105,6 +106,34 @@ A command refused for its use, by the guard of the HPC machine or by the
 lock writes nothing in the run, not even `cli.log`.
 
 ## Examples
+
+### One calculation
+
+A settings file with `[structure]` (template: `examples/single_input.toml`,
+fields in `configuration.md`) gives one pw.x input, generated on any machine:
+
+```bash
+cd ~/calcs/graphene
+triboworkflow gen single_input.toml
+# Input: /home/.../graphene/input.pwi
+# Structure: /home/.../graphene/input.extxyz
+# calculation = relax; 6 atoms, 1 species; K_POINTS automatic 8 8 1  0 0 0
+# Structure read from /home/.../graphene/C6.pwi (pwi); constraints: 5 default, 1 file
+```
+
+- The input is named by `[generation].file_prefix` and written in the folder
+  of the settings file; the extxyz has the same name with the suffix
+  `.extxyz`. It holds the cell, positions and labels of the input and its
+  `if_pos` as `move_mask`, to check the input in OVITO before running it.
+- The namelists are written as given, `calculation`, `prefix` and `outdir`
+  included; the keys left out take the pw.x defaults. An scf makes one step
+  and has no `&IONS`: when the settings say otherwise the input is changed
+  and a warning names the key and its value.
+- With `overwrite = false` an existing input or extxyz stops the command and
+  nothing is written. A placeholder left in the settings, or a file with
+  `[interface]`, stops it too.
+- No run, lock or record is made: the input is run by hand, or in a run of
+  the workflow.
 
 ### The match of the interface
 
@@ -160,9 +189,26 @@ triboworkflow analyse ppes
   those of the calculations prepared and stop before submitting or using a
   result: the step fails with the list (`settings changed since the
   preparation: …`), and the jobs still missing from its groups are not
-  submitted. Decide what to do (settings restored, or old
-  calculations moved away by hand), then `retry ppes`. `prepare` never
-  overwrites a calculation prepared with another fingerprint.
+  submitted. Either restore the settings and `retry ppes`, or replace the
+  calculations: `prepare ppes --replace` moves each calculation that
+  differs, with its attempts and `OUT/`, to `replaced/<system>/ppes/<k>/`,
+  withdraws the groups listing them that never had a job submitted, and
+  prepares the step again. It is refused, with the reason of each
+  calculation and nothing changed, while a worker holds a calculation (a
+  claim) or a job of a group listing it may still run: cancel the job, let
+  the orchestrator query the jobs again on the HPC machine (`start`), then
+  repeat. A group submitted in part (some jobs over, the others refused, or
+  held back since the settings changed) also stops it: it is not complete
+  and cannot be withdrawn, and this version does not replace its
+  calculations. The message says so and how to go on: restore the settings,
+  `retry ppes`, `prepare ppes` (and `clear-refusal` for a refusal), let the
+  group end with `submit ppes` or `start`, then change the settings and
+  replace.
+  `prepare` alone never overwrites a calculation prepared, and for a step
+  already prepared only lists in the log the calculations that differ.
+- **A replacement interrupted** (a crash, Ctrl-C): every command that changes
+  the run stops and names `prepare ppes --replace`, which completes it
+  without moving anything twice; `status` shows it too.
 - `analyse ppes` writes the entries once every calculation is completed and
   current; otherwise it says, for each calculation, what is missing, e.g.
   `ppes/d3: attempt 2 recorded as running: its job may still run`, `empty

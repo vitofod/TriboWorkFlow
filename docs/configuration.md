@@ -22,8 +22,8 @@ settings.require_complete()                 # SettingsError if placeholders are 
   and `pw.x` judges the values and ignores the keys that do not apply. The
   settings never add, change or reject a `pw.x` parameter, except for the
   keys the generator writes itself, the conventions of the project
-  (`ibrav = 0`, cell and positions in angstrom, `scf` and `relax` only, no
-  Hubbard), and the keys the relaunches change: `max_seconds`, written for
+  (`ibrav = 0`, cell and positions in angstrom, `scf` and `relax` only), and
+  the keys the relaunches change: `max_seconds`, written for
   every run, and `nstep` and `mixing_beta`, checked here and changed by the
   remedies (see [Values changed by the relaunches](#values-changed-by-the-relaunches)).
 - **The other tables are strict.** In the tables of the project
@@ -103,12 +103,16 @@ Keys the settings do not accept:
 | `ibrav`, `celldm(i)`, `A`, `B`, `C`, `cosAB`, `cosAC`, `cosBC` | SYSTEM | `ibrav = 0` always: the cell is written in `CELL_PARAMETERS` from the structure |
 | `nat`, `ntyp` | SYSTEM | written by the generator |
 | `starting_magnetization(i)` | SYSTEM | given per species in `[[atomic_species]]` |
-| `lda_plus_u`, `lda_plus_u_kind`, `U_projection_type`, `Hubbard_*` | SYSTEM | Hubbard corrections are not supported |
 | `calculation` other than `scf`, `relax` | CONTROL | only `scf` and `relax` for now |
 | `calculation`, `title`, `prefix`, `restart_mode`, `outdir` | CONTROL, with `[interface]` | the workflow sets them for every calculation (own `prefix` and `outdir`, `calculation` from the calculation type) |
 
 `pseudo_dir` and `outdir` are paths on the machine that runs `pw.x`; they
 are never resolved locally.
+
+Hubbard corrections are not implemented: the generator writes no `HUBBARD`
+card, which `pw.x` 7.2 needs to apply them. Their keys (`Hubbard_*`,
+`starting_ns_eigenvalue(…)`) are not rejected and go to `pw.x` as given, like
+`space_group` and the other keys that the project does not use.
 
 ### Values changed by the relaunches
 
@@ -196,17 +200,74 @@ the order of `ATOMIC_SPECIES` and of the per-species `pw.x` indices
 - `gamma` writes `K_POINTS gamma` (real wavefunctions, Γ-point routines).
 - `kdens` computes the grid when the cell is known, with the vendored
   `MeshFromDensity(structure, kdens, material_type, force_gamma=True)`:
-  k-points per Å⁻¹ of each reciprocal vector, k3 = 1 for slabs and
-  interfaces, mesh centred on Γ (offset 0 0 0).
+  `round(|b_i| · kdens)` subdivisions along each reciprocal vector `b_i`,
+  whose length includes 2π (e.g. a cubic cell of 3.6 Å with `kdens = 6`
+  gives 10 10 10); mesh centred on Γ (offset 0 0 0). In the workflows
+  `material_type` comes from the calculation type: k3 = 1 for slabs and
+  interfaces. For a single calculation it is `auto`: the structure is a
+  slab, with k3 = 1, when the cell is at least 6 Å longer along z than the
+  atoms, and a bulk otherwise.
+- None of the modes chooses the sampling for convergence: the grid or the
+  density is the user's choice.
+
+## `[qe]`
+
+The `pw.x` expected on the machine that runs the calculations.
+
+| Key | Type | | Notes |
+|---|---|---|---|
+| `version` | str | R with `[interface]` | `7.1`, `7.2`, `7.3`; required when a step that runs calculations uses `qe` |
+| `upf_md5` | str | — | manifest of the expected MD5 checksums of the UPF files, relative to the folder of this file |
+
+- The manifest has the format of `md5sum`: one line `<checksum>  <file>`
+  per file, the checksum in 32 lower-case hex digits. Make it on the HPC,
+  in `pseudo_dir`, with `md5sum *.UPF > pseudo.md5`; `pw.x` computes the
+  same checksum of each UPF file and prints it in the output. Every UPF file
+  of `[[atomic_species]]` must be in it, once; other files may be listed.
+  It is read when an input is generated.
+- Version and checksums enter the energy model of every calculation (see
+  [Fingerprint and energy model](#fingerprint-and-energy-model)); the path
+  of the manifest does not.
+- **Without `version` or without `upf_md5`** the energy model is not fully
+  known. The inputs are generated and the calculations can run, but their
+  results are never reused and their energies are never combined
+  automatically: an analysis that needs them (e.g. an adhesion energy)
+  stops with an error that names the calculations and the missing parts.
+
+## Fingerprint and energy model
+
+Each calculation has a fingerprint, which tells whether an existing result
+can stand for it, and an energy model, which tells whether its energy can be
+combined with others.
+
+- **Energy model:** `[qe] version`; for every species, in order, label, UPF
+  file, expected checksum and `starting_magnetization`; the `[k_points]`
+  settings (not the grid: with the same `kdens` a bulk and a slab have
+  different grids); the namelist keys that change the energy (cutoffs,
+  occupations and smearing, spin and magnetization, including `angle1` and
+  `angle2`, functional, vdW, fields, charge, symmetry, …) and every key
+  that is not in the lists of `triboworkflow/engines/qe/keys.py`, e.g. a key
+  that `pw.x` reads but does not document, such as `B_field`.
+- **Fingerprint:** the energy model, the calculation type, the structure
+  and the `if_pos` flags, the masses, the `K_POINTS` card written and every
+  namelist key written, except those that change how a run gets to the
+  result (`nstep`, `electron_maxstep`, mixing and diagonalization keys,
+  which the relaunches may change) and the resources (`max_seconds`,
+  `prefix`, `outdir`, `pseudo_dir`, `wfcdir`, `title`, …).
+- Keys are compared in lower case and without blanks; values keep their
+  TOML type, so `ecutwfc = 40` and `ecutwfc = 40.0` count as different (at
+  worst a calculation is run again). A `starting_magnetization` left out
+  and one equal to 0 also count as different.
 
 ## `[generation]` (one calculation)
 
-Read only with `[structure]`; in the workflow the file names are fixed.
+Read only with `[structure]`, by `triboworkflow gen` (`cli.md`); in the
+workflow the file names are fixed.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `file_prefix` | str | `"input.pwi"` | name of the generated input |
-| `overwrite` | bool | `false` | if false, an existing file is an error |
+| `file_prefix` | str | `"input.pwi"` | name of the generated input, relative to the folder of the settings file; the extxyz of its structure has the same name with the suffix `.extxyz` |
+| `overwrite` | bool | `false` | if false, an existing input or extxyz is an error and nothing is written |
 | `atomic_positions_units` | str | `"angstrom"` | `angstrom` |
 | `cell_parameters_units` | str | `"angstrom"` | `angstrom` |
 

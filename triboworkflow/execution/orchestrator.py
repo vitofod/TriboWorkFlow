@@ -69,6 +69,12 @@ A launch above level 1 of the remedies is decided and not submitted, since
 this version does not write its values in the input: its calculation is
 reported as needing the user.
 
+Calculations that differ from the settings are never overwritten: the user
+restores the settings, or replaces them (``replace_step``), which moves
+their directories to ``<run>/replaced/`` and prepares the step again
+(``preparation.py``). While a replacement is not completed, every phase,
+pass and action of the user stops and names the command that completes it.
+
 Notes
 -----
 The phases saved after each change and read again at a restart follow SCS
@@ -90,10 +96,13 @@ from triboworkflow.core.store.atomic import read_json, write_json
 from triboworkflow.core.store.record import check_keys
 
 from .archive import ArchiveError, archive_attempt, read_claim, released_in_part
-from .jobs import MANIFEST_FILE, SUBMITTED_FILE, Manifest, write_job
+from .jobs import MANIFEST_FILE, SUBMITTED_FILE, Manifest, is_withdrawn, write_job
 from .layout import CLAIM_FILE, JOBS_DIR, calc_dir, system_dir
 from .policy import decide, manual_launch
-from .reconcile import LaunchError, Reconciler, launch_for, launch_index, read_groups
+from .preparation import (check_calculations, complete_replacement, prepare_calculations,
+                          start_replacement)
+from .reconcile import LaunchError, Reconciler, launch_for, run_launches
+from .replacement import mark_done, unfinished
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +166,17 @@ class Step:
         """
         return {}
 
+    def calculations(self, run_dir, system):
+        """The calculations as the settings make them now, nothing written.
+
+        Each one as ``preparation.prepare_calculations`` takes it (e.g. a
+        ``QECalculation`` of ``preparation.workflow_calculation``). The
+        default ``plan`` and ``prepare`` are made of it, and a replacement
+        (``Orchestrator.replace_step``) compares it with the directories. A
+        step of analysis returns an empty list.
+        """
+        return []
+
     def plan(self, run_dir, system):
         """Calculations that the settings give now: ``{calc_id: fingerprint}``.
 
@@ -164,17 +184,19 @@ class Step:
         and right after ``prepare``, the calculations prepared are compared
         with this plan; a step of analysis returns an empty dict.
         """
-        return {}
+        return {calc.calc_id: calc.record.fingerprint
+                for calc in self.calculations(run_dir, system)}
 
     def prepare(self, run_dir, system):
         """Write the calculations of the step and return their ``calc_id``.
 
         Inputs and records already prepared and current are kept as they
-        are. A calculation whose record has a fingerprint other than the one
-        of ``plan`` is never overwritten: ``prepare`` raises an error listing
+        are (``prepare_calculations``). A calculation that differs from the
+        settings is never overwritten: ``prepare`` raises an error listing
         those calculations. A step of analysis only returns an empty list.
         """
-        return []
+        return prepare_calculations(run_dir, system, self.calculations(run_dir, system),
+                                    step=self.name)
 
     def analyse(self, run_dir, system, calculations):
         """Read the results of the completed calculations and write the entries."""
@@ -360,7 +382,10 @@ class Orchestrator:
         ------
         NotOnHPCError
             If the commands of the scheduler are not found.
+        OrchestratorError
+            If a replacement of calculations is not completed.
         """
+        self._check_replacements()
         held = self._held_back()
         self.manager.cycle(held)
         self._register_written_groups()
@@ -405,6 +430,22 @@ class Orchestrator:
             if stop and stop():
                 return report
 
+    def _check_replacements(self, allow=None):
+        """Stop while a replacement of calculations is not completed, but the one of ``allow``.
+
+        Raises
+        ------
+        OrchestratorError
+            Naming each replacement not completed and the command that
+            completes it.
+        """
+        found = [r for r in unfinished(self.run_dir) if (r.system, r.step) != allow]
+        if found:
+            raise OrchestratorError('; '.join(
+                f'replacement of the calculations of {r.system}/{r.step} not completed '
+                f'({r.path}): run "triboworkflow prepare {r.step} --replace" to complete it'
+                for r in found))
+
     def _held_back(self):
         """Groups not to submit: all but those of the steps whose calculations are current.
 
@@ -429,13 +470,13 @@ class Orchestrator:
                 if not any(group.startswith(prefix) for prefix in current)}
 
     def _register_written_groups(self):
-        """Register the groups written and neither registered nor submitted."""
+        """Register the groups written and neither registered, submitted nor withdrawn."""
         root = self.run_dir / JOBS_DIR
         if not root.is_dir():
             return
         for path in sorted(root.iterdir()):
             if ((path / MANIFEST_FILE).is_file() and not (path / SUBMITTED_FILE).exists()
-                    and path.name not in self.manager.groups):
+                    and path.name not in self.manager.groups and not is_withdrawn(path)):
                 logger.warning('Group %s written and not registered: registered now', path.name)
                 self.manager.add_group(path.name, self.execution.groups)
 
@@ -642,18 +683,102 @@ class Orchestrator:
         """Prepare one step, as a pass would start it, without the scheduler.
 
         A completed step still current, a step already prepared and a step
-        failed for an error of its own are left as they are.
+        failed for an error of its own are left as they are; for a step
+        already prepared and running, the calculations that differ from the
+        settings now are logged (``check_calculations``).
 
         Returns
         -------
         StepReport
+
+        Raises
+        ------
+        OrchestratorError
+            If a replacement of calculations is not completed.
         """
+        self._check_replacements()
         entry = self.entry(system, name)
         if (not self._still_completed(system, name, entry) and entry['error'] is None
                 and entry['calculations'] is None):
             self._start(system, name, entry)
+        elif entry['status'] == 'running' and entry['error'] is None:
+            self._report_differences(system, name)
         self._save()
         return self.step_report(system, name)
+
+    def _report_differences(self, system, name):
+        """Log the calculations of a prepared step that differ from the settings now."""
+        try:
+            checks = check_calculations(self.run_dir, system,
+                                        self.steps[name].calculations(self.run_dir, system))
+        except Exception as error:
+            logger.error('%s/%s: calculations not compared with the settings: %s', system, name,
+                         error)
+            return
+        differ = [check for check in checks if check.kind in ('kept', 'changed')]
+        for check in differ:
+            logger.warning('%s/%s: prepared, differs from the settings: %s', system,
+                           check.calc_id, '; '.join(check.reasons + check.warnings))
+        if differ:
+            logger.warning('To apply the settings to them: "triboworkflow prepare %s --replace"',
+                           name)
+
+    def replace_step(self, system, name, command=None):
+        """Replace the calculations of a step that differ from the settings, then prepare it.
+
+        The calculations ``kept`` or ``changed`` (``check_calculations``)
+        move to ``<run>/replaced/`` with their attempts and outputs
+        (``preparation.py``): every check comes first, and a calculation
+        that a worker or a job may still use stops the whole replacement,
+        with nothing changed. Then the step goes back to waiting, as with
+        ``retry``, the journal is marked done and the step is prepared. A
+        replacement of this step not completed is completed first, with the
+        calculations of its journal.
+
+        Parameters
+        ----------
+        system, name : str
+            The step.
+        command : str or None, optional
+            Command that asked for it, written in the journal.
+
+        Returns
+        -------
+        report : StepReport
+            Of the step after its preparation.
+        replacement : triboworkflow.execution.replacement.Replacement or None
+            The replacement made or completed; None if no calculation
+            differs.
+
+        Raises
+        ------
+        OrchestratorError
+            If a replacement of another step is not completed.
+        ReplacementError
+            If the replacement is refused (nothing changed) or cannot be
+            completed.
+        """
+        self._check_replacements(allow=(system, name))
+        entry = self.entry(system, name)
+        found = [r for r in unfinished(self.run_dir) if (r.system, r.step) == (system, name)]
+        for replacement in found:
+            logger.warning('Replacement %s not completed: completed now', replacement.path)
+        if not found:
+            calcs = self.steps[name].calculations(self.run_dir, system)
+            at = self.manager.now().isoformat(timespec='seconds')
+            replacement = start_replacement(self.run_dir, system, name, calcs, self.manager,
+                                            command, at)
+            found = [replacement] if replacement is not None else []
+        done = None
+        for replacement in found:
+            complete_replacement(self.run_dir, replacement, self.manager)
+            self._set(entry, 'waiting', 'calculations replaced', error=None, calculations=None,
+                      calcs={}, attention=[])
+            self._save()
+            done = mark_done(replacement)
+            logger.info('%s/%s: %d calculations replaced, kept in %s', system, name,
+                        len(done.calculations), done.path)
+        return self.prepare_step(system, name), done
 
     def submit_step(self, system, name):
         """Submit the calculations of a prepared step: one pass on that step, without analysis.
@@ -676,6 +801,7 @@ class Orchestrator:
         NotOnHPCError
             If the commands of the scheduler are not found.
         """
+        self._check_replacements()
         entry = self.entry(system, name)
         if entry['status'] != 'running':
             raise OrchestratorError(f'{system}/{name} is {entry["status"]}: only a prepared step '
@@ -709,6 +835,7 @@ class Orchestrator:
             If the step is not prepared, or a calculation is not done
             according to its files.
         """
+        self._check_replacements()
         entry = self.entry(system, name)
         if self._still_completed(system, name, entry) or entry['error'] is not None:
             self._save()
@@ -752,7 +879,7 @@ class Orchestrator:
         files are read: claims, records and manifests.
         """
         sdir = system_dir(self.run_dir, system)
-        launches = launch_index(read_groups(self.run_dir))
+        launches = run_launches(self.run_dir)
         missing = []
         for calc_id in calc_ids:
             try:
@@ -819,6 +946,7 @@ class Orchestrator:
             If no step of the system has the calculation, or the settings
             changed since its step was prepared; nothing is written.
         """
+        self._check_replacements()
         name = self._step_of(system, calc_id)
         entry = self.entry(system, name)
         found = self._stale(system, name, entry)
@@ -875,6 +1003,7 @@ class Orchestrator:
             the launch of the attempt is not known, or ``group`` gives another
             launch than the one recorded.
         """
+        self._check_replacements()
         self._step_of(system, calc_id)
         path = calc_dir(self.run_dir, system, calc_id) / CLAIM_FILE
         where = f'{system}/{calc_id}'
@@ -915,6 +1044,7 @@ class Orchestrator:
 
     def retry(self, system, step):
         """Let a step failed for an error of its own start again at the next pass."""
+        self._check_replacements()
         entry = self.entry(system, step)
         self._set(entry, 'waiting', 'retry asked', error=None, calculations=None)
         self._save()

@@ -14,3 +14,6 @@ dacite>=1.8.1
 
 pytest
 pip
+# Build backend of pyproject.toml: create_env.sh installs TriboWorkFlow
+# without build isolation, so nothing is downloaded at install time.
+setuptools

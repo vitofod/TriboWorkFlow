@@ -15,6 +15,10 @@
   marks the others, so that ``read_structure`` gives them back as ``None``.
   The structure properties (e.g. ``qe_species`` of a PWI) are not written.
 
+``extxyz_text`` gives the same text without writing a file;
+``structure_differences`` compares two extxyz texts on what a pw.x input
+takes from a structure (``INPUT_FIELDS``) and on the other per-atom data.
+
 Notes
 -----
 The files are written by ASE. Every atom gets its own ``FixCartesian``:
@@ -22,6 +26,7 @@ ASE 3.26 writes the atoms left out of a list of ``FixCartesian`` as fixed,
 and keeps only the first kind of a mixed list (``ase/io/extxyz.py:894-910``).
 """
 
+import io
 from pathlib import Path
 
 import ase.io
@@ -30,7 +35,12 @@ from ase.constraints import FixCartesian
 
 from .constraints import cartesian_if_pos
 from .convert import to_atoms
-from .model import CONSTRAINT_GIVEN, StructureError
+from .model import CONSTRAINT_GIVEN, IF_POS, StructureError
+from .readers import read_extxyz_text
+
+# What a structure gives a pw.x input: the differences that make an extxyz
+# no longer the picture of its input (``structure_differences``).
+INPUT_FIELDS = ('cell', 'positions', 'labels', 'constraints')
 
 
 def write_structure(structure, path, format='extxyz'):
@@ -94,3 +104,64 @@ def extxyz_atoms(structure):
         if any(flags is None for flags in if_pos):
             atoms.set_array(CONSTRAINT_GIVEN, np.array([flags is not None for flags in if_pos]))
     return atoms
+
+
+def extxyz_text(structure):
+    """Text of the extxyz file that ``write_structure`` writes for a structure.
+
+    Raises
+    ------
+    StructureError
+        As ``extxyz_atoms``.
+    """
+    buffer = io.StringIO()
+    ase.io.write(buffer, extxyz_atoms(structure), format='extxyz')
+    return buffer.getvalue()
+
+
+def structure_differences(kept, new):
+    """What differs between two extxyz texts, as read back by ``read_structure``.
+
+    Parameters
+    ----------
+    kept, new : str
+        Texts of two extxyz files, e.g. the one of a calculation prepared
+        earlier and the one prepared now.
+
+    Returns
+    -------
+    fields : list of str
+        The ``INPUT_FIELDS`` that differ: ``cell``, ``positions`` (cartesian,
+        or the number of atoms), ``labels`` (QE label or element of an atom),
+        ``constraints`` (``if_pos``).
+    other : list of str
+        The other per-atom data that differ (e.g. ``magmom``), by name; empty
+        when only the text differs, e.g. its comment line.
+
+    Raises
+    ------
+    StructureError
+        If a text cannot be read as extxyz.
+    """
+    a, b = read_extxyz_text(kept), read_extxyz_text(new)
+    fields = []
+    if not np.array_equal(a.lattice.matrix, b.lattice.matrix):
+        fields.append('cell')
+    if len(a) != len(b):
+        return fields + ['positions', 'labels', 'constraints'], []
+    if not np.array_equal(a.cart_coords, b.cart_coords):
+        fields.append('positions')
+    if [(s.label, s.specie.symbol) for s in a] != [(s.label, s.specie.symbol) for s in b]:
+        fields.append('labels')
+    props_a, props_b = a.site_properties, b.site_properties
+    if not _same_values(props_a.get(IF_POS), props_b.get(IF_POS)):
+        fields.append('constraints')
+    other = sorted(name for name in set(props_a) | set(props_b)
+                   if name != IF_POS and not _same_values(props_a.get(name), props_b.get(name)))
+    return fields, other
+
+
+def _same_values(x, y):
+    if x is None or y is None:
+        return x is None and y is None
+    return len(x) == len(y) and all(np.array_equal(u, v) for u, v in zip(x, y))
