@@ -14,9 +14,11 @@ The namelists are passed to pw.x as given: pw.x applies its own defaults to
 the keys left out and judges the values. The checks only cover what the code
 needs to work: the layout of the file, the keys the input generator writes
 itself, the conventions of the project (``ibrav = 0``, angstrom, ``scf`` and
-``relax`` only) and the keys that the relaunches
+``relax`` only), the keys that the relaunches
 change (``RELAUNCH_KEYS``), whose values must make sense and give a warning
-outside the recommended ones (``Namelists.advice``). Values that a step does
+outside the recommended ones (``Namelists.advice``), and ``wfcdir``, which
+must name a directory inside the one of the calculation, since the worker
+removes it before a relaunch from scratch. Values that a step does
 not use are ignored, as pw.x ignores keys that do not apply. Hubbard
 corrections are not implemented (the generator writes no ``HUBBARD`` card),
 but their keys are not rejected: they go to pw.x like the others.
@@ -38,7 +40,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 SCHEMA_VERSION = 1
@@ -129,6 +131,14 @@ def _positive(path, value):
 def _required(path, value, reason):
     if value is None:
         raise SettingsError(path, f'required {reason}')
+
+
+def _inside_directory(value):
+    """Whether a value names a directory below the one pw.x runs in, as written."""
+    if not isinstance(value, str) or '\\' in value:
+        return False
+    name = PurePosixPath(value)
+    return not name.is_absolute() and bool(name.parts) and '..' not in name.parts
 
 
 def key_name(key):
@@ -335,6 +345,15 @@ class Namelists:
         if beta is not None and (type(beta) not in (int, float) or not 0 < beta <= 1):
             raise SettingsError(f'{path}.ELECTRONS.{self.key("ELECTRONS", "mixing_beta")}',
                                 f'a number in (0, 1] is required, got {beta!r}')
+        # The files that pw.x writes per process belong to the calculation: the
+        # worker removes them before a relaunch from scratch, and two
+        # calculations never share them.
+        wfcdir = self.get('CONTROL', 'wfcdir')
+        if wfcdir is not None and not _inside_directory(wfcdir):
+            raise SettingsError(f'{path}.CONTROL.{self.key("CONTROL", "wfcdir")}',
+                                'a relative directory inside the calculation directory is '
+                                f'required (not absolute, ".", through ".." or with "\\"), got '
+                                f'{wfcdir!r}')
 
     def advice(self, path):
         """Values allowed but outside those recommended for the relaunches.

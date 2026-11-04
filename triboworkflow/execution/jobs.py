@@ -10,7 +10,8 @@ lives in ``<run>/jobs/<name>/`` (see ``layout.py``):
 
 - ``manifest.json``: the calculations, in the order the workers take them,
   each with the attempt to run (``Launch``), and how to run them
-  (scheduler, command, walltime, time margin);
+  (scheduler, command, digest of the jobscript of the user, walltime, time
+  margin);
 - ``jobscript.sh``: the jobscript of the user, copied unchanged, with one
   line added at the end that starts the worker on the manifest;
 - ``submitted.json``: the ids of the jobs submitted so far and, while a
@@ -45,11 +46,12 @@ import logging
 import os
 import shlex
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from triboworkflow.core.guard import NotOnHPCError, hpc_only
 from triboworkflow.core.store.atomic import check_json_value, read_json, write_json
+from triboworkflow.core.store.fingerprint import bytes_digest, check_fingerprint
 from triboworkflow.core.store.record import check_keys, check_name, split_calc_id
 
 from .layout import INPUT_FILE, calc_dir, job_dir
@@ -57,7 +59,7 @@ from .scheduler import JobSchedulerError
 
 logger = logging.getLogger(__name__)
 
-MANIFEST_VERSION = 2
+MANIFEST_VERSION = 3
 MANIFEST_FILE = 'manifest.json'
 JOBSCRIPT_FILE = 'jobscript.sh'
 SUBMITTED_FILE = 'submitted.json'
@@ -75,9 +77,9 @@ WORKER_MODULE = 'triboworkflow.execution.worker'
 # convergence; asked for by the user.
 LAUNCH_KINDS = ('initial', 'unchanged', 'remedy', 'manual')
 
-_MANIFEST_KEYS = ('schema_version', 'name', 'scheduler', 'run_command', 'walltime',
-                  'max_seconds_margin', 'calculations')
-_LAUNCH_KEYS = ('system', 'calc_id', 'n', 'kind', 'level', 'values', 'initial_values')
+_MANIFEST_KEYS = ('schema_version', 'name', 'scheduler', 'run_command', 'jobscript_digest',
+                  'walltime', 'max_seconds_margin', 'calculations')
+_LAUNCH_KEYS = ('system', 'calc_id', 'n', 'kind', 'level', 'values', 'initial_values', 'restart')
 
 
 class JobError(ValueError):
@@ -119,6 +121,11 @@ class Launch:
         Effective values of the same parameters at level 1, read from the
         summary of pw.x, from which the levels are computed; empty at level 1,
         not empty above.
+    restart : bool, optional
+        True if the attempt continues the previous one from the files that
+        pw.x left in the output directory (``restart_mode = 'restart'``);
+        False, the default, if it starts from scratch. Always False for the
+        first attempt.
 
     Raises
     ------
@@ -133,6 +140,7 @@ class Launch:
     level: int
     values: dict = field(default_factory=dict)
     initial_values: dict = field(default_factory=dict)
+    restart: bool = False
 
     def __post_init__(self):
         where = f'calculations: {self.system}/{self.calc_id}'
@@ -169,6 +177,10 @@ class Launch:
             if self.level > 1 and not value:
                 raise JobError(f'{where}: {name} is empty at level {self.level}')
             object.__setattr__(self, name, copy.deepcopy(value))
+        if type(self.restart) is not bool:
+            raise JobError(f'{where}: restart = {self.restart!r} is not true or false')
+        if self.restart and self.n == 1:
+            raise JobError(f'{where}: attempt 1 has no previous attempt to continue')
 
     @classmethod
     def initial(cls, system, calc_id):
@@ -180,21 +192,16 @@ class Launch:
         """``(system, calc_id)``."""
         return self.system, self.calc_id
 
-    @property
-    def changes_input(self):
-        """Whether the attempt runs with values other than those of ``input.pwi`` (level > 1)."""
-        return bool(self.values)
-
     def remedies(self):
-        """What the worker writes in ``remedies`` of the attempt: kind, level and values."""
+        """What the worker writes in ``remedies`` of the attempt: kind, level, values, restart."""
         return {'kind': self.kind, 'level': self.level, 'values': copy.deepcopy(self.values),
-                'initial_values': copy.deepcopy(self.initial_values)}
+                'initial_values': copy.deepcopy(self.initial_values), 'restart': self.restart}
 
     def to_dict(self):
         """JSON object of the launch."""
         return {'system': self.system, 'calc_id': self.calc_id, 'n': self.n, 'kind': self.kind,
                 'level': self.level, 'values': copy.deepcopy(self.values),
-                'initial_values': copy.deepcopy(self.initial_values)}
+                'initial_values': copy.deepcopy(self.initial_values), 'restart': self.restart}
 
     @classmethod
     def from_dict(cls, data):
@@ -223,6 +230,10 @@ class Manifest:
     calculations : tuple of Launch
         The attempt to run for each calculation, in the order the workers
         take them; each calculation once.
+    jobscript_digest : str or None, optional
+        ``file_digest`` of the jobscript of the user, which sets the
+        resources of the jobs; ``write_job`` sets it from the jobscript it
+        copies.
 
     Raises
     ------
@@ -236,6 +247,7 @@ class Manifest:
     walltime: int
     max_seconds_margin: int
     calculations: tuple
+    jobscript_digest: str | None = None
 
     def __post_init__(self):
         try:
@@ -246,6 +258,11 @@ class Manifest:
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
                 raise JobError(f'{field_name}: a non-empty string is required, not {value!r}')
+        if self.jobscript_digest is not None:
+            try:
+                check_fingerprint(self.jobscript_digest, 'jobscript_digest')
+            except ValueError as error:
+                raise JobError(str(error)) from None
         _seconds(self.walltime, 'walltime')
         _seconds(self.max_seconds_margin, 'max_seconds_margin')
         if self.max_seconds_margin >= self.walltime:
@@ -284,6 +301,7 @@ class Manifest:
         """JSON object of the manifest."""
         return {'schema_version': MANIFEST_VERSION, 'name': self.name,
                 'scheduler': self.scheduler, 'run_command': self.run_command,
+                'jobscript_digest': self.jobscript_digest,
                 'walltime': self.walltime, 'max_seconds_margin': self.max_seconds_margin,
                 'calculations': [launch.to_dict() for launch in self.calculations]}
 
@@ -302,7 +320,8 @@ class Manifest:
             return cls(name=data['name'], scheduler=data['scheduler'],
                        run_command=data['run_command'], walltime=data['walltime'],
                        max_seconds_margin=data['max_seconds_margin'],
-                       calculations=tuple(calculations))
+                       calculations=tuple(calculations),
+                       jobscript_digest=data['jobscript_digest'])
         except ValueError as error:  # JobError, and StoreError from check_keys
             raise JobError(f'{source}: {error}' if source else str(error)) from None
 
@@ -385,6 +404,7 @@ def write_job(run_dir, manifest, jobscript, python=None):
     if not jobscript.is_file():
         raise JobError(f'jobscript {jobscript} not found')
     template = jobscript.read_bytes()
+    manifest = replace(manifest, jobscript_digest=bytes_digest(template))
 
     path = job_dir(run_dir, manifest.name)
     try:

@@ -403,6 +403,24 @@ def test_relaunch_by_hand(tmp_path, fake_steps, fake_slurm, fake_scheduler_bin, 
     assert fake_slurm.submitted == 3
 
 
+def test_relaunch_at_another_level_from_scratch(tmp_path, fake_steps, fake_slurm,
+                                                fake_scheduler_bin, capsys):
+    from run_helpers import JOB_DONE, header, text
+    run_dir = write_run(tmp_path)
+    submitted_pes(run_dir)
+    complete(run_dir, 'pes/c0', status=store_status('ended'), stop_reason='user_request')
+    output = layout.calc_dir(run_dir, SYSTEM, 'pes/c0') / layout.OUTPUT_FILE
+    output.write_text(text(header(mixing_beta=0.4), JOB_DONE))  # the summary of the attempt
+    fake_slurm.states['900'] = 'COMPLETED'
+    capsys.readouterr()
+    assert cli(run_dir, 'relaunch', 'pes/c0', '--level', '4') == 1
+    assert 'level 4 is not an integer from 1 to 3' in capsys.readouterr().err
+    assert cli(run_dir, 'relaunch', 'pes/c0', '--level', '2', '--from-scratch') == 0
+    assert (f'{SYSTEM}/pes/c0: relaunched by hand, attempt 2 at level 2, from scratch'
+            in capsys.readouterr().out)
+    assert launches(run_dir, f'{SYSTEM}.pes.2') == [('pes/c0', 2, 'manual', 2)]
+
+
 def test_relaunch_refused_while_the_worker_may_run(tmp_path, fake_steps, fake_slurm,
                                                    fake_scheduler_bin, capsys):
     run_dir = write_run(tmp_path)

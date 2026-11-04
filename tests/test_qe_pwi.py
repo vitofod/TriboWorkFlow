@@ -31,7 +31,7 @@ from triboworkflow.engines.qe.pwi import (CALC_TYPES, KPointsCard, PwInputError,
                                           fortran_value, grid_card, kpoints_card,
                                           mesh_from_density, namelist_lines, pw_input, vasp_grid,
                                           workflow_input)
-from triboworkflow.execution.worker import read_input, with_max_seconds
+from triboworkflow.execution.worker import read_input, with_value
 
 DATA = Path(__file__).resolve().parent / 'data' / 'qe'
 
@@ -142,7 +142,7 @@ def test_reference_example_read_back_by_ase(tmp_path):
 
 def test_max_seconds_of_the_settings_set_by_the_worker(tmp_path):
     _, result = example()
-    text, replaced = with_max_seconds(result.text, 3600)
+    text, replaced = with_value(result.text, 'max_seconds', 3600)
     assert replaced
     path = tmp_path / 'run.pwi'
     path.write_text(text)
@@ -150,8 +150,20 @@ def test_max_seconds_of_the_settings_set_by_the_worker(tmp_path):
     assert parse(text)[0]['control'] == {**parse(result.text)[0]['control'], 'max_seconds': 3600}
 
 
+def test_values_of_a_level_set_by_the_worker():
+    _, result = example()
+    text = result.text
+    for key, value in (('nstep', 250), ('mixing_beta', 0.1)):
+        text, _ = with_value(text, key, value)
+    new, old = parse(text)[0], parse(result.text)[0]
+    assert new['control'] == {**old['control'], 'nstep': 250}
+    assert new['electrons'] == {**old['electrons'], 'mixing_beta': 0.1}
+    assert {name: values for name, values in new.items() if name not in ('control', 'electrons')} \
+        == {name: values for name, values in old.items() if name not in ('control', 'electrons')}
+
+
 def test_max_seconds_added_by_the_worker_when_not_given(tmp_path):
-    text, replaced = with_max_seconds(write().text, 1200)
+    text, replaced = with_value(write().text, 'max_seconds', 1200)
     assert not replaced
     path = tmp_path / 'run.pwi'
     path.write_text(text)

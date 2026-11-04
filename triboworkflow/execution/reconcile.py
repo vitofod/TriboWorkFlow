@@ -69,8 +69,9 @@ The fixed attempt gets the state of the job as printed (for a requeued job,
 the state of its new run), the states read from the output with
 ``record_status``, with the job ``'killed'`` when the scheduler stopped it
 (``KILLED_STATES``, or requeued it) and ``'finished'`` otherwise, the reason
-of the stop and the clean stop read from the output, and the digests of
-``run.pwi`` and ``output.pwo``. The exit code and the end time stay null:
+of the stop and the clean stop read from the output, for an attempt that
+continued the previous one what it read from its files (``restart.py``), and
+the digests of ``run.pwi`` and ``output.pwo``. The exit code and the end time stay null:
 the worker did not see the command end. An output that pw.x closed decides
 the states whatever the job did. When those states say that the calculation
 is over and converged, its results are read as the worker does
@@ -87,7 +88,9 @@ Outcome of an ended attempt (``attempt_outcome``):
   ``crashed`` or ``killed`` without an error of pw.x, when the worker saw
   the command end (an output without a closing line, or none); when only the
   job tells it, a job requeued or ended in a state of ``RELAUNCH_STATES``;
-- ``manual``: the end of the process not known; an error of pw.x
+- ``manual``: an attempt that did not run because the output directories of
+  the previous attempts could not be removed (``Attempt.outdir_removal``
+  ``'failed'``); the end of the process not known; an error of pw.x
   (``Error in routine``), reported with its routine, code and message read
   from the output, which is kept: the user may run the attempt again; any
   other reason of the stop (``user_request``, ``optimizer_failed``, not
@@ -117,6 +120,7 @@ from .layout import (CLAIM_FILE, INPUT_FILE, JOBS_DIR, OUTPUT_FILE, RUN_INPUT_FI
 from .manager import HOLD_MESSAGES
 from .parsing import parse_calculation, with_parsed
 from .replacement import retired_launches
+from .restart import previous_parallelization, restart_outcome, restart_warnings
 from .scheduler import REVERSIBLE_STATES, JobSchedulerError
 from .worker import WorkerError, read_input
 
@@ -226,6 +230,9 @@ def attempt_outcome(attempt, scheduler):
     status, stop = attempt.status, attempt.stop_reason
     if status.process == 'running':
         raise ValueError(f'attempt {attempt.n} is recorded as running')
+    if attempt.outdir_removal == 'failed':
+        return 'manual', (f'attempt {attempt.n} did not run: the output directories of the '
+                          'previous attempts were not removed (see the log of its worker)')
     if status.summary == 'completed':
         return 'completed', None
     if status.process not in ('ended', 'crashed', 'killed'):
@@ -445,21 +452,27 @@ class Reconciler:
         if verdict != 'over':
             return state(verdict, detail)
         try:
-            status, stop, clean, parsed, version = self._end_from_output(
+            status, stop, clean, parsed, pw = self._end_from_output(
                 path, self._job_end(detail), record.energy_model)
         except (OSError, ValueError, WorkerError) as error:
             return state('uncertain', f'end of attempt {n} not read: {error}')
+        version = pw.version if pw is not None else None
         note = version_warning(version) if version is not None else None
         if note is not None:
             logger.warning('%s/%s: %s', system, calc_id, note)
         if parsed.parsing == 'failed':
             logger.warning('%s/%s: output not parsed: %s', system, calc_id, parsed.reason)
+        restart = None
+        if pw is not None and last.remedies.get('restart') is True:
+            restart = restart_outcome(pw, previous_parallelization(path, record))
+            for note in restart_warnings(restart):
+                logger.warning('%s/%s: attempt %d: %s', system, calc_id, n, note)
         files = {name: (AttemptFile(name, file_digest(path / name)) if (path / name).is_file()
                         else getattr(last, role))
                  for name, role in ((RUN_INPUT_FILE, 'input'), (OUTPUT_FILE, 'output'))}
         done = dataclasses.replace(last, job_state=detail, status=status, stop_reason=stop,
                                    clean_stop=clean, input=files[RUN_INPUT_FILE],
-                                   output=files[OUTPUT_FILE])
+                                   output=files[OUTPUT_FILE], restart=restart)
         fixed = with_parsed(record, done, parsed, version)
         write_record(system_dir(self.run_dir, system), fixed)
         return dataclasses.replace(state(*self._outcome(path, fixed.attempts[-1])), fixed=True)
@@ -614,7 +627,8 @@ class Reconciler:
         -------
         tuple
             Status, reason of the stop, clean stop, reading of the results
-            (``Parsed``) and version printed (None without a readable output).
+            (``Parsed``) and states of the output (``PwStatus``, None without
+            a readable output).
         """
         calculation, _ = read_input(path / INPUT_FILE)
         output = path / OUTPUT_FILE
@@ -631,7 +645,7 @@ class Reconciler:
                 parsed = parse_calculation(path, calculation, energy_model)
             except (OSError, PwOutputError) as error:
                 parsed = Parsed('failed', reason=f'output not read: {error}')
-        return status, pw.stop_reason, pw.clean_stop, parsed, pw.version
+        return status, pw.stop_reason, pw.clean_stop, parsed, pw
 
     # --- groups ----------------------------------------------------------------
 

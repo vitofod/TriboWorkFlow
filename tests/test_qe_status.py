@@ -253,6 +253,106 @@ def test_only_the_last_run_is_read():
         (3, 'not_converged', 'not_converged', 'scf_not_converged')
 
 
+# --- restart and parallelization ------------------------------------------------------------
+
+POSITIONS_READ = ['', '     Atomic positions and unit cell read from directory:',
+                  '     OUT/p.save/', '     Atomic positions from file used, from input discarded',
+                  '']
+POSITIONS_SAME = POSITIONS_READ[:3] + ['']
+NOTHING_FOUND = POSITIONS_READ[:3] + [
+    '     Message from routine qexsd_readschema :',
+    '     xml data file OUT/p.save/data-file-schema.xml not found',
+    '     Nothing found: using input atomic positions and unit cell', '']
+DENSITY_READ = ['', '     The initial density is read from file :',
+                '     OUT/p.save/charge-density', '']
+DENSITY_ATOMIC = ['     Cannot read rho : file not found', '',
+                  '     Initial potential from superposition of free atoms', '']
+WFC_READ = ['     Starting wfcs from file', '']
+WFC_NOT_FOUND = ['     Cannot read wfcs: file not found',
+                 '     Starting wfcs are    8 randomized atomic wfcs', '']
+WFC_NOT_READABLE = ['     Wavefunctions not found or not readable, recomputing them from scratch',
+                    '     Starting wfcs are    8 randomized atomic wfcs', '']
+SCF_RESTARTED = ['     Calculation restarted from scf iteration #     8', '']
+BFGS_START = ['', '     BFGS Geometry Optimization', '']
+
+
+@pytest.mark.parametrize('name, calculation, parts, restart', [
+    ('scf restarted in its cycle', 'scf',
+     [POSITIONS_SAME, DENSITY_READ, WFC_READ, SCF_RESTARTED, scf_cycle('converged'), JOB_DONE],
+     qe.PwRestart(True, True, True, True, None)),
+    ('relax after the step limit', 'relax',
+     [POSITIONS_READ, DENSITY_READ, WFC_READ, relax_steps(2), scf_cycle(None)],
+     qe.PwRestart(True, True, True, False, True)),
+    ('relax from scratch', 'relax',
+     [DENSITY_ATOMIC, WFC_NOT_FOUND, scf_cycle('converged'), BFGS_START, bfgs_step(0)],
+     qe.PwRestart(False, False, False, False, False)),
+    ('data file not found', 'relax', [NOTHING_FOUND, DENSITY_ATOMIC, WFC_NOT_FOUND],
+     qe.PwRestart(False, False, False, None, None)),
+    ('wavefunctions not readable', 'scf', [POSITIONS_SAME, DENSITY_READ, WFC_NOT_READABLE],
+     qe.PwRestart(True, True, False, None, None)),
+    ('truncated before the positions', 'relax', [], qe.PwRestart(None, None, None, None, None)),
+    # The header is printed before the data file is read.
+    ('truncated after the header of the positions', 'scf', [POSITIONS_SAME],
+     qe.PwRestart(None, None, None, None, None)),
+    ('truncated after the positions taken from the file', 'relax', [POSITIONS_READ],
+     qe.PwRestart(True, None, None, None, None)),
+])
+def test_what_a_run_read_from_the_files_of_the_previous_one(name, calculation, parts, restart):
+    output = text(RELAX if calculation == 'relax' else SCF, *parts)
+    assert pw_status(output, calculation).restart == restart
+
+
+def test_restart_of_the_last_run_only():
+    first = text(RELAX, DENSITY_ATOMIC, WFC_NOT_FOUND, scf_cycle('converged'), BFGS_START,
+                 bfgs_step(0), scf_cycle('not_converged'), JOB_DONE)
+    second = text(RELAX, POSITIONS_READ, DENSITY_READ, WFC_READ, scf_cycle(None))
+    assert pw_status(first + second, 'relax').restart == qe.PwRestart(True, True, True, False,
+                                                                      None)
+
+
+def parallel_header(processes=4, pools=2, more=()):
+    lines = ['     Parallel version (MPI & OpenMP), running on      32 processor cores',
+             f'     Number of MPI processes:           {processes:7d}',
+             '     Threads/MPI process:                     8', '',
+             '     MPI processes distributed on     1 nodes']
+    if pools > 1:
+        lines.append(f'     K-points division:     npool     = {pools:7d}')
+    lines.append(f'     R & G space division:  proc/nbgrp/npool/nimage = {processes // pools:7d}')
+    return header()[:3] + lines + list(more) + header()[3:]
+
+
+def test_parallelization_of_the_run():
+    status = pw_status(text(parallel_header(), scf_cycle('converged'), JOB_DONE), 'scf')
+    assert status.parallelization == ('Number of MPI processes: 4',
+                                      'K-points division: npool = 2',
+                                      'R & G space division: proc/nbgrp/npool/nimage = 2')
+    fft = ['     wavefunctions fft division:  Y-proc x Z-proc =       2      1']
+    assert pw_status(text(parallel_header(more=fft), JOB_DONE), 'scf').parallelization[-1] == \
+        'wavefunctions fft division: Y-proc x Z-proc = 2 1'
+    assert pw_status(text(SCF, JOB_DONE), 'scf').parallelization == ()
+
+
+@pytest.mark.parametrize('lines, expected', [
+    # Without OpenMP the number of processes is in the first line only.
+    (['     Parallel version (MPI), running on     1 processors', '',
+      '     MPI processes distributed on     1 nodes'],
+     ('Parallel version (MPI), running on 1 processors',)),
+    (['     Serial version'], ('Serial version',)),
+    # The cores of a serial build with threads give no parallelization.
+    (['     Serial multi-threaded version, running on    8 processor cores'], ()),
+])
+def test_parallelization_of_builds_without_openmp_or_mpi(lines, expected):
+    output = text(header()[:3] + lines + header()[3:], JOB_DONE)
+    assert pw_status(output, 'scf').parallelization == expected
+
+
+@pytest.mark.parametrize('processes, pools', [(8, 2), (4, 1)])
+def test_parallelization_that_differs(processes, pools):
+    one = pw_status(text(parallel_header(), JOB_DONE), 'scf').parallelization
+    other = pw_status(text(parallel_header(processes, pools), JOB_DONE), 'scf').parallelization
+    assert one != other
+
+
 def test_text_before_the_first_run_is_ignored():
     output = 'srun: warning\n' + text(SCF, scf_cycle('converged'), JOB_DONE)
     assert pw_status(output, 'scf').process == 'ended'

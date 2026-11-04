@@ -51,7 +51,7 @@ def calc(tmp_path):
 
     def write(stage='finished', previous=0):
         path.mkdir(parents=True, exist_ok=True)
-        (path / layout.INPUT_FILE).write_text('&CONTROL\n/\n')
+        (path / layout.INPUT_FILE).write_text("&CONTROL\n  outdir = 'OUT'\n/\n")
         (path / layout.OUTDIR).mkdir(exist_ok=True)
         (path / layout.OUTDIR / 'p.save').write_text('restart data\n')
         done = tuple(store.Attempt(i + 1, job_id=str(i + 1), status=store.Status('killed'))
@@ -106,7 +106,7 @@ def test_archive_a_finished_attempt(calc):
     assert not (path / layout.RUN_INPUT_FILE).exists() and not (path / layout.OUTPUT_FILE).exists()
     assert (path / 'attempts' / '1' / 'run.pwi').read_text() == RUN_PWI
     assert (path / 'attempts' / '1' / 'output.pwo').read_text() == OUTPUT
-    assert (path / layout.INPUT_FILE).read_text() == '&CONTROL\n/\n'
+    assert (path / layout.INPUT_FILE).read_text() == "&CONTROL\n  outdir = 'OUT'\n/\n"
     assert (path / layout.OUTDIR / 'p.save').read_text() == 'restart data\n'
     record = store.read_record(calc.sdir, CALC_ID)
     (attempt,) = record.attempts
@@ -319,6 +319,6 @@ def test_new_attempt_after_archiving(calc, tmp_path):
     assert record.attempts[1].output.path == 'output.pwo'
     assert record.attempts[1].exit_code == 1
     assert record.attempts[1].remedies == {'kind': 'unchanged', 'level': 1, 'values': {},
-                                           'initial_values': {}}
+                                           'initial_values': {}, 'restart': False}
     claim = read_claim(calc.path / layout.CLAIM_FILE)
     assert (claim['n'], claim['job_id'], claim['restart_count']) == (2, '4522', 1)

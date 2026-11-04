@@ -9,6 +9,8 @@ job manager and calculation directories written in the state a worker
 leaves. The other schedulers are read from a registry written by the test.
 """
 
+import dataclasses
+
 import pytest
 
 import pwo_helpers as pwo
@@ -259,6 +261,31 @@ def test_output_closed_by_pw_decides_over_the_job(run):
     assert run.record(calc_id).attempts[0].job_state == 'CANCELLED by 1000'
 
 
+def test_restart_read_from_the_output_of_an_attempt_killed(run):
+    calc_id = run.calc()
+    layout_lines = ['     Number of MPI processes:                 4']
+    archived = run.path(calc_id) / 'attempts' / '1' / 'output.pwo'
+    archived.parent.mkdir(parents=True)
+    archived.write_text(text(HEADER[:2], layout_lines, HEADER[2:]))
+    first = store.Attempt(1, status=store.Status('ended'), stop_reason='max_seconds',
+                          output=store.AttemptFile('attempts/1/output.pwo'),
+                          remedies=Launch.initial(SYSTEM, calc_id).remedies())
+    store.write_record(run.sdir, store.Record(**{**run.record(calc_id).__dict__,
+                                                 'attempts': (first,)}))
+    launch = Launch(SYSTEM, calc_id, 2, 'unchanged', 1, restart=True)
+    (job_id,) = run.group('g1', launch)
+    run.poll(**{job_id: 'RUNNING'})
+    read = ['     Atomic positions and unit cell read from directory:',
+            '     The initial density is read from file :', '     Starting wfcs from file']
+    run.start(calc_id, job_id, launch=launch,
+              output=text(HEADER[:2], layout_lines, HEADER[2:4], read, HEADER[4:]))
+    run.poll(60, **{job_id: 'TIMEOUT'})
+    assert run.reconcile(calc_id).state == 'unchanged'
+    assert run.record(calc_id).attempts[-1].restart == {
+        'positions': True, 'density': True, 'wavefunctions': True, 'scf_iteration': False,
+        'bfgs_history': None, 'same_parallelization': True}
+
+
 # --- requeued jobs ---------------------------------------------------------------------
 
 @pytest.mark.parametrize('job_state', ['PENDING', 'REQUEUED'])
@@ -367,7 +394,7 @@ def test_claim_of_an_attempt_not_in_the_record(run):
     assert attempt == store.Attempt(1, job_id=job_id, host='node01', started=SINCE,
                                     job_state='TIMEOUT', status=store.Status('killed'),
                                     remedies={'kind': 'initial', 'level': 1, 'values': {},
-                                              'initial_values': {}})
+                                              'initial_values': {}, 'restart': False})
     assert archive_attempt(run.dir, SYSTEM, calc_id) == 1  # archived as attempt 1, not 2
 
 
@@ -491,6 +518,18 @@ def test_attempt_outcome(scheduler, made, expected):
 def test_running_attempt_has_no_outcome():
     with pytest.raises(ValueError, match='recorded as running'):
         attempt_outcome(attempt('running'), JobScheduler('slurm'))
+
+
+@pytest.mark.parametrize('removal, expected', [
+    ('failed', ('manual', 'attempt 1 did not run: the output directories of the previous '
+                          'attempts were not removed (see the log of its worker)')),
+    # A worker stopped during the removal: the job tells how it ended.
+    ('started', ('unchanged', 'job TIMEOUT')),
+])
+def test_outcome_of_an_attempt_whose_output_directories_were_being_removed(removal, expected):
+    made = dataclasses.replace(attempt('killed' if removal == 'started' else 'crashed',
+                                       job_state='TIMEOUT'), outdir_removal=removal)
+    assert attempt_outcome(made, JobScheduler('slurm')) == expected
 
 
 # --- other schedulers ----------------------------------------------------------------------

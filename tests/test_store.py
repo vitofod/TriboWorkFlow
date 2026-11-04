@@ -36,6 +36,7 @@ import pytest
 from triboworkflow.core import store
 from triboworkflow.core.store import legacy
 from triboworkflow.core.store.atomic import read_json, write_json, write_text
+from triboworkflow.core.store.record import RESTART_PARTS
 
 StoreError = store.StoreError
 Provenance = store.Provenance
@@ -304,7 +305,10 @@ def full_attempt(n=1, **changes):
                   output=store.AttemptFile(f'attempts/{n}/output.pwo', None),
                   exit_code=255, job_state='killed', stop_reason='max_seconds', clean_stop=True,
                   status=store.Status('ended', 'not_converged', 'not_converged'),
-                  remedies={'mixing_beta': 0.3})
+                  remedies={'mixing_beta': 0.3}, run_command='mpirun -np 4 pw.x',
+                  jobscript_digest=DIGEST,
+                  restart=dict.fromkeys(RESTART_PARTS, True) | {'scf_iteration': None},
+                  outdir_removal='removed')
     fields.update(changes)
     return store.Attempt(**fields)
 
@@ -317,20 +321,24 @@ def test_record_round_trip(system_dir):
     assert list(data) == ['schema_version', 'calc_id', 'system', 'step', 'label', 'calc_type',
                           'engine', 'energy_model', 'fingerprint', 'status', 'attempts',
                           'results', 'observed', 'files']
-    assert data['calc_id'] == 'pes_scf/aa' and data['schema_version'] == 3
+    assert data['calc_id'] == 'pes_scf/aa' and data['schema_version'] == 4
     assert data['observed'] == {'ecutwfc': 40.0}
     assert list(data['attempts'][0]) == ['n', 'job_id', 'host', 'started', 'ended',
-                                         'max_seconds', 'max_seconds_cap', 'input', 'output',
-                                         'exit_code', 'job_state', 'stop_reason', 'clean_stop',
-                                         'parse_error', 'status', 'remedies']
+                                         'max_seconds', 'max_seconds_cap', 'run_command',
+                                         'jobscript_digest', 'input', 'output', 'exit_code',
+                                         'job_state', 'stop_reason',
+                                         'clean_stop', 'parse_error', 'status', 'remedies',
+                                         'restart', 'outdir_removal']
     assert data['attempts'][0]['input'] == {'path': 'attempts/1/run.pwi', 'digest': DIGEST}
+    assert list(data['attempts'][0]['restart']) == list(RESTART_PARTS)
     assert data['attempts'][1] == {
         'n': 2, 'job_id': '4522', 'host': None, 'started': None, 'ended': None,
-        'max_seconds': None, 'max_seconds_cap': None, 'input': None, 'output': None,
-        'exit_code': None, 'job_state': None, 'stop_reason': None, 'clean_stop': None,
-        'parse_error': None,
+        'max_seconds': None, 'max_seconds_cap': None, 'run_command': None,
+        'jobscript_digest': None, 'input': None,
+        'output': None, 'exit_code': None, 'job_state': None, 'stop_reason': None,
+        'clean_stop': None, 'parse_error': None,
         'status': {'process': None, 'scf': None, 'geometry': None, 'parsing': None},
-        'remedies': {}}
+        'remedies': {}, 'restart': None, 'outdir_removal': None}
     assert store.read_record(system_dir, 'pes_scf/aa') == record
     store.write_record(system_dir, make_record(step='adhesion', label='top_slab'))
     assert [r.calc_id for r in store.iter_records(system_dir)] == ['adhesion/top_slab',
@@ -389,6 +397,16 @@ def test_record_holds_copies():
     ({'clean_stop': 1}, 'attempts.clean_stop: true, false or null'),
     ({'status': None}, 'attempts.status: a Status is required'),
     ({'remedies': []}, 'attempts.remedies: a JSON object'),
+    ({'run_command': ''}, 'attempts.run_command: a non-empty string'),
+    ({'jobscript_digest': 'sha256:x'}, 'attempts.jobscript_digest: .* is not "sha256:"'),
+    ({'outdir_removal': True}, 'attempts.outdir_removal: True is not one of started, removed, '
+                               'absent, failed or null'),
+    ({'outdir_removal': 'done'}, "attempts.outdir_removal: 'done' is not one of"),
+    ({'restart': {'positions': True}}, 'attempts.restart: missing density'),
+    ({'restart': dict.fromkeys(RESTART_PARTS) | {'cell': True}}, "attempts.restart: unknown "
+                                                                "'cell'"),
+    ({'restart': dict.fromkeys(RESTART_PARTS) | {'density': 1}}, 'attempts.restart.density: '
+                                                                 'true, false or null'),
 ])
 def test_attempt_rejects(changes, message):
     with pytest.raises(StoreError, match=message):
@@ -433,7 +451,8 @@ INVALID_RECORDS = [
     ('missing key', lambda d: d.pop('files')),
     ('schema version 1', lambda d: d.update(schema_version=1)),
     ('schema version 2', lambda d: d.update(schema_version=2)),
-    ('schema version 4', lambda d: d.update(schema_version=4)),
+    ('schema version 3', lambda d: d.update(schema_version=3)),
+    ('schema version 5', lambda d: d.update(schema_version=5)),
     ('schema version bool', lambda d: d.update(schema_version=True)),
     ('calc_id', lambda d: d.update(calc_id='pes_scf/ab')),
     ('step with slash', lambda d: d.update(step='pes/scf', calc_id='pes/scf/aa')),
@@ -676,6 +695,40 @@ def test_reuse_problem_tells_why():
     assert store.reuse_problem(running, FP_A) == 'not complete or without results'
     unknown = dataclasses.replace(record, energy_model=NOT_KNOWN)
     assert store.reuse_problem(unknown, FP_A) == 'energy model not known (version, species[1].md5)'
+
+
+def restarted(stop, same, restart=True):
+    """A complete record whose attempt 2 continued attempt 1, stopped by ``stop``."""
+    first = store.Attempt(1, stop_reason=stop, status=store.Status('ended', 'not_converged'))
+    parts = None if same == 'unread' else dict.fromkeys(RESTART_PARTS, True) | {
+        'same_parallelization': same}
+    second = store.Attempt(2, stop_reason='completed', status=store.Status('ended', 'converged',
+                                                                           'n/a', 'ok'),
+                           remedies={'restart': restart}, restart=parts)
+    return dataclasses.replace(make_record(), attempts=(first, second))
+
+
+PER_PROCESS = 'attempt 2 continued attempt 1 ({}) from files written per process with {}: ' \
+              'they may have been read incorrectly'
+
+
+@pytest.mark.parametrize('stop, same, restart, problem', [
+    ('max_seconds', True, True, None),
+    ('max_seconds', False, True, PER_PROCESS.format('max_seconds', 'another parallelization')),
+    ('user_request', None, True, PER_PROCESS.format('user_request',
+                                                    'a parallelization not known')),
+    ('scf_not_converged', 'unread', True, PER_PROCESS.format('scf_not_converged',
+                                                             'a parallelization not known')),
+    # The files of the step limit do not depend on the parallelization.
+    ('max_steps', False, True, None),
+    # A relaunch from scratch reads nothing of the previous attempt.
+    ('max_seconds', 'unread', False, None),
+])
+def test_restart_from_files_written_per_process_stands_with_the_same_parallelization(
+        stop, same, restart, problem):
+    record = restarted(stop, same, restart)
+    assert store.reuse_problem(record, FP_A) == problem
+    assert store.can_reuse(record, FP_A) is (problem is None)
 
 
 def test_record_with_an_energy_model_not_known_is_never_reused(system_dir):

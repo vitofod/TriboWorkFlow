@@ -18,6 +18,7 @@ import pytest
 
 from triboworkflow.core.guard import NotOnHPCError
 from triboworkflow.core.settings import settings_from_dict
+from triboworkflow.core import store
 from triboworkflow.core.store import StoreError
 from triboworkflow.execution import layout
 from triboworkflow.execution import scheduler as scheduler_module
@@ -99,18 +100,19 @@ INITIAL = {'mixing_beta': 0.4, 'nstep': 150}
 
 def test_manifest_round_trip(tmp_path):
     remedy = Launch('Cu111_Ni111', 'pes_scf/ab', 3, 'remedy', 2, {'mixing_beta': 0.2},
-                    {'mixing_beta': 0.4})
-    data = manifest(calculations=LAUNCHES + (remedy,)).to_dict()
-    assert data['schema_version'] == 2
+                    {'mixing_beta': 0.4}, True)
+    digest = 'sha256:' + 'c' * 64
+    data = manifest(calculations=LAUNCHES + (remedy,), jobscript_digest=digest).to_dict()
+    assert data['schema_version'] == 3 and data['jobscript_digest'] == digest
     assert data['calculations'][0] == {'system': 'Cu111_Al111', 'calc_id': 'pes_scf/aa', 'n': 1,
                                        'kind': 'initial', 'level': 1, 'values': {},
-                                       'initial_values': {}}
+                                       'initial_values': {}, 'restart': False}
     assert data['calculations'][3] == {'system': 'Cu111_Ni111', 'calc_id': 'pes_scf/ab', 'n': 3,
                                        'kind': 'remedy', 'level': 2,
                                        'values': {'mixing_beta': 0.2},
-                                       'initial_values': {'mixing_beta': 0.4}}
+                                       'initial_values': {'mixing_beta': 0.4}, 'restart': True}
     assert Manifest.from_dict(json.loads(json.dumps(data))) == \
-        manifest(calculations=LAUNCHES + (remedy,))
+        manifest(calculations=LAUNCHES + (remedy,), jobscript_digest=digest)
 
 
 def test_manifest_from_a_generator():
@@ -129,6 +131,7 @@ def test_manifest_from_the_settings():
     ({'walltime': 0}, 'walltime: 0 is not an integer > 0'),
     ({'walltime': 3600.0}, 'walltime: 3600.0 is not an integer > 0'),
     ({'max_seconds_margin': 86400}, 'must be < walltime (86400)'),
+    ({'jobscript_digest': 'abc'}, 'jobscript_digest: \'abc\' is not "sha256:"'),
     ({'calculations': ()}, 'the group has no calculations'),
     ({'calculations': ('ab',)}, 'is not a sequence of Launch'),
     ({'calculations': CALCS}, 'is not a sequence of Launch'),
@@ -143,21 +146,22 @@ def test_manifest_errors(changes, message):
 
 def test_launch():
     launch = Launch('Cu111_Al111', 'pes_scf/aa', 2, 'unchanged', 1)
-    assert launch.calc == ('Cu111_Al111', 'pes_scf/aa') and not launch.changes_input
+    assert launch.calc == ('Cu111_Al111', 'pes_scf/aa')
     assert launch.remedies() == {'kind': 'unchanged', 'level': 1, 'values': {},
-                                 'initial_values': {}}
+                                 'initial_values': {}, 'restart': False}
     assert Launch.initial('Cu111_Al111', 'pes_scf/aa') == \
-        Launch('Cu111_Al111', 'pes_scf/aa', 1, 'initial', 1, {}, {})
+        Launch('Cu111_Al111', 'pes_scf/aa', 1, 'initial', 1, {}, {}, False)
     values = dict(LEVEL_2)
-    remedy = Launch('Cu111_Al111', 'pes_scf/aa', 3, 'remedy', 2, values, INITIAL)
+    remedy = Launch('Cu111_Al111', 'pes_scf/aa', 3, 'remedy', 2, values, INITIAL, True)
     values['nstep'] = 1
-    assert remedy.values == LEVEL_2 and remedy.changes_input
+    assert remedy.values == LEVEL_2
     assert remedy.remedies() == {'kind': 'remedy', 'level': 2, 'values': LEVEL_2,
-                                 'initial_values': INITIAL}
+                                 'initial_values': INITIAL, 'restart': True}
     assert Launch.from_dict(remedy.to_dict()) == remedy
+    assert remedy.to_dict()['restart'] is True
     # Unchanged and manual launches above level 1 repeat the values of the level.
     for kind in ('unchanged', 'manual'):
-        assert Launch('Cu111_Al111', 'pes_scf/aa', 4, kind, 2, LEVEL_2, INITIAL).changes_input
+        assert Launch('Cu111_Al111', 'pes_scf/aa', 4, kind, 2, LEVEL_2, INITIAL).values == LEVEL_2
 
 
 @pytest.mark.parametrize('fields, message', [
@@ -184,6 +188,9 @@ def test_launch():
     (('sys', 'pes_scf/aa', 2, 'remedy', 2, {1: 200}), 'values: key 1 is not a string'),
     (('sys', 'pes_scf/aa', 2, 'remedy', 2, LEVEL_2, None), 'initial_values must be a JSON '
                                                            'object'),
+    (('sys', 'pes_scf/aa', 2, 'unchanged', 1, {}, {}, 1), 'restart = 1 is not true or false'),
+    (('sys', 'pes_scf/aa', 1, 'initial', 1, {}, {}, True), 'attempt 1 has no previous attempt '
+                                                           'to continue'),
 ])
 def test_launch_errors(fields, message):
     with pytest.raises(JobError, match=message.replace('(', r'\(').replace(')', r'\)')):
@@ -191,11 +198,11 @@ def test_launch_errors(fields, message):
 
 
 @pytest.mark.parametrize('edit, message', [
-    ({'schema_version': 1}, 'schema_version: 1; this version reads 2'),
+    ({'schema_version': 2}, 'schema_version: 2; this version reads 3'),
     ({'extra': 1}, "unknown 'extra'"),
     ({'calculations': {}}, 'calculations: a JSON array is required'),
     ({'calculations': [{'system': 'a'}]}, 'calculations: missing calc_id, n, kind, level, values, '
-                                          'initial_values'),
+                                          'initial_values, restart'),
     ({'calculations': [{'system': 'a', 'calc_id': 's/l'}]}, 'calculations: missing n'),
     ({'calculations': [{**LAUNCHES[0].to_dict(), 'level': 0}]}, 'level = 0'),
 ])
@@ -219,7 +226,9 @@ def test_write_job(run_dir, jobscript):
     assert words[:3] == ['/opt/venv/bin/python', '-m', 'triboworkflow.execution.worker']
     assert Path(words[3]) == (path / MANIFEST_FILE).resolve()
     read, run = read_manifest(path / MANIFEST_FILE)
-    assert read == manifest() and run == run_dir.resolve()
+    # The manifest holds the digest of the jobscript of the user, as copied.
+    assert read == manifest(jobscript_digest=store.bytes_digest(TEMPLATE))
+    assert run == run_dir.resolve()
 
 
 def test_worker_line_quotes_the_paths(tmp_path):

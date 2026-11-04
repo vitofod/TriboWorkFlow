@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from triboworkflow.engines.qe.status import PwError, pw_status, record_status
+from triboworkflow.engines.qe.status import PwError, PwRestart, pw_status, record_status
 
 CORPUS_VARIABLE = 'TRIBOWORKFLOW_PWO_CORPUS'
 CORPUS = os.environ.get(CORPUS_VARIABLE)
@@ -84,6 +84,47 @@ def test_corpus_error_of_pw():
     # The error is printed once per process; the last one is read.
     status = pw_status(read_corpus_file('relax_crash_con_errore_con_commenti.pwo'), 'relax')
     assert status.error == PwError('cdiaghg', '309', 'problems computing cholesky')
+
+
+def runs_up_to(text, k):
+    """The text up to the end of run ``k`` (from 1): its last run is run ``k``."""
+    lines = text.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.lstrip().startswith('Program PWSCF v.')]
+    end = starts[k] if k < len(starts) else len(lines)
+    return '\n'.join(lines[:end]) + '\n'
+
+
+THREE_RUNS = 'relax_convergenza_non_raggiunta_dopo_200_iterazioni_con_commenti.pwo'
+FROM_SCRATCH = PwRestart(False, False, False, False, False)
+
+
+@pytest.mark.parametrize('name, run, restart', [
+    # From scratch; the optimizer makes its first steps.
+    (THREE_RUNS, 1, FROM_SCRATCH),
+    # Restart after an SCF without convergence: positions, density and
+    # wavefunctions read, the SCF from its first iteration; it stops again in
+    # the first SCF, before any step of the optimizer.
+    (THREE_RUNS, 2, PwRestart(True, True, True, False, None)),
+    # Restart asked for without the data file: everything from the input.
+    (THREE_RUNS, 3, FROM_SCRATCH),
+    ('file_output_relax_convergenza_raggiunta_con_commenti.pwo', 1, FROM_SCRATCH),
+    ('relax_andato_correttamente_a_convergenza.pwo', 1, FROM_SCRATCH),
+], ids=['three runs, 1', 'three runs, 2', 'three runs, 3', 'restart without files',
+        'from scratch'])
+def test_corpus_restart(name, run, restart):
+    status = pw_status(runs_up_to(read_corpus_file(name), run), 'relax')
+    assert status.restart == restart
+
+
+def test_corpus_parallelization():
+    text = read_corpus_file(THREE_RUNS)
+    layouts = {pw_status(runs_up_to(text, k), 'relax').parallelization for k in (1, 2, 3)}
+    assert layouts == {('Number of MPI processes: 4', 'K-points division: npool = 2',
+                        'R & G space division: proc/nbgrp/npool/nimage = 2')}
+    other = pw_status(read_corpus_file('file_output_relax_convergenza_raggiunta_con_commenti.pwo'),
+                      'relax')
+    assert other.parallelization == ('Number of MPI processes: 4',
+                                     'R & G space division: proc/nbgrp/npool/nimage = 4')
 
 
 @pytest.mark.parametrize('name, calculation', [case[:2] for case in EXPECTED],

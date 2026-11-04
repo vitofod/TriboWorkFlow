@@ -48,26 +48,62 @@ decimals pw.x prints), otherwise the decision is left to the user. They are
 kept in ``initial_values`` of the launches above level 1, and so in the
 record.
 
-A launch above level 1 replaces values of ``input.pwi``
-(``Launch.changes_input``): this version does not write them in the input,
-so the caller does not submit such a launch.
+A launch above level 1 replaces values of ``input.pwi``: the worker writes
+them in ``run.pwi`` of the attempt.
+
+Restart (``can_restart``). A relaunch continues the last attempt from the
+files that pw.x left in its output directory (``Launch.restart``, written by
+the worker as ``restart_mode = 'restart'``) only when pw.x closed that
+attempt (process ``ended``) and:
+
+- it stopped at ``max_seconds``: everything goes on, the interrupted SCF
+  included;
+- it stopped at ``max_steps``: pw.x writes the new positions and the
+  wavefunctions in a form readable with any parallelization, and keeps the
+  history of the optimizer;
+- it stopped with ``scf_not_converged`` in a relaxation: the positions and
+  the history of the optimizer go on, the SCF starts again from the last
+  charge density. An scf calculation starts again from scratch;
+- it stopped by request of the user (``user_request``, an exit file), for a
+  relaunch asked for by the user only: such a stop never gets an automatic
+  relaunch;
+
+and ``<outdir>/<prefix>.save/`` holds ``data-file-schema.xml`` and the
+charge density (``prefix`` and ``outdir`` of ``input.pwi``). After a stop of
+``PER_PROCESS_STOPS`` (all but ``max_steps``) pw.x leaves files written once
+per MPI process (wavefunctions, iteration of the SCF, history of the mixing),
+read correctly only with the same parallelization, which pw.x does not
+check. The parallelization of the new attempt is known only once it runs;
+before, the restart needs what fixes it to be the same as for the last
+attempt (``LaunchSetup``): the command (``Attempt.run_command``) and the
+jobscript, which sets the resources of the job
+(``Attempt.jobscript_digest``); and the parallelization of the last attempt
+must be printed in its output, to be compared with that of the new one.
+Otherwise the relaunch starts from scratch, with the reason. A restart that
+then runs with another parallelization, or one not known, is not reused
+(``core.store.restart_problem``): the user decides. Every other relaunch,
+after a crash or a kill above all, starts from scratch.
 
 ``manual_launch`` gives the launch of a relaunch asked for by the user.
 """
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from ase.io.espresso import read_fortran_namelist
 
 from triboworkflow.core.store import read_record
-from triboworkflow.engines.qe.status import read_pw_status
+from triboworkflow.core.store.record import PER_PROCESS_STOPS
+from triboworkflow.engines.qe.status import PwOutputError, read_parallelization, read_pw_status
 
 from .archive import read_claim
 from .jobs import LAUNCH_KINDS, JobError, Launch
 from .layout import CLAIM_FILE, INPUT_FILE, calc_dir, system_dir
 from .reconcile import LaunchError, launch_for
-from .worker import read_input
+from .worker import WorkerError, read_input
+
+logger = logging.getLogger(__name__)
 
 ACTIONS = ('launch', 'wait', 'done', 'manual', 'uncertain')
 
@@ -82,9 +118,34 @@ NSTEP_STEPS = (200, 250)
 # Decimals of mixing beta in the summary of pw.x.
 MIXING_BETA_DECIMALS = 4
 
+# Reasons of the stop after which a relaunch may continue the last attempt;
+# user_request gets no automatic relaunch, only one asked for by the user.
+RESTART_STOPS = ('max_seconds', 'max_steps', 'scf_not_converged', 'user_request')
+# Files of <outdir>/<prefix>.save/ that a restart needs: the data file with
+# the positions, and the charge density as pw.x writes it without or with
+# HDF5.
+RESTART_FILES = (('data-file-schema.xml',), ('charge-density.dat', 'charge-density.hdf5'))
+
 
 class PolicyError(ValueError):
     """A calculation whose history or input does not allow the decision asked for."""
+
+
+@dataclass(frozen=True)
+class LaunchSetup:
+    """What fixes the parallelization of the next attempt, compared for a restart.
+
+    Attributes
+    ----------
+    run_command : str
+        Command of pw.x (``run_command`` of ``[execution]``).
+    jobscript_digest : str or None
+        ``file_digest`` of the jobscript of ``[execution]``, which sets the
+        resources of the jobs; None when it cannot be read.
+    """
+
+    run_command: str
+    jobscript_digest: str | None
 
 
 @dataclass(frozen=True)
@@ -153,6 +214,11 @@ def level_values(level, calculation, initial):
     return values
 
 
+def _with(reason, more):
+    """``reason; more``, or ``reason`` alone when there is nothing more."""
+    return reason if more is None else f'{reason}; {more}'
+
+
 def unchanged_relaunches(attempts):
     """Unchanged relaunches at the end of the history, since the last launch of another kind."""
     count = 0
@@ -203,7 +269,78 @@ def initial_values(calc_path, record, calculation):
     return values
 
 
-def decide(run_dir, state):
+def _per_process_problem(calc_path, attempt, setup):
+    """Why the files written per process by ``attempt`` may not suit the next attempt, or None."""
+    n = attempt.n
+    if attempt.run_command is None:
+        return f'the run command of attempt {n} is not recorded'
+    if attempt.run_command != setup.run_command:
+        return f'attempt {n} ran with {attempt.run_command!r}, the next one with ' \
+               f'{setup.run_command!r}'
+    if attempt.jobscript_digest is None:
+        return f'the jobscript of attempt {n} is not recorded'
+    if setup.jobscript_digest is None:
+        return 'the jobscript of the next attempt cannot be read'
+    if attempt.jobscript_digest != setup.jobscript_digest:
+        return f'attempt {n} ran with another jobscript'
+    lines = ()
+    if attempt.output is not None:
+        try:
+            lines = read_parallelization(calc_path / attempt.output.path)
+        except (OSError, PwOutputError):
+            pass
+    if not lines:
+        return f'the output of attempt {n} does not print its parallelization'
+    return None
+
+
+def can_restart(calc_path, attempt, calculation, setup):
+    """Whether the next attempt continues ``attempt`` from the files of its output directory.
+
+    Parameters
+    ----------
+    calc_path : pathlib.Path
+        Directory of the calculation, with ``input.pwi``.
+    attempt : triboworkflow.core.store.Attempt
+        The last attempt.
+    calculation : str
+        ``'scf'`` or ``'relax'``.
+    setup : LaunchSetup
+        Command and jobscript of the next attempt.
+
+    Returns
+    -------
+    restart : bool
+    reason : str or None
+        After a stop of ``RESTART_STOPS`` that pw.x closed, where the attempt
+        continues from or why it starts from scratch; None after any other
+        end, which always starts from scratch.
+    """
+    stop = attempt.stop_reason
+    if attempt.status.process != 'ended' or stop not in RESTART_STOPS:
+        return False, None
+    if stop == 'scf_not_converged' and calculation != 'relax':
+        return False, 'from scratch: an scf calculation without convergence is not continued'
+    if stop in PER_PROCESS_STOPS:
+        problem = _per_process_problem(calc_path, attempt, setup)
+        if problem is not None:
+            return False, ('from scratch: files written per process, read correctly only with '
+                           f'the same parallelization: {problem}')
+    with open(calc_path / INPUT_FILE) as f:
+        data, _ = read_fortran_namelist(f)
+    control = data.get('control', {})
+    prefix, outdir = control.get('prefix'), control.get('outdir')
+    if not isinstance(prefix, str) or not isinstance(outdir, str):
+        return False, f'from scratch: prefix and outdir are not both given in {INPUT_FILE}'
+    save = Path(outdir) / f'{prefix}.save'
+    missing = [' or '.join(names) for names in RESTART_FILES
+               if not any((calc_path / save / name).is_file() for name in names)]
+    if missing:
+        return False, f'from scratch: {", ".join(missing)} not found in {save.as_posix()}'
+    return True, f'restart from {save.as_posix()}'
+
+
+def decide(run_dir, state, setup):
     """Decision for a reconciled calculation (see the module docstring).
 
     Parameters
@@ -212,6 +349,10 @@ def decide(run_dir, state):
         Directory of the run.
     state : triboworkflow.execution.reconcile.CalcState
         The calculation after the reconciliation.
+    setup : LaunchSetup
+        Command and jobscript of the attempt that a launch would run,
+        compared with those of the last attempt for a restart
+        (``can_restart``).
 
     Returns
     -------
@@ -247,31 +388,44 @@ def decide(run_dir, state):
             if made >= MAX_UNCHANGED:
                 return make('manual', reason=f'{state.reason}; {made} unchanged relaunches at '
                                              f'level {level} already made')
+            calculation, _ = read_input(path / INPUT_FILE)
+            restart, why = can_restart(path, last, calculation, setup)
             return make('launch', Launch(system, calc_id, n, 'unchanged', level,
                                          last.remedies.get('values', {}),
-                                         last.remedies.get('initial_values', {})))
+                                         last.remedies.get('initial_values', {}), restart),
+                        _with(state.reason, why))
         if level >= MAX_LEVEL:
             return make('manual', reason=f'{state.reason} at level {level}, the last of the '
                                          'remedies')
         calculation, _ = read_input(path / INPUT_FILE)
         initial = initial_values(path, record, calculation)
+        restart, why = can_restart(path, last, calculation, setup)
         return make('launch', Launch(system, calc_id, n, 'remedy', level + 1,
-                                     level_values(level + 1, calculation, initial), initial))
+                                     level_values(level + 1, calculation, initial), initial,
+                                     restart),
+                    _with(state.reason, why))
     except (OSError, ValueError, JobError) as error:
         return make('manual', reason=f'{state.reason}; no relaunch decided: {error}')
 
 
-def manual_launch(reconciler, system, calc_id, group=None):
+def manual_launch(reconciler, system, calc_id, setup, group=None, level=None,
+                  from_scratch=False):
     """Launch of a relaunch asked for by the user.
 
     It is allowed only once the worker of the last attempt is surely over:
     the attempt is not running, and the calculation has no claim, or the run
     of the job of its claim is over (``Reconciler.run_over``). The new attempt
     is of kind ``'manual'``, at the level of the last attempt with its input,
-    and keeps the history; the count of the unchanged relaunches starts
-    again, so up to ``MAX_UNCHANGED`` unchanged relaunches follow it. A next
-    attempt that groups listed and no worker took is launched again as it
-    was; a calculation without attempts gets its first one.
+    or at ``level`` with the values of that level (``level_values``, from the
+    effective values at level 1, as for a remedy), and keeps the history;
+    the count of the unchanged relaunches starts again, so up to
+    ``MAX_UNCHANGED`` unchanged relaunches follow it. It continues the last
+    attempt from the files of its output directory on the conditions of a
+    relaunch of the workflow (``can_restart``), also after a stop by request
+    of the user, unless ``from_scratch``. A next attempt
+    that groups listed and no worker took is launched again as it was; a
+    calculation without attempts gets its first one; neither takes another
+    level.
 
     When the last attempt has no launch recorded, its level and values come
     from the groups that list it (``launch_for``): the launch they all give,
@@ -283,9 +437,16 @@ def manual_launch(reconciler, system, calc_id, group=None):
         Reconciliation of the run, after the cycle of its job manager.
     system, calc_id : str
         The calculation.
+    setup : LaunchSetup
+        Command and jobscript of the new attempt.
     group : str or None, optional
         Group whose launch of the last attempt is taken, when that launch is
         not recorded and the groups listing it give different ones.
+    level : int or None, optional
+        Level of the remedies of the new attempt, from 1 to ``MAX_LEVEL``;
+        the level of the last attempt by default.
+    from_scratch : bool, optional
+        Start from scratch even when the last attempt could be continued.
 
     Returns
     -------
@@ -296,11 +457,14 @@ def manual_launch(reconciler, system, calc_id, group=None):
     PolicyError
         If the calculation is completed, never launched, or its worker may
         still run; if the launch of the last attempt is not recorded and the
-        groups do not give it; if ``group`` is given and not needed. The
-        message says the state found.
+        groups do not give it; if ``group`` is given and not needed; if
+        ``level`` is not a level, cannot be computed, or is asked for an
+        attempt that runs as it was listed. The message says the state found.
     """
-    state = reconciler.calculation(system, calc_id)
     where = f'{system}/{calc_id}'
+    if level is not None and (type(level) is not int or not 1 <= level <= MAX_LEVEL):
+        raise PolicyError(f'{where}: level {level!r} is not an integer from 1 to {MAX_LEVEL}')
+    state = reconciler.calculation(system, calc_id)
     if state.state == 'completed':
         raise PolicyError(f'{where} is completed: nothing to run again')
     if state.state == 'new':
@@ -323,12 +487,15 @@ def manual_launch(reconciler, system, calc_id, group=None):
     recorded = last is None or type(last.remedies.get('level')) is int
     if group is not None and (state.launch is not None or recorded):
         raise PolicyError(f'{where}: group {group} not used: the launch is known')
-    if state.launch is not None:
-        return state.launch
-    if last is None:
-        return Launch.initial(system, calc_id)
+    if state.launch is not None or last is None:
+        launch = state.launch or Launch.initial(system, calc_id)
+        if level not in (None, launch.level) or (from_scratch and launch.restart):
+            raise PolicyError(f'{where}: attempt {launch.n} runs as listed, at level '
+                              f'{launch.level}{", restart" if launch.restart else ""}: '
+                              'no other level or start is taken')
+        return launch
     if recorded:
-        level, values = last.remedies['level'], last.remedies.get('values', {})
+        current, values = last.remedies['level'], last.remedies.get('values', {})
         initial = last.remedies.get('initial_values', {})
     else:
         try:
@@ -336,5 +503,20 @@ def manual_launch(reconciler, system, calc_id, group=None):
         except LaunchError as error:
             raise PolicyError(f'{where}: the launch of attempt {last.n} is not recorded: '
                               f'{error}') from None
-        level, values, initial = known.level, known.values, known.initial_values
-    return Launch(system, calc_id, len(record.attempts) + 1, 'manual', level, values, initial)
+        current, values, initial = known.level, known.values, known.initial_values
+    path = calc_dir(run_dir, system, calc_id)
+    try:
+        calculation, _ = read_input(path / INPUT_FILE)
+        if level is not None and level != current:
+            if level != 1:
+                initial = initial or initial_values(path, record, calculation)
+            values = level_values(level, calculation, initial)
+            initial = initial if level > 1 else {}
+        restart, why = (False, 'from scratch, as asked') if from_scratch else \
+            can_restart(path, last, calculation, setup)
+    except (OSError, ValueError, WorkerError) as error:
+        raise PolicyError(f'{where}: no relaunch at level {level or current}: {error}') from None
+    logger.info('%s: manual attempt %d at level %d, %s', where, len(record.attempts) + 1,
+                level or current, why or 'from scratch')
+    return Launch(system, calc_id, len(record.attempts) + 1, 'manual', level or current, values,
+                  initial, restart)

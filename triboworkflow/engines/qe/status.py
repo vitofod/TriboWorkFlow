@@ -43,6 +43,32 @@ relaxation, ``nstep``. They are read from the last run as well
 (``PwStatus.mixing_beta``, ``PwStatus.nstep``), and so is the error that
 stopped a run (``PwError``).
 
+The beginning of a run tells also how it was parallelized
+(``PwStatus.parallelization``) and, when it continues a previous run
+(``restart_mode = 'restart'``), what it read from the files of that run
+(``PwRestart``):
+
+- ``Atomic positions and unit cell read from directory:``: pw.x prints it
+  before it reads the data file; ``Nothing found: using input atomic
+  positions and unit cell`` follows when the file cannot be read. The
+  positions are taken as read only once, without that line, a line written
+  after the reading follows: ``Atomic positions from file used, from input
+  discarded`` or a line of the density, which is set after the positions. A
+  run that ends in between leaves them unknown;
+- ``The initial density is read from file :``: charge density read from
+  file; ``Initial potential from superposition of free atoms``: charge
+  density of the free atoms;
+- ``Starting wfcs from file``: wavefunctions read from file; any other
+  ``Starting wfcs ...``: wavefunctions computed again;
+- ``Calculation restarted from scf iteration #``: the interrupted SCF goes
+  on;
+- ``BFGS Geometry Optimization``: the optimizer starts without history;
+  ``number of scf cycles``: a step of the optimizer.
+
+``Atomic positions from file used, from input discarded`` is printed only
+when the positions read differ from those of the input, so it is not needed
+to tell that they were read, only enough.
+
 A state that the output does not establish is None. An output that ends
 before any closing line is truncated: the job may still be running, or it
 was stopped from outside, and only the scheduler can tell which. A truncated
@@ -60,7 +86,14 @@ same lines; ``version_warning`` gives the warning the callers log for them,
 since the results are not guaranteed. The lines were checked on real outputs
 of 7.1 and 7.2. Those of the step limit, of ``max_seconds``, of a stop by
 request and of a failed optimizer come from the source code of 7.2 and were
-not checked on real outputs.
+not checked on real outputs. Of the lines of a restart, those of the
+positions, the density, the wavefunctions and the optimizer were checked on
+real outputs of 7.2, read and not read; ``Calculation restarted from scf
+iteration #`` comes from the source code only. Of the lines of the
+parallelization, those of the MPI processes of a build with OpenMP, the
+k-points and the R & G space were checked on real outputs, the others (a
+build without OpenMP or serial, the other divisions) come from the source
+code.
 
 The checks start from those of Xsorb (``xsorb/calculations/results.py``,
 geometry optimizations) and SCS (``labelling/QuantumEspresso/qe.py``, SCF).
@@ -99,6 +132,23 @@ _NSTEP = 'nstep'
 _MIXING_BETA = 'mixing beta'
 _STOPPING = 'stopping ...'
 _ERROR_HEAD = re.compile(r'(\S+?)\s*\(\s*([^)]*?)\s*\)\s*:?$')
+_POSITIONS_READ = 'Atomic positions and unit cell read from directory:'
+_NOTHING_FOUND = 'Nothing found: using input atomic positions and unit cell'
+_POSITIONS_USED = 'Atomic positions from file used, from input discarded'
+_DENSITY_READ = 'The initial density is read from file :'
+_DENSITY_ATOMIC = 'Initial potential from superposition of free atoms'
+_WFC_READ = 'Starting wfcs from file'
+_WFC_START = 'Starting wfcs'
+_SCF_RESTARTED = 'Calculation restarted from scf iteration #'
+_BFGS_START = 'BFGS Geometry Optimization'
+_BFGS_STEP = 'number of scf cycles'
+# Lines of the header that give how the data of the run are spread over the
+# processes (the number of nodes and of threads does not change it): the
+# number of MPI processes, printed alone with OpenMP and in the first line
+# without it, a serial build, and the divisions.
+_PARALLEL = ('Number of MPI processes:', 'Parallel version (MPI), running on', 'Serial version',
+             'path-images division:', 'K-points division:', 'band groups division:',
+             'R & G space division:', 'wavefunctions fft division:', 'FFT bands division:')
 
 
 class PwOutputError(ValueError):
@@ -131,6 +181,36 @@ class PwError:
     def __str__(self):
         code = f' ({self.code})' if self.code is not None else ''
         return f'error in routine {self.routine}{code}: {self.message}'
+
+
+@dataclass(frozen=True)
+class PwRestart:
+    """What a run read from the files of a previous run, as its output tells.
+
+    Each part is True when read from the files, False when computed again
+    from the input, None when the run ended before telling (or, for the
+    optimizer, never made a step).
+
+    Parameters
+    ----------
+    positions : bool or None
+        Atomic positions and cell, from the data file.
+    density : bool or None
+        Starting charge density.
+    wavefunctions : bool or None
+        Starting wavefunctions.
+    scf_iteration : bool or None
+        The SCF goes on from the iteration where it was stopped; False when
+        it starts from its first iteration.
+    bfgs_history : bool or None
+        The optimizer goes on with its history (relax only, None for scf).
+    """
+
+    positions: bool | None
+    density: bool | None
+    wavefunctions: bool | None
+    scf_iteration: bool | None
+    bfgs_history: bool | None
 
 
 @dataclass(frozen=True)
@@ -172,6 +252,13 @@ class PwStatus:
     nstep : int or None, optional
         ``nstep`` printed in the summary of the run (relax only); None
         otherwise.
+    restart : PwRestart or None, optional
+        What the run read from the files of a previous run. The output does
+        not say whether a restart was asked for: the caller knows it.
+    parallelization : tuple of str, optional
+        Lines of the header that give how the data are spread over the MPI
+        processes (``_PARALLEL``), with the spaces collapsed; two runs with
+        the same lines write and read the same files per process.
     """
 
     calculation: str
@@ -185,6 +272,8 @@ class PwStatus:
     error: PwError | None = None
     mixing_beta: float | None = None
     nstep: int | None = None
+    restart: PwRestart | None = None
+    parallelization: tuple = ()
 
     @property
     def clean_stop(self):
@@ -382,6 +471,50 @@ def _stop_reason(run, calculation, process, scf, geometry):
     return None
 
 
+def _first_of(run, markers):
+    """The marker of ``markers`` that begins the first line holding one, or None."""
+    for line in run:
+        for marker in markers:
+            if _starts(line, marker):
+                return marker
+    return None
+
+
+def _restart(run, calculation):
+    """``PwRestart`` of a run (see the table of the module docstring)."""
+    density = {_DENSITY_READ: True, _DENSITY_ATOMIC: False, None: None}[
+        _first_of(run, (_DENSITY_READ, _DENSITY_ATOMIC))]
+    header = next((i for i, line in enumerate(run) if _starts(line, _POSITIONS_READ)), None)
+    if header is None:
+        # Read before the density: once the density is set, they were not read.
+        positions = False if density is not None else None
+    elif _has(run[header:], _NOTHING_FOUND):
+        positions = False
+    else:
+        # The header comes before the data file is read: only a line written
+        # after the reading tells that it was read, the positions taken from
+        # the file or the density.
+        after = _first_of(run[header:], (_POSITIONS_USED, _DENSITY_READ, _DENSITY_ATOMIC))
+        positions = True if after is not None else None
+    start = _first_of(run, (_WFC_READ, _WFC_START))
+    wavefunctions = None if start is None else start == _WFC_READ
+    scf_iteration = True if _has(run, _SCF_RESTARTED) else \
+        (False if _has(run, _SCF_START) else None)
+    bfgs_history = None
+    if calculation == 'relax':
+        if _has(run, _BFGS_START):
+            bfgs_history = False
+        elif _has(run, _BFGS_STEP):
+            bfgs_history = True
+    return PwRestart(positions, density, wavefunctions, scf_iteration, bfgs_history)
+
+
+def _parallelization(run):
+    """Lines of the run that give its parallelization (``_PARALLEL``), spaces collapsed."""
+    return tuple(' '.join(line.split()) for line in run
+                 if any(_starts(line, marker) for marker in _PARALLEL))
+
+
 def pw_status(text, calculation):
     """States of the last run of a pw.x output.
 
@@ -423,7 +556,8 @@ def pw_status(text, calculation):
                     stop_reason=_stop_reason(run, calculation, process, scf, geometry),
                     error=_error(run) if process == 'crashed' else None,
                     mixing_beta=_summary_value(run, _MIXING_BETA, float),
-                    nstep=_summary_value(run, _NSTEP, int))
+                    nstep=_summary_value(run, _NSTEP, int),
+                    restart=_restart(run, calculation), parallelization=_parallelization(run))
 
 
 def read_pw_status(path, calculation):
@@ -447,6 +581,21 @@ def read_pw_status(path, calculation):
     """
     try:
         return pw_status(Path(path).read_text(encoding='utf-8', errors='replace'), calculation)
+    except PwOutputError as err:
+        raise PwOutputError(f'{path}: {err}') from None
+
+
+def read_parallelization(path):
+    """Parallelization of the last run of a pw.x output file (``PwStatus.parallelization``).
+
+    Raises
+    ------
+    PwOutputError
+        If the file is not a pw.x output.
+    """
+    text = Path(path).read_text(encoding='utf-8', errors='replace')
+    try:
+        return _parallelization(_last_run(text)[0])
     except PwOutputError as err:
         raise PwOutputError(f'{path}: {err}') from None
 

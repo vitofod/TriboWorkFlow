@@ -37,8 +37,11 @@ entries of ``pes`` and ``match``. A pass (``Orchestrator.run_pass``):
      (``reconcile.py``) and decided (``policy.py``); the launches go, after
      the archiving of the last attempt, in a new group of jobs, registered
      and submitted; when every calculation is completed, ``Step.analyse``
-     writes the entries and the step is ``completed``; when what is left
-     needs the user, the step has ``failed``, with the calculations and why;
+     writes the entries and the step is ``completed``; a calculation
+     completed whose output was not parsed, or whose results cannot be used
+     (``_unusable``), needs the user and is never relaunched; when what is
+     left needs the user, the step has ``failed``, with the calculations and
+     why;
 
 4. saves the state in ``<run>/orchestrator.json`` and returns the report.
 
@@ -65,10 +68,6 @@ its launches submitted, without the analysis) and ``analyse_step`` (the
 analysis, decided from the files alone: records, claims and manifests, never
 the scheduler). Phases run by hand and passes take turns on a run.
 
-A launch above level 1 of the remedies is decided and not submitted, since
-this version does not write its values in the input: its calculation is
-reported as needing the user.
-
 Calculations that differ from the settings are never overwritten: the user
 restores the settings, or replaces them (``replace_step``), which moves
 their directories to ``<run>/replaced/`` and prepares the step again
@@ -90,15 +89,15 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from triboworkflow.core.store import (PrerequisiteError, check_prerequisites, read_record,
-                                      read_system, reuse_problem)
+from triboworkflow.core.store import (PrerequisiteError, check_prerequisites, file_digest,
+                                      read_record, read_system, reuse_problem)
 from triboworkflow.core.store.atomic import read_json, write_json
 from triboworkflow.core.store.record import check_keys
 
 from .archive import ArchiveError, archive_attempt, read_claim, released_in_part
 from .jobs import MANIFEST_FILE, SUBMITTED_FILE, Manifest, is_withdrawn, write_job
 from .layout import CLAIM_FILE, JOBS_DIR, calc_dir, system_dir
-from .policy import decide, manual_launch
+from .policy import LaunchSetup, decide, manual_launch
 from .preparation import (check_calculations, complete_replacement, prepare_calculations,
                           start_replacement)
 from .reconcile import LaunchError, Reconciler, launch_for, run_launches
@@ -124,9 +123,8 @@ STEP_STATES = ('waiting', 'running', 'completed', 'failed', 'blocked')
 
 # Outcomes of the calculations of a running step after a pass: completed;
 # waiting for their group, their run or their held job; launched in this
-# pass; uncertain; launch decided and not written in the input; to the user.
-CALC_OUTCOMES = ('completed', 'pending', 'running', 'held', 'launched', 'uncertain',
-                 'not applied', 'manual')
+# pass; uncertain; to the user.
+CALC_OUTCOMES = ('completed', 'pending', 'running', 'held', 'launched', 'uncertain', 'manual')
 _IN_FLIGHT = ('pending', 'running', 'held', 'launched', 'uncertain')
 
 _STATE_KEYS = ('schema_version', 'systems')
@@ -287,6 +285,30 @@ def order_steps(requested, graph):
     return ordered
 
 
+def _unusable(record):
+    """Why the results of a calculation whose last attempt completed cannot be used.
+
+    Its output was not parsed, or its parsing failed, or the record does not
+    stand for its own fingerprint (``reuse_problem``: no results, an energy
+    model not fully known, an output of another energy model). The
+    fingerprint itself is compared with the settings by ``_prepared_current``.
+
+    Returns
+    -------
+    str or None
+        The reason, None if the results can be used.
+    """
+    k = len(record.attempts)
+    if record.status.parsing is None:
+        return f'attempt {k} completed, its output not parsed'
+    if record.status.parsing == 'failed':
+        return f'attempt {k} completed, its output not parsed: {record.attempts[-1].parse_error}'
+    problem = reuse_problem(record, record.fingerprint)
+    if problem is not None:
+        return f'attempt {k} completed, its results cannot be used: {problem}'
+    return None
+
+
 class Orchestrator:
     """Steps of a workflow for the systems of a run.
 
@@ -330,6 +352,14 @@ class Orchestrator:
         self.jobscript = Path(jobscript)
         self.path = self.run_dir / STATE_FILE
         self.state = self._load()
+
+    def _launch_setup(self):
+        """Command and jobscript of the attempts of the next groups (``policy.LaunchSetup``)."""
+        try:
+            digest = file_digest(self.jobscript)
+        except OSError:
+            digest = None
+        return LaunchSetup(self.execution.run_command, digest)
 
     # --- state file --------------------------------------------------------------
 
@@ -607,6 +637,8 @@ class Orchestrator:
     def _follow(self, reconciler, system, name, entry, analyse=True):
         """Reconcile, decide and relaunch the calculations of a running step.
 
+        A calculation completed counts as such only when its results can be
+        used (``_unusable``); otherwise it needs the user, with the reason.
         With ``analyse`` False, a step whose calculations are all completed
         stays running, to be analysed by ``analyse_step``.
         """
@@ -617,22 +649,25 @@ class Orchestrator:
 
         def note(outcome, state, reason):
             calcs[outcome] += 1
-            if outcome in ('uncertain', 'not applied', 'manual'):
+            if outcome in ('uncertain', 'manual'):
                 attention.append({'calc_id': state.calc_id, 'state': state.state,
                                   'reason': reason})
 
+        sdir = system_dir(self.run_dir, system)
+        setup = self._launch_setup()
         for state in states:
-            decision = decide(self.run_dir, state)
+            decision = decide(self.run_dir, state, setup)
             if decision.action == 'done':
-                note('completed', state, None)
+                try:
+                    why = _unusable(read_record(sdir, state.calc_id))
+                except (OSError, ValueError) as error:
+                    note('uncertain', state, f'record not read: {error}')
+                    continue
+                note('completed' if why is None else 'manual', state, why)
             elif decision.action == 'wait':
                 note(state.state, state, decision.reason)
             elif decision.action != 'launch':
                 note(decision.action, state, decision.reason)
-            elif decision.launch.changes_input:
-                note('not applied', state, f'{decision.reason}; attempt {decision.launch.n} at '
-                                           f'level {decision.launch.level} decided, its values '
-                                           'are not written in the input by this version')
             else:
                 try:
                     if not decision.released:
@@ -876,11 +911,9 @@ class Orchestrator:
         Done: the record has attempts, any claim is the one of the last
         attempt, no group lists a next attempt, the last attempt is not
         recorded as running and ended completed (``Status.summary``), and the
-        results of the record can be used (``can_reuse`` with its own
-        fingerprint, which ``_prepared_current`` has compared with the
-        settings): its output was parsed, its energy model is fully known and
-        the output agrees with it. Only files are read: claims, records and
-        manifests.
+        results of the record can be used (``_unusable``): its output was
+        parsed, its energy model is fully known and the output agrees with
+        it. Only files are read: claims, records and manifests.
         """
         sdir = system_dir(self.run_dir, system)
         launches = run_launches(self.run_dir)
@@ -907,14 +940,7 @@ class Orchestrator:
                 why = f'attempt {k} recorded as running: its job may still run'
             elif record.attempts[-1].status.summary != 'completed':
                 why = f'attempt {k} {record.attempts[-1].status.summary}'
-            elif record.status.parsing is None:
-                why = f'attempt {k} completed, its output not parsed'
-            elif record.status.parsing == 'failed':
-                why = (f'attempt {k} completed, its output not parsed: '
-                       f'{record.attempts[-1].parse_error}')
-            elif (problem := reuse_problem(record, record.fingerprint)) is not None:
-                why = f'attempt {k} completed, its results cannot be used: {problem}'
-            else:
+            elif (why := _unusable(record)) is None:
                 continue
             missing.append(f'{calc_id}: {why}')
         return missing
@@ -930,7 +956,7 @@ class Orchestrator:
                                     'run')
         return name
 
-    def relaunch(self, system, calc_id, group=None):
+    def relaunch(self, system, calc_id, group=None, level=None, from_scratch=False):
         """Relaunch a calculation by hand (``policy.manual_launch``) in a new group.
 
         The step of the calculation is followed again at the next pass.
@@ -942,6 +968,12 @@ class Orchestrator:
         group : str or None, optional
             Group whose launch of the last attempt is taken, when the record
             does not have it and the groups listing it give different ones.
+        level : int or None, optional
+            Level of the remedies of the new attempt; that of the last attempt
+            by default.
+        from_scratch : bool, optional
+            Start from scratch even when the last attempt could be continued
+            from the files of its output directory.
 
         Returns
         -------
@@ -967,7 +999,8 @@ class Orchestrator:
         held = self._held_back()
         self.manager.cycle(held)
         reconciler = Reconciler(self.run_dir, self.manager, self.execution.polling_interval)
-        launch = manual_launch(reconciler, system, calc_id, group)
+        launch = manual_launch(reconciler, system, calc_id, self._launch_setup(), group, level,
+                               from_scratch)
         archive_attempt(self.run_dir, system, calc_id)  # nothing to do if already archived
         written = self._write_group(system, name, [launch])
         self.manager.submit(held)

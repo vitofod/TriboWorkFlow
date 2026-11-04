@@ -33,10 +33,21 @@ SINCE = '2026-10-29T10:00:00+01:00'
 # Value of a claim key that is left out of the claim.
 DROP = object()
 
+# Jobscript of the user, and its digest as the manifests and the attempts hold it.
+JOBSCRIPT = '#!/bin/bash\n'
+JOBSCRIPT_DIGEST = store.bytes_digest(JOBSCRIPT.encode())
 
-def header(mixing_beta=None, nstep=None):
-    """Beginning of a run, with ``mixing beta`` and ``nstep`` in its summary if given."""
-    lines = ['', '     Program PWSCF v.7.2 starts on  1Jan2026 at 10: 0: 0 ', '',
+# Lines of the parallelization of a run on 4 MPI processes.
+PARALLEL = ['     Number of MPI processes:                 4',
+            '     R & G space division:  proc/nbgrp/npool/nimage =       4']
+
+
+def header(mixing_beta=None, nstep=None, parallel=()):
+    """Beginning of a run, with ``mixing beta`` and ``nstep`` in its summary if given.
+
+    ``parallel`` are lines of the parallelization, written after the first one.
+    """
+    lines = ['', '     Program PWSCF v.7.2 starts on  1Jan2026 at 10: 0: 0 ', *parallel, '',
              '     bravais-lattice index     =            0']
     if mixing_beta is not None:
         lines.append(f'     mixing beta               = {mixing_beta:12.4f}')
@@ -152,7 +163,7 @@ class Run:
         self.dir = tmp_path / 'run'
         self.dir.mkdir()
         self.jobscript = tmp_path / 'job.sh'
-        self.jobscript.write_text('#!/bin/bash\n')
+        self.jobscript.write_text(JOBSCRIPT)
         self.slurm, self.clock = Slurm(), Clock()
         self.manager = JobManager(self.dir, self.slurm, WAIT, now=self.clock)
 
@@ -206,6 +217,7 @@ class Run:
                 Launch(SYSTEM, calc_id, n, kind, 1)
         self.claim(calc_id, n, job_id, **claim)
         attempt = store.Attempt(n, job_id=job_id, host='node01', started=SINCE, max_seconds=3540,
+                                run_command='pw.x', jobscript_digest=JOBSCRIPT_DIGEST,
                                 input=store.AttemptFile('run.pwi'),
                                 output=store.AttemptFile('output.pwo'),
                                 status=store.Status('running'), remedies=launch.remedies())

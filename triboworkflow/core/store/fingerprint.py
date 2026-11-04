@@ -141,6 +141,11 @@ def content_digest(value, where='value'):
     return PREFIX + hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
+def bytes_digest(data):
+    """Digest of bytes, written like a fingerprint: ``file_digest`` of a file that holds them."""
+    return PREFIX + hashlib.sha256(data).hexdigest()
+
+
 def file_digest(path):
     """Digest of the bytes of a file, written like a fingerprint."""
     digest = hashlib.sha256()

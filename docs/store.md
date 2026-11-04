@@ -38,7 +38,7 @@ MLIP) never run locally.
 
 | Key | Content |
 |---|---|
-| `schema_version` | 3 |
+| `schema_version` | 4 |
 | `calc_id` | `<step>/<label>`: the directory of the calculation within the system |
 | `system`, `step`, `label` | names of the three directories; no `/`, `\`, NUL, `.` or `..` |
 | `calc_type` | kind of calculation, which fixes its constraints |
@@ -82,7 +82,10 @@ A record is complete when `process` is `ended`, `scf` is `converged`,
 `geometry` is `converged` or `n/a`, and `parsing` is `ok`. `can_reuse(record,
 fingerprint)` is true only for a complete record with results, with that
 fingerprint, with an energy model fully known and with an output that agrees
-with it, so deciding reuse and reading the results always agree;
+with it, so deciding reuse and reading the results always agree. A record
+whose last attempt continued one stopped by `max_seconds`, `user_request` or
+`scf_not_converged`, which leave files written once per MPI process, is
+reused only if `restart.same_parallelization` is true (`restart_problem`).
 `reuse_problem` tells why a record cannot be reused. Which results each kind
 of calculation must have (an energy, finite forces, ...) is checked by the
 parser of its engine.
@@ -123,6 +126,8 @@ source establishes it:
 | `started`, `ended` | ISO 8601 times of the start and of the end of the run | worker |
 | `max_seconds` | time limit given to the engine for this attempt, s | worker |
 | `max_seconds_cap` | upper limit of `max_seconds` in the prepared input; null if none | worker |
+| `run_command` | command that ran the engine, up to the input file (e.g. `mpirun -np 32 pw.x -nk 4`); null when not recorded | worker |
+| `jobscript_digest` | `file_digest` of the jobscript of the user that the job ran, which sets its resources; null when not recorded | worker |
 | `input`, `output` | `{"path", "digest"}`: file relative to the calculation directory and its `file_digest` | worker, archiving |
 | `exit_code` | exit status of the command that ran the engine; null if the worker did not see it end | worker |
 | `job_state` | state of the job as printed by the scheduler, written when the reconciliation fixes an attempt whose worker did not end it (for a requeued job, the state of its new run) | reconciliation |
@@ -130,7 +135,9 @@ source establishes it:
 | `clean_stop` | whether the engine closed the run, read from the output | output |
 | `parse_error` | why the output could not be parsed; given if and only if `status.parsing` is `failed` | parser |
 | `status` | `process`, `scf`, `geometry`, `parsing` at the end of the attempt | output, job |
-| `remedies` | launch of the attempt: `kind` (`initial`, `unchanged`, `remedy`, `manual`), `level` of the remedies, `values` of the level and `initial_values` (effective values at level 1), both empty at level 1; empty when not known | worker, reconciliation |
+| `remedies` | launch of the attempt: `kind` (`initial`, `unchanged`, `remedy`, `manual`), `level` of the remedies, `values` of the level and `initial_values` (effective values at level 1), both empty at level 1, and `restart` (whether it continued the previous attempt from its output directory); empty when not known | worker, reconciliation |
+| `restart` | for an attempt launched to continue the previous one, what its output says it read from the files of that one: `positions`, `density`, `wavefunctions`, `scf_iteration`, `bfgs_history`, each true, false or null (not told), and `same_parallelization` (the parallelization printed equals that of the previous attempt; null if either is not known); null for any other attempt | output |
+| `outdir_removal` | for an attempt from scratch after the first, the removal of the directories the engine writes (`outdir`, and `wfcdir` when given) before the run: `started` (begun, its end not recorded), `removed`, `absent` (nothing to remove) or `failed` (the attempt did not run); null for a first attempt or a restart | worker |
 
 The exit code, the state of the job and the reason of the stop are kept
 apart and never derived from one another; the states of the calculation

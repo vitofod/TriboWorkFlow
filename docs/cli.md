@@ -78,7 +78,7 @@ found; elsewhere the command stops before writing anything):
 |---|---|
 | `submit <step> [--groups M]` | phase 2: asks the scheduler for the jobs, reconciles the calculations of the step, writes a group with what has to run and submits it, then exits. **Running it again is how a step is followed by hand, and it may start relaunches** (a crash, `max_seconds`), never the same attempt twice |
 | `start [--groups M] [--dry-run]` | starts the orchestrator of the steps of `[interface].steps` in the background, on the login node, and returns |
-| `relaunch <calc_id> [--groups M] [--group G]` | relaunches a calculation by hand, at the level of its last attempt, once its worker is surely over |
+| `relaunch <calc_id> [--groups M] [--group G] [--level L] [--from-scratch]` | relaunches a calculation by hand, at the level of its last attempt or at level `L` (1–3), once its worker is surely over; it continues the last attempt from `OUT/` when the workflow would, or after a stop by request of the user, unless `--from-scratch` |
 
 **Where the orchestrator runs:**
 
@@ -179,11 +179,18 @@ triboworkflow analyse ppes
   analysed here`.
 - Running `submit ppes` again reconciles first: calculations queued or
   running are left alone; one that crashed or stopped at `max_seconds` goes
-  in a new group with its input unchanged, at most twice in a row; a
-  non-converged SCF gets the next level of the remedies, which this version
-  decides but does not submit, so it is listed among the calculations that
-  need the user; an error of pw.x goes to the user with its routine, code
-  and message.
+  in a new group with its input unchanged, at most twice in a row; one that
+  pw.x closed without convergence (SCF, or the step limit of a relaxation)
+  goes at the next level of the remedies, with its values written in
+  `run.pwi`; an attempt that pw.x closed at `max_seconds`, at the step limit
+  or, in a relaxation, without SCF convergence continues from `OUT/` when its
+  files are there and, but after the step limit, the command, the jobscript
+  and the parallelization printed allow it
+  ([execution.md](execution.md#restart)), the others start from scratch
+  with `OUT/` removed; a completed calculation whose output cannot be parsed
+  or used, or that continued with another parallelization, is listed among
+  those that need the user; an error of pw.x goes to the user with its
+  routine, code and message.
 - **Settings changed after `prepare`** (e.g. `ecutwfc`): `submit`, `analyse`
   and the orchestrator compare the fingerprints the settings give now with
   those of the calculations prepared and stop before submitting or using a
@@ -274,10 +281,22 @@ triboworkflow start
 `relaunch` checks that the worker of the last attempt is surely over (no
 claim, or the run of the job of its claim over); otherwise it refuses with
 the state found. It writes a new group with a manual attempt at the same
-level and submits it; the step goes back to running and the count of the
-unchanged relaunches starts again. When the launch of the last attempt is
-not recorded and the groups that list it give different launches, it lists
-them: choose one with `--group`.
+level, or at the one of `--level` with the values of that level, and
+submits it; the step goes back to running and the count of the unchanged
+relaunches starts again. The attempt continues the last one from `OUT/`
+under the same rule as the relaunches of the workflow, also after a stop by
+request of the user (an exit file), which the workflow never relaunches;
+`--from-scratch` starts it from scratch, `OUT/` removed. It prints the
+attempt, its level and
+how it starts:
+
+```bash
+triboworkflow relaunch adhesion/interface_max --level 2 --from-scratch
+# mp-30_mp-134/adhesion/interface_max: relaunched by hand, attempt 4 at level 2, from scratch
+```
+
+When the launch of the last attempt is not recorded and the groups that list
+it give different launches, it lists them: choose one with `--group`.
 
 ### Rare cases
 

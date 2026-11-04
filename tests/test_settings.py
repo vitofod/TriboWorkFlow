@@ -191,6 +191,7 @@ ACCEPTED = [
     ('override-repeated', S, {'structure.constraints.overrides': [{'atoms': [2, 2], 'if_pos': [0, 0, 0]}]}),
     ('generation-in-workflow', W, {'generation': {}}),
     ('max-seconds', W, {'namelists.CONTROL.max_seconds': 90000}),
+    ('wfcdir-inside', W, {'namelists.CONTROL.wfcdir': 'WFC/node'}),
     ('bulk-modulus-unused', W, {'interface.set_bm': False}),
     ('weights-with-set-bm', W, {'interface.inter_params.strain_weight_1': 1.0}),
     ('inter-params-values', W, {'interface.inter_params.max_area': 0.0,
@@ -376,6 +377,9 @@ ERRORS = [
     *[(f'mixing-beta-{value!r}', W, {'namelists.ELECTRONS.mixing_beta': value},
        'namelists.ELECTRONS.mixing_beta', f'a number in (0, 1] is required, got {value!r}')
       for value in (0, 0.0, -0.3, 1.5, 2.0, '0.4', False)],
+    *[(f'wfcdir-{value!r}', W, {f'{CONTROL}.wfcdir': value}, f'{CONTROL}.wfcdir',
+       'a relative directory inside the calculation directory is required')
+      for value in ('/scratch/local', '.', './', '../shared', 'WFC/../..', 'C:\\tmp', 1)],
     # whole file
     ('both-modes', W, {'structure': {'file': 'a.xyz'}}, '', 'give either [structure]'),
     ('no-mode', W, {'interface': DELETE}, '', 'give either [structure]'),

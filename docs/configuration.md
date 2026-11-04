@@ -25,7 +25,8 @@ settings.require_complete()                 # SettingsError if placeholders are 
   (`ibrav = 0`, cell and positions in angstrom, `scf` and `relax` only), and
   the keys the relaunches change: `max_seconds`, written for
   every run, and `nstep` and `mixing_beta`, checked here and changed by the
-  remedies (see [Values changed by the relaunches](#values-changed-by-the-relaunches)).
+  remedies (see [Values changed by the relaunches](#values-changed-by-the-relaunches)),
+  and `wfcdir`, which the relaunches remove (see below).
 - **The other tables are strict.** In the tables of the project
   (`[structure]`, `[k_points]`, `[interface]`, `[execution]`, …) an unknown
   or misspelt key is an error, with the list of the allowed keys. Their
@@ -105,6 +106,7 @@ Keys the settings do not accept:
 | `starting_magnetization(i)` | SYSTEM | given per species in `[[atomic_species]]` |
 | `calculation` other than `scf`, `relax` | CONTROL | only `scf` and `relax` for now |
 | `calculation`, `title`, `prefix`, `restart_mode`, `outdir` | CONTROL, with `[interface]` | the workflow sets them for every calculation (own `prefix` and `outdir`, `calculation` from the calculation type) |
+| `wfcdir` absolute, `.`, through `..` or with `\` | CONTROL | the files that `pw.x` writes per process belong to the calculation: the worker removes them with `outdir` before a relaunch from scratch, and two calculations never share them; a relative directory (e.g. `"WFC"`) is inside the directory of each calculation |
 
 `pseudo_dir` and `outdir` are paths on the machine that runs `pw.x`; they
 are never resolved locally.

@@ -16,11 +16,12 @@ import json
 
 import pytest
 
-from run_helpers import (FP, JOB_DONE, NOT_CONVERGED, SCF_DONE, SCF_TRUNCATED, SYSTEM, Run,
-                         header, text)
+from run_helpers import (FP, JOB_DONE, MAX_SECONDS, NOT_CONVERGED, PARALLEL, PWI, SCF_DONE,
+                         SCF_TRUNCATED, SYSTEM, Run, header, text)
 from triboworkflow.core import store
 from triboworkflow.core.settings.schema import ExecutionParams
 from triboworkflow.core.store import Provenance, SystemWriter, is_done, read_system
+from triboworkflow.core.store.record import RESTART_PARTS
 from triboworkflow.execution import archive as archive_module
 from triboworkflow.execution import layout
 from triboworkflow.execution import orchestrator as orchestrator_module
@@ -54,6 +55,7 @@ class FakeStep(Step):
     def __init__(self, run, name, versions):
         self.run, self.name, self.versions = run, name, versions
         self.fingerprint = FP
+        self.input_text = PWI
         self.calls = []
 
     def plan(self, run_dir, system):
@@ -75,7 +77,8 @@ class FakeStep(Step):
         for i in range(CALCS.get(self.name, 0)):
             calc_id = f'{self.name}/c{i}'
             if not self.run.path(calc_id).exists():
-                self.run.calc(f'c{i}', step=self.name, fingerprint=self.fingerprint)
+                self.run.calc(f'c{i}', input_text=self.input_text, step=self.name,
+                              fingerprint=self.fingerprint)
             calc_ids.append(calc_id)
         return calc_ids
 
@@ -114,6 +117,8 @@ OUTCOMES = {
                          clean_stop=True),
     'not_converged': dict(status=store.Status('ended', 'not_converged', 'n/a'),
                           stop_reason='scf_not_converged', clean_stop=True),
+    'max_seconds': dict(status=store.Status('ended', None, 'n/a'), stop_reason='max_seconds',
+                        clean_stop=True),
     'not_parsed': dict(status=store.Status('ended', 'converged', 'n/a'), stop_reason='completed',
                        clean_stop=True),
     'parse_failed': dict(status=store.Status('ended', 'converged', 'n/a', 'failed'),
@@ -124,6 +129,7 @@ OUTCOMES = {
 
 OUTPUTS = {'completed': SCF_DONE, 'crashed': SCF_TRUNCATED, 'user_request': SCF_DONE,
            'not_converged': text(header(mixing_beta=0.4), NOT_CONVERGED, JOB_DONE),
+           'max_seconds': text(header(parallel=PARALLEL), MAX_SECONDS, JOB_DONE),
            'not_parsed': SCF_DONE, 'parse_failed': SCF_DONE}
 
 
@@ -365,16 +371,92 @@ def test_crash_runs_again_in_a_new_group(run):
     assert run.slurm.submitted == 6
 
 
-def test_remedy_decided_and_not_applied(run):
+def group_launches(run, group):
+    manifest, _ = read_manifest(layout.job_dir(run.dir, group) / MANIFEST_FILE)
+    return {launch.calc_id: launch for launch in manifest.calculations}
+
+
+def test_remedy_runs_at_the_next_level(run):
     orch = orchestrator(run, ['match', 'pes'])
     orch.run_pass()
     work(run, 'not_converged')
     report = orch.run_pass()
     (pes,) = [s for s in report.steps if s.step == 'pes']
-    assert (pes.status, pes.calcs) == ('failed', {'not applied': 2})
-    assert pes.attention[0]['reason'] == ('scf_not_converged; attempt 2 at level 2 decided, its '
-                                          'values are not written in the input by this version')
-    assert report.submitted == [] and (run.path('pes/c0') / layout.CLAIM_FILE).exists()
+    assert (pes.status, pes.calcs, pes.attention) == ('running', {'launched': 2}, [])
+    assert report.submitted == [f'{SYSTEM}.pes.2']
+    launches = group_launches(run, f'{SYSTEM}.pes.2')
+    assert launches['pes/c0'] == Launch(SYSTEM, 'pes/c0', 2, 'remedy', 2, {'mixing_beta': 0.2},
+                                        {'mixing_beta': 0.4}, False)
+    assert not (run.path('pes/c0') / layout.CLAIM_FILE).exists()
+    work(run)
+    assert statuses(orch.run_pass())['pes'] == 'completed'
+    assert run.record('pes/c0').attempts[-1].remedies['level'] == 2
+
+
+def test_relaunch_after_max_seconds_continues_from_the_output_directory(run):
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.steps['pes'].input_text = PWI.replace('&CONTROL\n',
+                                               "&CONTROL\n  prefix = 'p'\n  outdir = 'OUT'\n")
+    orch.run_pass()
+    work(run, 'max_seconds')
+    save = run.path('pes/c0') / 'OUT' / 'p.save'  # only pes/c0 has the files of a restart
+    save.mkdir(parents=True)
+    for name in ('data-file-schema.xml', 'charge-density.dat'):
+        (save / name).write_text('')
+    report = orch.run_pass()
+    launches = group_launches(run, report.submitted[0])
+    assert [(launch.kind, launch.level, launch.restart) for launch in launches.values()] == \
+        [('unchanged', 1, True), ('unchanged', 1, False)]
+
+
+def test_restart_with_another_parallelization_needs_the_user(run):
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.steps['pes'].input_text = PWI.replace('&CONTROL\n',
+                                               "&CONTROL\n  prefix = 'p'\n  outdir = 'OUT'\n")
+    orch.run_pass()
+    work(run, 'max_seconds')
+    save = run.path('pes/c0') / 'OUT' / 'p.save'
+    save.mkdir(parents=True)
+    for name in ('data-file-schema.xml', 'charge-density.dat'):
+        (save / name).write_text('')
+    orch.run_pass()
+    work(run)
+    record = run.record('pes/c0')
+    read = dict.fromkeys(RESTART_PARTS, True) | {'same_parallelization': False}
+    store.write_record(run.sdir, dataclasses.replace(
+        record, attempts=record.attempts[:-1] + (dataclasses.replace(record.attempts[-1],
+                                                                     restart=read),)))
+    report = orch.run_pass()
+    (pes,) = [s for s in report.steps if s.step == 'pes']
+    assert (pes.status, pes.calcs) == ('failed', {'manual': 1, 'completed': 1})
+    assert pes.attention == [{'calc_id': 'pes/c0', 'state': 'completed', 'reason': (
+        'attempt 2 completed, its results cannot be used: attempt 2 continued attempt 1 '
+        '(max_seconds) from files written per process with another parallelization: they may '
+        'have been read incorrectly')}]
+    assert report.submitted == []
+
+
+@pytest.mark.parametrize('case, reason', [
+    ('not_parsed', 'attempt 1 completed, its output not parsed'),
+    ('parse_failed', 'attempt 1 completed, its output not parsed: no "!    total energy" in the '
+                     'last SCF cycle'),
+    ('other model', 'attempt 1 completed, its results cannot be used: output of another energy '
+                    'model (ecutwfc: expected 40.0, observed 45.0)'),
+])
+def test_completed_with_results_not_usable_needs_the_user(run, case, reason):
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.run_pass()
+    work(run, 'completed' if case == 'other model' else case, only=['pes/c0'])
+    work(run, only=['pes/c1'])
+    if case == 'other model':
+        store.write_record(run.sdir, dataclasses.replace(run.record('pes/c0'),
+                                                         observed={'ecutwfc': 45.0}))
+    report = orch.run_pass()
+    (pes,) = [s for s in report.steps if s.step == 'pes']
+    assert (pes.status, pes.calcs) == ('failed', {'manual': 1, 'completed': 1})
+    assert pes.attention == [{'calc_id': 'pes/c0', 'state': 'completed', 'reason': reason}]
+    assert report.submitted == [] and 'analyse' not in orch.steps['pes'].calls
+    assert len(run.record('pes/c0').attempts) == 1
 
 
 def test_held_job_is_waited_for(run, monkeypatch):
@@ -417,7 +499,8 @@ def test_empty_claim_released_then_relaunched_and_submitted(run):
     assert orch.release_claim(SYSTEM, 'pes/c0') == 1
     assert run.slurm.queries == queries and not claim.exists()
     (attempt,) = run.record('pes/c0').attempts
-    assert attempt.remedies == {'kind': 'initial', 'level': 1, 'values': {}, 'initial_values': {}}
+    assert attempt.remedies == {'kind': 'initial', 'level': 1, 'values': {}, 'initial_values': {},
+                                'restart': False}
     (pes,) = [s for s in orch.run_pass().steps if s.step == 'pes']
     assert pes.status == 'failed'
     assert pes.attention == [{'calc_id': 'pes/c0', 'state': 'manual',
@@ -463,7 +546,8 @@ def test_release_claim_interrupted_is_completed_by_running_it_again(run, monkeyp
     assert orch.release_claim(SYSTEM, 'pes/c0', group) == 1
     assert not claim.exists()
     (attempt,) = run.record('pes/c0').attempts  # the same attempt, none added
-    assert attempt.remedies == {'kind': 'initial', 'level': 1, 'values': {}, 'initial_values': {}}
+    assert attempt.remedies == {'kind': 'initial', 'level': 1, 'values': {}, 'initial_values': {},
+                                'restart': False}
     (pes,) = [s for s in orch.run_pass().steps if s.step == 'pes']
     assert pes.status == 'failed'
     assert pes.attention == [{'calc_id': 'pes/c0', 'state': 'manual',

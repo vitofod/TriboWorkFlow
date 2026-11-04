@@ -28,7 +28,7 @@ from triboworkflow.execution.archive import archive_attempt
 from triboworkflow.execution.jobs import MANIFEST_FILE, Launch, Manifest, read_manifest, write_job
 from triboworkflow.execution.worker import (Worker, WorkerError, job_id_from_environment,
                                             read_input, restart_count_from_environment,
-                                            with_max_seconds)
+                                            with_value)
 
 posix_only = pytest.mark.skipif(os.name != 'posix' or not Path('/bin/bash').exists(),
                                 reason='the worker launches the engine with /bin/bash')
@@ -73,11 +73,16 @@ SCF_MAX_SECONDS = text(HEADER, MAX_SECONDS, JOB_DONE)
 SCF_TRUNCATED = text(HEADER)
 
 
-def pwi(calculation='scf', max_seconds=None):
-    lines = ['&CONTROL', f"  calculation = '{calculation}'", "  prefix = 'p'"]
+def pwi(calculation='scf', max_seconds=None, nstep=None, mixing_beta=None):
+    lines = ['&CONTROL', f"  calculation = '{calculation}'", "  prefix = 'p'", "  outdir = 'OUT'"]
     if max_seconds is not None:
         lines.append(f'  max_seconds = {max_seconds}')
-    lines += ['/', '&SYSTEM', '  ibrav = 0', '/', 'K_POINTS gamma', '']
+    if nstep is not None:
+        lines.append(f'  nstep = {nstep}')
+    lines += ['/', '&SYSTEM', '  ibrav = 0', '/', '&ELECTRONS']
+    if mixing_beta is not None:
+        lines.append(f'  mixing_beta = {mixing_beta}')
+    lines += ['/', 'K_POINTS gamma', '']
     return '\n'.join(lines)
 
 
@@ -103,7 +108,7 @@ def run(tmp_path):
 
     def build(labels=('aa',), output=SCF_DONE, exit=0, input_text=None, sleep=0, name='pes_scf',
               run_command=None, record=True, n=1, kind='initial', level=1, values=None,
-              initial_values=None):
+              initial_values=None, restart=False):
         calcs = []
         for label in labels:
             calc_id = f'pes_scf/{label}'
@@ -118,7 +123,7 @@ def run(tmp_path):
                     engine=store.Engine('qe', 'pw.x'), energy_model={'ecutwfc': 40.0},
                     fingerprint=FP, files={'input': 'input.pwi', 'output': 'output.pwo'}))
             calcs.append(Launch(SYSTEM, calc_id, n, kind, level, values or {},
-                                initial_values or {}))
+                                initial_values or {}, restart))
         command = run_command or f'{shlex.quote(sys.executable)} {shlex.quote(str(fake))}'
         manifest = Manifest(name=name, scheduler='slurm', run_command=command, walltime=WALLTIME,
                             max_seconds_margin=MARGIN, calculations=tuple(calcs))
@@ -139,7 +144,7 @@ def record_of(run, label):
 # --- max_seconds in the input ----------------------------------------------------------
 
 def test_max_seconds_added_after_control():
-    new, replaced = with_max_seconds(pwi(), 85800)
+    new, replaced = with_value(pwi(), 'max_seconds', 85800)
     assert not replaced
     assert new.splitlines()[:2] == ['&CONTROL', '  max_seconds = 85800']
     assert new.replace('  max_seconds = 85800\n', '') == pwi()
@@ -152,15 +157,15 @@ def test_max_seconds_added_after_control():
 ])
 def test_max_seconds_line_replaced(line, expected):
     source = f"&control\n  calculation = 'scf'\n{line}\n/\n"
-    new, replaced = with_max_seconds(source, 1000)
+    new, replaced = with_value(source, 'max_seconds', 1000)
     assert replaced
     assert new == f"&control\n  calculation = 'scf'\n{expected}\n/\n"
 
 
 def test_max_seconds_keeps_the_line_endings_and_ignores_comments():
     source = "&CONTROL\r\n! max_seconds = 5, nstep = 3\r\n  max_seconds = 9\r\n/\r\n"
-    assert with_max_seconds(source, 7) == ("&CONTROL\r\n! max_seconds = 5, nstep = 3\r\n"
-                                           "  max_seconds = 7\r\n/\r\n", True)
+    assert with_value(source, 'max_seconds', 7) == ("&CONTROL\r\n! max_seconds = 5, nstep = 3\r\n"
+                                                    "  max_seconds = 7\r\n/\r\n", True)
 
 
 @pytest.mark.parametrize('source, message', [
@@ -172,7 +177,31 @@ def test_max_seconds_keeps_the_line_endings_and_ignores_comments():
 ])
 def test_max_seconds_in_other_forms(source, message):
     with pytest.raises(WorkerError, match=message):
-        with_max_seconds(source, 100)
+        with_value(source, 'max_seconds', 100)
+
+
+@pytest.mark.parametrize('key, value, source, expected, replaced', [
+    ('nstep', 200, pwi('relax'),
+     pwi('relax').replace('&CONTROL\n', '&CONTROL\n  nstep = 200\n'), False),
+    ('nstep', 250, pwi('relax', nstep=150), pwi('relax', nstep=250), True),
+    ('mixing_beta', 0.2, pwi(),
+     pwi().replace('&ELECTRONS\n', '&ELECTRONS\n  mixing_beta = 0.2\n'), False),
+    ('mixing_beta', 0.1, pwi(mixing_beta=0.4), pwi(mixing_beta=0.1), True),
+])
+def test_values_of_a_level_in_their_namelist(key, value, source, expected, replaced):
+    """nstep goes in &CONTROL, mixing_beta in &ELECTRONS."""
+    assert with_value(source, key, value) == (expected, replaced)
+
+
+@pytest.mark.parametrize('source, key, message', [
+    ("&CONTROL\n/\n&SYSTEM\n  ibrav = 0\n/\n", 'mixing_beta', 'no &ELECTRONS'),
+    ("&CONTROL\n/\n&ELECTRONS\n  conv_thr = 1e-8, mixing_beta = 0.4\n/\n", 'mixing_beta',
+     'mixing_beta must be alone on one line of &ELECTRONS'),
+    ("&CONTROL\n  nstep = 50\n  NSTEP = 60\n/\n", 'nstep', 'nstep must be alone on one line'),
+])
+def test_values_of_a_level_in_other_forms(source, key, message):
+    with pytest.raises(WorkerError, match=message):
+        with_value(source, key, 1)
 
 
 @pytest.mark.parametrize('source, expected', [
@@ -240,7 +269,10 @@ def test_attempt_recorded(run):
     assert claim['restart_count'] is None
     record = record_of(run, 'aa')
     (attempt,) = record.attempts
-    assert attempt.remedies == {'kind': 'initial', 'level': 1, 'values': {}, 'initial_values': {}}
+    assert attempt.remedies == {'kind': 'initial', 'level': 1, 'values': {}, 'initial_values': {},
+                                'restart': False}
+    assert attempt.run_command == read_manifest(manifest)[0].run_command
+    assert attempt.jobscript_digest == store.bytes_digest(b'#!/bin/bash\n')
     assert record.status == attempt.status == store.Status('ended', 'converged', 'n/a', 'failed')
     assert (attempt.n, attempt.job_id, attempt.max_seconds, attempt.max_seconds_cap) == \
         (1, '4521', WALLTIME - MARGIN - 101, None)
@@ -472,7 +504,7 @@ def test_second_attempt_after_archiving(run):
     assert record.attempts[0] == first
     assert record.attempts[1].job_id == '2' and record.status.process == 'ended'
     assert record.attempts[1].remedies == {'kind': 'unchanged', 'level': 1, 'values': {},
-                                           'initial_values': {}}
+                                           'initial_values': {}, 'restart': False}
     claim = json.loads((path / layout.CLAIM_FILE).read_text())
     assert (claim['n'], claim['restart_count']) == (2, 3)
 
@@ -520,14 +552,247 @@ def test_attempt_ahead_of_the_record(run, caplog):
 
 
 @posix_only
-@pytest.mark.parametrize('kind', ['remedy', 'unchanged'])
-def test_launches_above_level_one_are_not_run(run, kind, caplog):
-    manifest = run(n=2, kind=kind, level=2, values={'mixing_beta': 0.2, 'nstep': 200},
-                   initial_values={'mixing_beta': 0.4, 'nstep': 150})
+@pytest.mark.parametrize('kind', ['remedy', 'unchanged', 'manual'])
+def test_launches_above_level_one_run_with_their_values(run, kind, caplog):
+    source = pwi('relax', nstep=150, mixing_beta=0.4)
+    values, initial = {'mixing_beta': 0.2, 'nstep': 200}, {'mixing_beta': 0.4, 'nstep': 150}
+    manifest = run(n=2, kind=kind, level=2, values=values, initial_values=initial,
+                   input_text=source)
+    add_attempts(run, 'aa', 1)
+    with caplog.at_level('INFO'):
+        assert Worker(manifest, clock=Clock(0.0)).run() == [(SYSTEM, 'pes_scf/aa', 'ran')]
+    path = calc_path(run, 'aa')
+    assert (path / layout.INPUT_FILE).read_text() == source
+    expected = pwi('relax', nstep=200, mixing_beta=0.2).replace(
+        '&CONTROL\n', f'&CONTROL\n  max_seconds = {WALLTIME - MARGIN}\n')
+    assert (path / layout.RUN_INPUT_FILE).read_text() == expected
+    attempt = record_of(run, 'aa').attempts[-1]
+    assert attempt.remedies == {'kind': kind, 'level': 2, 'values': values,
+                                'initial_values': initial, 'restart': False}
+    assert ('attempt 2 at level 2, from scratch, max_seconds = 85800, mixing_beta = 0.2, '
+            'nstep = 200') in caplog.text
+
+
+@posix_only
+@pytest.mark.parametrize('restart, n, removed', [(False, 2, 'removed'), (False, 1, None),
+                                                 (True, 2, None)])
+def test_output_directory_removed_before_an_attempt_from_scratch(run, restart, n, removed,
+                                                                 caplog):
+    manifest = run(n=n, kind='unchanged' if n > 1 else 'initial', restart=restart)
+    add_attempts(run, 'aa', n - 1)
+    old = calc_path(run, 'aa') / 'OUT' / 'p.save'
+    old.mkdir(parents=True)
+    (old / 'charge-density.dat').write_text('of an older attempt')
+    (calc_path(run, 'aa') / 'OUT' / 'p.restart_scf').write_text('8 1e-5 1e-8')
+    with caplog.at_level('INFO'):
+        assert Worker(manifest).run() == [(SYSTEM, 'pes_scf/aa', 'ran')]
+    assert (calc_path(run, 'aa') / 'OUT').exists() is not bool(removed)
+    assert record_of(run, 'aa').attempts[-1].outdir_removal == removed
+    assert ('OUT removed before attempt 2 from scratch' in caplog.text) is bool(removed)
+
+
+@posix_only
+def test_no_output_directory_to_remove(run):
+    manifest = run(n=2, kind='unchanged')
+    add_attempts(run, 'aa', 1)
+    assert Worker(manifest).run() == [(SYSTEM, 'pes_scf/aa', 'ran')]
+    assert record_of(run, 'aa').attempts[-1].outdir_removal == 'absent'
+
+
+@posix_only
+def test_directory_of_the_files_per_process_removed_with_the_output_directory(run, caplog):
+    source = pwi().replace("  outdir = 'OUT'\n", "  outdir = 'OUT'\n  wfcdir = 'WFC/node'\n")
+    manifest = run(n=2, kind='unchanged', input_text=source)
+    add_attempts(run, 'aa', 1)
+    (calc_path(run, 'aa') / 'WFC' / 'node').mkdir(parents=True)
+    (calc_path(run, 'aa') / 'WFC' / 'node' / 'p.wfc1').write_text('of an older attempt')
+    with caplog.at_level('INFO'):
+        assert Worker(manifest).run() == [(SYSTEM, 'pes_scf/aa', 'ran')]
+    assert not (calc_path(run, 'aa') / 'WFC' / 'node').exists()
+    assert (calc_path(run, 'aa') / 'WFC').is_dir()
+    assert record_of(run, 'aa').attempts[-1].outdir_removal == 'removed'
+    assert 'OUT, WFC/node removed before attempt 2 from scratch' in caplog.text
+
+
+@posix_only
+@pytest.mark.parametrize('key, value, message', [
+    ('outdir', None, 'no outdir: the files of the previous attempts cannot be removed'),
+    ('outdir', "'/scratch/OUT'", "outdir = '/scratch/OUT' is not a directory inside the "
+                                 'calculation'),
+    ('outdir', "'./'", "outdir = './' is not a directory inside the calculation"),
+    ('outdir', "'OUT/../..'", "outdir = 'OUT/../..' is not a directory inside the calculation"),
+    ('outdir', "'LINK'", "outdir = 'LINK': LINK is a symbolic link"),
+    # A link on the way: LINK/OUT is a real directory, elsewhere.
+    ('outdir', "'LINK/OUT'", "outdir = 'LINK/OUT': LINK is a symbolic link"),
+    ('outdir', "'FILE'", "outdir = 'FILE' is not a directory inside the calculation"),
+    ('wfcdir', "'LINK/OUT'", "wfcdir = 'LINK/OUT': LINK is a symbolic link"),
+])
+def test_output_directory_that_is_not_removed(run, key, value, message, caplog, tmp_path):
+    line = "  outdir = 'OUT'\n"
+    if key == 'outdir':
+        source = pwi().replace(line, '' if value is None else f'  outdir = {value}\n')
+    else:
+        source = pwi().replace(line, f'{line}  wfcdir = {value}\n')
+    manifest = run(n=2, kind='unchanged', input_text=source)
+    add_attempts(run, 'aa', 1)
+    elsewhere = tmp_path / 'elsewhere'
+    (elsewhere / 'OUT' / 'p.save').mkdir(parents=True)
+    (calc_path(run, 'aa') / 'LINK').symlink_to(elsewhere)
+    (calc_path(run, 'aa') / 'FILE').write_text('not a directory')
+    assert Worker(manifest).run() == [(SYSTEM, 'pes_scf/aa', 'error')]
+    assert message in caplog.text
+    assert (elsewhere / 'OUT' / 'p.save').is_dir() and calc_path(run, 'aa').is_dir()
+    assert not (calc_path(run, 'aa') / layout.CLAIM_FILE).exists()
+    assert len(record_of(run, 'aa').attempts) == 1
+
+
+@posix_only
+@pytest.mark.parametrize('wfcdir', ["'/scratch/local'", "'../shared'"])
+def test_files_per_process_outside_the_calculation_refused(run, wfcdir, caplog):
+    # Refused from the first attempt: they would be shared with other calculations.
+    source = pwi().replace("  outdir = 'OUT'\n", f"  outdir = 'OUT'\n  wfcdir = {wfcdir}\n")
+    manifest = run(input_text=source)
+    assert Worker(manifest).run() == [(SYSTEM, 'pes_scf/aa', 'error')]
+    assert f'wfcdir = {wfcdir} is not a directory inside the calculation' in caplog.text
+    assert record_of(run, 'aa').attempts == ()
+    assert not run.log.exists()
+
+
+@posix_only
+def test_removal_recorded_before_it_starts(run, monkeypatch):
+    manifest = run(n=2, kind='unchanged')
+    add_attempts(run, 'aa', 1)
+    (calc_path(run, 'aa') / 'OUT').mkdir()
+    seen = {}
+
+    def rmtree(target):
+        seen['claim'] = json.loads((calc_path(run, 'aa') / layout.CLAIM_FILE).read_text())
+        seen['attempt'] = record_of(run, 'aa').attempts[-1]
+        seen['run.pwi'] = (calc_path(run, 'aa') / layout.RUN_INPUT_FILE).exists()
+        os.rmdir(target)
+
+    monkeypatch.setattr('triboworkflow.execution.worker.shutil.rmtree', rmtree)
+    assert Worker(manifest).run() == [(SYSTEM, 'pes_scf/aa', 'ran')]
+    assert seen['claim']['n'] == 2 and seen['claim']['pid'] == os.getpid()
+    assert (seen['attempt'].n, seen['attempt'].status.process,
+            seen['attempt'].outdir_removal) == (2, 'running', 'started')
+    assert seen['run.pwi'] is False
+    assert record_of(run, 'aa').attempts[-1].outdir_removal == 'removed'
+
+
+@posix_only
+def test_removal_that_fails_ends_the_attempt_without_running(run, monkeypatch, caplog):
+    manifest = run(n=2, kind='unchanged')
+    add_attempts(run, 'aa', 1)
+    (calc_path(run, 'aa') / 'OUT').mkdir()
+
+    def rmtree(target):
+        raise PermissionError(13, 'Permission denied', str(target))
+
+    monkeypatch.setattr('triboworkflow.execution.worker.shutil.rmtree', rmtree)
+    assert Worker(manifest).run() == [(SYSTEM, 'pes_scf/aa', 'error')]
+    assert ('attempt 2 not run: the output directories of the previous attempts were not '
+            'removed') in caplog.text
+    record = record_of(run, 'aa')
+    attempt = record.attempts[-1]
+    assert (attempt.n, attempt.outdir_removal, attempt.status.process) == (2, 'failed', 'crashed')
+    assert attempt.ended is not None and attempt.input is None and attempt.output is None
+    assert record.status.process == 'crashed'
+    path = calc_path(run, 'aa')
+    assert (path / layout.CLAIM_FILE).exists() and not (path / layout.RUN_INPUT_FILE).exists()
+    assert not run.log.exists()
+
+
+@posix_only
+def test_restart_written_in_the_input_of_the_attempt(run):
+    source = pwi('relax', nstep=150, mixing_beta=0.4)
+    manifest = run(n=2, kind='unchanged', input_text=source, restart=True)
+    add_attempts(run, 'aa', 1)
+    assert Worker(manifest, clock=Clock(0.0)).run() == [(SYSTEM, 'pes_scf/aa', 'ran')]
+    path = calc_path(run, 'aa')
+    assert (path / layout.INPUT_FILE).read_text() == source
+    expected = source.replace('&CONTROL\n', "&CONTROL\n  restart_mode = 'restart'\n"
+                                            f'  max_seconds = {WALLTIME - MARGIN}\n')
+    assert (path / layout.RUN_INPUT_FILE).read_text() == expected
+    assert record_of(run, 'aa').attempts[-1].remedies['restart'] is True
+
+
+@posix_only
+@pytest.mark.parametrize('mode', ['restart', 'reset_counters'])
+def test_input_that_asks_for_a_restart_itself(run, mode, caplog):
+    source = pwi().replace("prefix = 'p'\n", f"prefix = 'p'\n  restart_mode = '{mode}'\n")
+    manifest = run(input_text=source)
+    assert Worker(manifest).run() == [(SYSTEM, 'pes_scf/aa', 'error')]
+    assert f"restart_mode = '{mode}', attempt 1 starts from scratch" in caplog.text
+    assert not (calc_path(run, 'aa') / layout.CLAIM_FILE).exists()
+    assert record_of(run, 'aa').attempts == ()
+
+
+def parallel(processes):
+    """Beginning of a run on ``processes`` MPI processes."""
+    return ['', HEADER[1], f'     Number of MPI processes:           {processes:7d}',
+            f'     R & G space division:  proc/nbgrp/npool/nimage = {processes:7d}']
+
+
+RESTART_READ = ['     Atomic positions and unit cell read from directory:', '     OUT/p.save/',
+                '     The initial density is read from file :', '     Starting wfcs from file']
+RESTART_NOT_FOUND = ['     Atomic positions and unit cell read from directory:',
+                     '     Nothing found: using input atomic positions and unit cell',
+                     '     Initial potential from superposition of free atoms',
+                     '     Starting wfcs are    8 randomized atomic wfcs']
+
+
+@posix_only
+@pytest.mark.parametrize('lines, before, outcome, warnings', [
+    (RESTART_READ, 4, (True, True, True, True), []),
+    (RESTART_READ, 8, (True, True, True, False),
+     ['restart with a parallelization other than that of the previous attempt']),
+    (RESTART_NOT_FOUND, 4, (False, False, False, True),
+     ['restart asked for, positions, density, wavefunctions not read from the files of the '
+      'previous attempt: computed again from the input']),
+    (RESTART_READ, None, (True, True, True, None), []),
+], ids=['read', 'other parallelization', 'not found', 'previous output missing'])
+def test_what_a_restart_read_is_recorded(run, lines, before, outcome, warnings, caplog):
+    output = text(parallel(4), HEADER[2:], lines, CONVERGED, JOB_DONE)
+    manifest = run(n=2, kind='unchanged', output=output, restart=True)
+    (first,) = add_attempts(run, 'aa', 1)
+    if before is not None:  # the output of attempt 1, archived
+        archived = calc_path(run, 'aa') / 'attempts' / '1' / 'output.pwo'
+        archived.parent.mkdir(parents=True)
+        archived.write_text(text(parallel(before), HEADER[2:], MAX_SECONDS, JOB_DONE))
+        first = store.Attempt(**{**first.__dict__,
+                                 'output': store.AttemptFile('attempts/1/output.pwo')})
+        store.write_record(layout.system_dir(run.run_dir, SYSTEM), store.Record(**{
+            **record_of(run, 'aa').__dict__, 'attempts': (first,)}))
+    Worker(manifest).run()
+    restart = record_of(run, 'aa').attempts[-1].restart
+    assert (restart['positions'], restart['density'], restart['wavefunctions'],
+            restart['same_parallelization']) == outcome
+    assert (restart['scf_iteration'], restart['bfgs_history']) == (False, None)
+    for warning in warnings:
+        assert warning in caplog.text
+    assert ('restart asked for' in caplog.text or 'restart with' in caplog.text) == bool(warnings)
+
+
+@posix_only
+def test_nothing_recorded_of_a_restart_for_an_attempt_from_scratch(run):
+    output = text(parallel(4), HEADER[2:], RESTART_NOT_FOUND, CONVERGED, JOB_DONE)
+    Worker(run(output=output)).run()
+    assert record_of(run, 'aa').attempts[-1].restart is None
+
+
+@posix_only
+@pytest.mark.parametrize('values, source, message', [
+    ({'mixing_beta': 0.2, 'conv_thr': 1e-8}, pwi(), 'attempt 2 runs at level 2 with conv_thr: '
+                                                    'only nstep, mixing_beta are written'),
+    ({'mixing_beta': 0.2}, pwi().replace('&ELECTRONS\n/\n', ''), 'no &ELECTRONS namelist'),
+])
+def test_values_of_a_level_that_cannot_be_written(run, values, source, message, caplog):
+    manifest = run(n=2, kind='remedy', level=2, values=values, initial_values={'mixing_beta': 0.4},
+                   input_text=source)
     add_attempts(run, 'aa', 1)
     assert Worker(manifest).run() == [(SYSTEM, 'pes_scf/aa', 'error')]
-    assert ('attempt 2 runs at level 2 with mixing_beta, nstep, which this version does not '
-            'write in the input') in caplog.text
+    assert message in caplog.text
     assert not (calc_path(run, 'aa') / layout.CLAIM_FILE).exists()
     assert not (calc_path(run, 'aa') / layout.RUN_INPUT_FILE).exists()
     assert len(record_of(run, 'aa').attempts) == 1

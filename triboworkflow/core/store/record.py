@@ -18,7 +18,9 @@ parsed; a parsed output always leaves its results in the record. For whoever
 looks at a calculation, ``Status.summary`` sums the states up in one word.
 The results of a record stand for a calculation only if the record is
 complete, has results, its fingerprint equals the one expected, its energy
-model is fully known and its output agrees with it (``can_reuse``). Which results each kind of
+model is fully known and its output agrees with it (``can_reuse``), and, when
+its last attempt continued one from files written per process, it ran with
+the same parallelization (``restart_problem``). Which results each kind of
 calculation must have is checked by the parser of its engine.
 
 The energy model is written by the engine. A null value in it marks a part
@@ -36,10 +38,12 @@ reused and its energies are never combined. A parsed output always leaves
 ``observed``, empty if the engine observes nothing.
 
 The states, the results and ``observed`` describe the last run. Each run is
-also kept as an ``Attempt``: where and when it ran, the time limit, the input
-and the output with their digests, the exit code, the state of the job, the
-reason of the stop, why its output could not be parsed and the states at its
-end.
+also kept as an ``Attempt``: where and when it ran, with which command,
+jobscript and time limit, the input and the output with their digests, the
+exit code, the
+state of the job, the reason of the stop, why its output could not be
+parsed, the states at its end, how it was launched and, for an attempt that
+continued the previous one, what it read from the files of that one.
 
 Notes
 -----
@@ -58,7 +62,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from .atomic import StoreError, check_json_value, read_json, write_json
 from .fingerprint import canonical_json, check_fingerprint, content_digest
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 RECORD_FILE = 'record.json'
 
 PROCESS_STATES = ('pending', 'running', 'ended', 'crashed', 'killed')
@@ -72,8 +76,24 @@ _RECORD_KEYS = ('schema_version', 'calc_id', 'system', 'step', 'label', 'calc_ty
                 'files')
 _STATUS_KEYS = ('process', 'scf', 'geometry', 'parsing')
 _ATTEMPT_KEYS = ('n', 'job_id', 'host', 'started', 'ended', 'max_seconds', 'max_seconds_cap',
-                 'input', 'output', 'exit_code', 'job_state', 'stop_reason', 'clean_stop',
-                 'parse_error', 'status', 'remedies')
+                 'run_command', 'jobscript_digest', 'input', 'output', 'exit_code', 'job_state',
+                 'stop_reason',
+                 'clean_stop', 'parse_error', 'status', 'remedies', 'restart', 'outdir_removal')
+# Removal of the output directories of the previous attempts before an attempt
+# from scratch: begun and not known to be over, done, nothing to remove,
+# stopped by an error.
+OUTDIR_REMOVAL_STATES = ('started', 'removed', 'absent', 'failed')
+# What an attempt that continues the previous one read from its files, as its
+# output tells: the atomic positions, the charge density, the wavefunctions,
+# the iteration of an interrupted SCF and the history of the optimizer; and
+# whether it ran with the parallelization of the previous attempt.
+RESTART_PARTS = ('positions', 'density', 'wavefunctions', 'scf_iteration', 'bfgs_history',
+                 'same_parallelization')
+# Reasons of the stop after which pw.x leaves files written once per MPI
+# process (wavefunctions, iteration of the SCF, history of the mixing) that a
+# restart reads: they are read correctly only with the same parallelization,
+# which pw.x does not check.
+PER_PROCESS_STOPS = ('max_seconds', 'user_request', 'scf_not_converged')
 
 
 def check_name(value, where):
@@ -284,6 +304,12 @@ def _time(value, where):
     return value
 
 
+def _optional_bool(value, where):
+    if value is not None and type(value) is not bool:
+        raise StoreError(f'{where}: true, false or null is required, not {value!r}')
+    return value
+
+
 def _seconds(value, where):
     if value is None:
         return None
@@ -316,6 +342,13 @@ class Attempt:
     max_seconds_cap : int or float or None, optional
         Upper limit of ``max_seconds`` written in the prepared input; None if
         the input has none.
+    run_command : str or None, optional
+        Command that ran the engine, up to the input file (e.g.
+        ``mpirun -np 32 pw.x -nk 4``); None when the worker did not record it.
+    jobscript_digest : str or None, optional
+        ``file_digest`` of the jobscript of the user that the job of the
+        attempt ran, which sets the resources of the job; None when the
+        worker did not record it.
     input, output : AttemptFile or None, optional
         Input run and output written by the attempt.
     exit_code : int or None, optional
@@ -334,8 +367,24 @@ class Attempt:
         States of the calculation at the end of this attempt.
     remedies : dict, optional
         How the attempt was launched, written by the worker: ``kind`` (why
-        it ran), ``level`` (of the remedies) and ``values`` (the parameters
-        changed with respect to the input). Empty when not known.
+        it ran), ``level`` (of the remedies), ``values`` (the parameters
+        changed with respect to the input) and ``restart`` (whether it
+        continued the previous attempt from the files of its output
+        directory). Empty when not known.
+    restart : dict or None, optional
+        For an attempt launched to continue the previous one, what it read
+        from the files of the previous attempt, as its output tells: one
+        value for each of ``RESTART_PARTS``, true, false, or null when the
+        output does not tell. None for any other attempt, or before its
+        output is read.
+    outdir_removal : str or None, optional
+        For an attempt from scratch after the first, the removal of the
+        directories that the engine writes (``outdir``, and ``wfcdir`` when
+        given), written by the worker before the run: ``'started'`` (begun;
+        the worker stopped before recording its end), ``'removed'``,
+        ``'absent'`` (nothing to remove) or ``'failed'`` (an error stopped it
+        and the attempt did not run). None for a first attempt, an attempt
+        that continues the previous one, or when not recorded.
     """
 
     n: int
@@ -345,6 +394,8 @@ class Attempt:
     ended: str | None = None
     max_seconds: float | None = None
     max_seconds_cap: float | None = None
+    run_command: str | None = None
+    jobscript_digest: str | None = None
     input: AttemptFile | None = None
     output: AttemptFile | None = None
     exit_code: int | None = None
@@ -354,6 +405,8 @@ class Attempt:
     parse_error: str | None = None
     status: Status = field(default_factory=Status)
     remedies: dict = field(default_factory=dict)
+    restart: dict | None = None
+    outdir_removal: str | None = None
 
     def __post_init__(self):
         if type(self.n) is not int or self.n < 1:
@@ -364,6 +417,9 @@ class Attempt:
         _time(self.ended, 'attempts.ended')
         _seconds(self.max_seconds, 'attempts.max_seconds')
         _seconds(self.max_seconds_cap, 'attempts.max_seconds_cap')
+        _optional_text(self.run_command, 'attempts.run_command')
+        if self.jobscript_digest is not None:
+            check_fingerprint(self.jobscript_digest, 'attempts.jobscript_digest')
         for name in ('input', 'output'):
             value = getattr(self, name)
             if value is not None and not isinstance(value, AttemptFile):
@@ -373,9 +429,15 @@ class Attempt:
                              f'not {self.exit_code!r}')
         _optional_text(self.job_state, 'attempts.job_state')
         _optional_text(self.stop_reason, 'attempts.stop_reason')
-        if self.clean_stop is not None and type(self.clean_stop) is not bool:
-            raise StoreError(f'attempts.clean_stop: true, false or null is required, '
-                             f'not {self.clean_stop!r}')
+        _optional_bool(self.clean_stop, 'attempts.clean_stop')
+        if self.outdir_removal is not None and self.outdir_removal not in OUTDIR_REMOVAL_STATES:
+            raise StoreError(f'attempts.outdir_removal: {self.outdir_removal!r} is not one of '
+                             f'{", ".join(OUTDIR_REMOVAL_STATES)} or null')
+        if self.restart is not None:
+            check_keys(self.restart, RESTART_PARTS, 'attempts.restart')
+            for part in RESTART_PARTS:
+                _optional_bool(self.restart[part], f'attempts.restart.{part}')
+            object.__setattr__(self, 'restart', dict(self.restart))
         if not isinstance(self.status, Status):
             raise StoreError('attempts.status: a Status is required')
         _optional_text(self.parse_error, 'attempts.parse_error')
@@ -393,12 +455,15 @@ class Attempt:
         return {'n': self.n, 'job_id': self.job_id, 'host': self.host,
                 'started': self.started, 'ended': self.ended,
                 'max_seconds': self.max_seconds, 'max_seconds_cap': self.max_seconds_cap,
+                'run_command': self.run_command, 'jobscript_digest': self.jobscript_digest,
                 'input': None if self.input is None else self.input.to_dict(),
                 'output': None if self.output is None else self.output.to_dict(),
                 'exit_code': self.exit_code, 'job_state': self.job_state,
                 'stop_reason': self.stop_reason, 'clean_stop': self.clean_stop,
                 'parse_error': self.parse_error, 'status': _status_dict(self.status),
-                'remedies': copy.deepcopy(self.remedies)}
+                'remedies': copy.deepcopy(self.remedies),
+                'restart': None if self.restart is None else dict(self.restart),
+                'outdir_removal': self.outdir_removal}
 
     @classmethod
     def from_dict(cls, data):
@@ -718,6 +783,33 @@ def identity_differences(record):
     return found
 
 
+def restart_problem(record):
+    """Why the last attempt of a record may have read the files of the previous one incorrectly.
+
+    An attempt that continued one stopped by a reason of ``PER_PROCESS_STOPS``
+    read files written once per MPI process: it stands only if it ran with
+    the same parallelization as that attempt (``restart`` part
+    ``same_parallelization`` true).
+
+    Returns
+    -------
+    str or None
+        The reason, or None when the last attempt did not continue such an
+        attempt or ran with the same parallelization.
+    """
+    if len(record.attempts) < 2:
+        return None
+    last, previous = record.attempts[-1], record.attempts[-2]
+    if last.remedies.get('restart') is not True or previous.stop_reason not in PER_PROCESS_STOPS:
+        return None
+    same = None if last.restart is None else last.restart['same_parallelization']
+    if same is True:
+        return None
+    how = 'another parallelization' if same is False else 'a parallelization not known'
+    return (f'attempt {last.n} continued attempt {previous.n} ({previous.stop_reason}) from '
+            f'files written per process with {how}: they may have been read incorrectly')
+
+
 def reuse_problem(record, fingerprint):
     """Why a record does not stand for a calculation with the given fingerprint.
 
@@ -740,6 +832,9 @@ def reuse_problem(record, fingerprint):
         return 'another fingerprint'
     if not record.is_complete or record.results is None:
         return 'not complete or without results'
+    problem = restart_problem(record)
+    if problem is not None:
+        return problem
     unknown = unknown_parts(record.energy_model)
     if unknown:
         return f'energy model not known ({", ".join(unknown)})'

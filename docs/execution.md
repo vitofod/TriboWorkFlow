@@ -5,8 +5,7 @@ This page describes how a group of calculations is laid out, submitted, run
 and followed; how the calculations are reconciled with their jobs and
 relaunched; how the orchestrator takes the steps of a workflow forward, in
 the background on the login node; and how to check the execution on a new
-machine with a fake engine. The values of the remedies are decided but not
-yet written in the inputs, so a relaunch above level 1 is not submitted.
+machine with a fake engine.
 
 ## Layout of a run
 
@@ -52,11 +51,14 @@ jobscript (`execution/jobs.py`):
 
 - `manifest.json`: the calculations, in the order the workers take them, and
   how to run them: scheduler, `run_command`, `walltime`, `max_seconds_margin`
-  (from `[execution]`, see `configuration.md`). Each calculation names the
+  (from `[execution]`, see `configuration.md`) and the digest of the
+  jobscript of the user (`jobscript_digest`). Each calculation names the
   attempt the group runs (`Launch`): its number `n`, its kind (`initial`,
   `unchanged`, `remedy`, `manual`), the level of the remedies and, above
-  level 1, the values of the level and the effective values at level 1. A
-  new attempt of a calculation always goes in a new group.
+  level 1, the values of the level and the effective values at level 1, and
+  whether it continues the previous attempt from `OUT/` (`restart`). A new
+  attempt of a calculation always goes in a new group. `schema_version` is
+  3; this version reads no other.
 - `jobscript.sh`: the jobscript of `[execution]`, copied byte for byte, with
   one line added at the end:
 
@@ -183,17 +185,35 @@ group that was replaced finds the attempt made and skips it, and only if no
 other worker has taken it:
 
 1. creates `claim` with `O_CREAT | O_EXCL`: exactly one worker succeeds, the
-   others skip the calculation; the claim holds the attempt, the job id, the
+   others skip the calculation. It prepares and checks the input of the
+   attempt in memory, then writes in the claim the attempt, the job id, the
    restart count of the job (`restart_count`, from `SLURM_RESTART_COUNT`,
-   null when not set), the host, the pid and the time;
-2. adds attempt `n` to the record, with the process `running` and the launch
-   of the manifest in `remedies`, and clears the results, `observed` and the
-   engine version of the run before;
-3. writes `run.pwi`, a copy of `input.pwi` with `max_seconds` set;
-4. creates `output.pwo` with `O_EXCL`;
-5. runs `<run_command> -in run.pwi >> output.pwo` with bash, in the
+   null when not set), the host, the pid and the time; nothing else is
+   changed on disk before;
+2. adds attempt `n` to the record, with the process `running`, the
+   `run_command` and the `jobscript_digest` of the manifest and its launch in
+   `remedies`, and clears the results, `observed` and the engine version of
+   the run before. An attempt from scratch after the first gets
+   `outdir_removal = 'started'`;
+3. for such an attempt, removes the directories that pw.x writes, `outdir`
+   and `wfcdir` when given (`clear_scratch`): pw.x from scratch deletes only
+   some files of its output directory, and a later restart could read the
+   others although they come from an older attempt. Each must lie inside
+   the calculation directory, with no symbolic link on the way, checked
+   again right before. The record then gets `removed` or `absent`. A removal
+   that fails gives `failed`: the attempt ends without running (process
+   `crashed`) and the user decides. A worker stopped during the removal
+   leaves `started`, and the next attempt from scratch removes the
+   directories again;
+4. writes `run.pwi`, a copy of `input.pwi` with `max_seconds` set and,
+   above level 1, the values of the level (`nstep` in `&CONTROL`,
+   `mixing_beta` in `&ELECTRONS`), each one replacing its line or added at
+   the start of its namelist; a launch that continues the previous attempt
+   also gets `restart_mode = 'restart'`;
+5. creates `output.pwo` with `O_EXCL`;
+6. runs `<run_command> -in run.pwi >> output.pwo` with bash, in the
    calculation directory;
-6. records the end time, the exit code, the digests of `run.pwi` and
+7. records the end time, the exit code, the digests of `run.pwi` and
    `output.pwo`, the states read from the output, the reason of the stop,
    whether pw.x closed the run and the version it printed; when the
    calculation is over with the SCF and the geometry converged, it reads the
@@ -201,12 +221,17 @@ other worker has taken it:
    record gets `parsing`, the results and `observed`, the directory
    `structure_out.extxyz`, and an output that cannot be parsed leaves its
    reason in the attempt (`parse_error`) and in the log. A version of pw.x
-   outside 7.1.x–7.3.x gives a warning in the log.
+   outside 7.1.x–7.3.x gives a warning in the log. For an attempt that
+   continued the previous one, the record gets what pw.x read from its files
+   (`restart`, see [Restart](#restart)).
 
 If something is wrong before step 2 (no record, a calculation other than
-`scf` or `relax`, files of an earlier attempt still in place, a launch above
-level 1 whose values this version does not write in the input), the worker
-removes its claim, logs the error and goes on. A worker killed with its job
+`scf` or `relax`, files of an earlier attempt still in place, a value of the
+level whose line is not alone or whose namelist is missing, an `input.pwi`
+that asks for a restart itself, a `wfcdir` outside the calculation
+directory, an `outdir` missing or outside it before an attempt from
+scratch), the worker removes its claim, logs the error and goes on, with
+nothing removed. A worker killed with its job
 leaves the attempt with the process `running`; what happened is then known
 from the scheduler.
 
@@ -215,7 +240,9 @@ since the worker started minus `max_seconds_margin`, capped by the
 `max_seconds` of `input.pwi` when given. pw.x then stops in time to write its
 restart files. When nothing is left, the worker takes no more calculations.
 The `walltime` of `[execution]` must be the one of the jobscript. In
-`input.pwi`, `max_seconds` must be alone on its line of `&CONTROL`.
+`input.pwi`, `max_seconds`, `nstep` and `restart_mode` must be alone on
+their line of `&CONTROL`, `mixing_beta` on its line of `&ELECTRONS`, when
+given.
 
 **Job id.** Read from `SLURM_JOB_ID`, `PBS_JOBID` (PBS, Torque), `LSB_JOBID`
 (LSF) or `JOB_ID` (SGE); null for HTCondor and outside a job.
@@ -226,8 +253,10 @@ Before a calculation runs again, its last attempt is archived
 (`execution/archive.py`): `run.pwi` and `output.pwo` move to `attempts/<n>/`
 after a check of their digests, with `structure_out.extxyz` when the output
 was parsed, the record gets the new paths, and the claim is removed last. An interrupted archiving is completed by running it again.
-An attempt still recorded as `running` is not archived; `OUT/` is not
-touched. An attempt is archived only when it is relaunched.
+An attempt still recorded as `running` is not archived; the archiving does
+not touch `OUT/`, which the next attempt continues from or the worker
+removes before an attempt from scratch. An attempt is archived only when it
+is relaunched.
 
 An empty claim (a worker that stopped right after creating it) gets the
 number the worker would have used, the attempts in the record plus one, and
@@ -275,7 +304,8 @@ reports are `uncertain`.
 The fixed attempt gets the state of the job as printed, the states read from
 the output (the process `killed` when the scheduler stopped or requeued the
 job, `crashed` otherwise, unless pw.x closed the run), the reason of the
-stop and the digests of its files. The output decides when pw.x closed the
+stop, what a restart read and the digests of its files. The output decides
+when pw.x closed the
 run: a calculation whose worker was killed after pw.x ended is completed,
 and its results are read as the worker reads them.
 
@@ -289,7 +319,10 @@ How the job ended decides when the output does not:
 
 So a `qdel` on PBS or Torque cannot be told from another end of the job and
 is relaunched. An error of pw.x (`Error in routine`) is left to the user,
-with its routine, code and message read from the output, which is kept. A
+with its routine, code and message read from the output, which is kept. So
+is an attempt that did not run because the output directories of the
+previous attempts could not be removed (`outdir_removal = 'failed'`; the
+error is in the log of the worker). A
 group that ends without any of its attempts taken makes its calculations
 `manual`, with its jobs and their states ("no progress"); the cause is not
 deduced.
@@ -316,14 +349,64 @@ calculation:
 `β₀` and `n₀` are the values pw.x uses at level 1, given or default, read
 from the summary at the beginning of its output; when `input.pwi` writes
 them they must agree with the summary. They are kept with the launches above
-level 1. **This version decides the launches above level 1 but does not
-submit them**: their values are not written in the input yet, and the
-calculation is reported as needing the user.
+level 1, whose values the worker writes in `run.pwi`. `nstep` counts the
+steps of one execution of pw.x: after a restart it counts again from the
+first, while the optimizer keeps its history.
 
 `policy.manual_launch` gives the launch of a relaunch asked for by the user:
 allowed only when the worker of the last attempt is surely over (no claim,
 or the run of the job of the claim over), at the level of the last attempt
-and with its input; the count of the unchanged relaunches starts again.
+and with its input or at the level asked for (`--level`, with the values of
+that level), continuing the last attempt on the conditions of a relaunch of
+the workflow, also after a stop by request of the user, unless asked to
+start from scratch (`--from-scratch`); the count of
+the unchanged relaunches starts again. An attempt that groups listed and no
+worker took runs again as it was listed, at no other level.
+
+### Restart
+
+pw.x continues a run from the files it left in its output directory
+(`restart_mode = 'restart'`) only after it closed that run; it reads each
+part on its own and computes again, with a message and without an error,
+what it cannot read. What it writes depends on how the run stopped
+(QE 7.2: `PW/src/run_pwscf.f90`, `punch.f90`, `electrons.f90`,
+`Modules/bfgs_module.f90`):
+
+| Last attempt | What the next one reads | Continued |
+|---|---|---|
+| `max_seconds` | positions, charge density, wavefunctions, the iteration of an interrupted SCF and its mixing, the history of the optimizer; the wavefunctions and the SCF state are written once per MPI process | yes, all of it, with the same parallelization |
+| `max_steps` | the new positions, the charge density and the wavefunctions at those positions, readable with any parallelization, the history of the optimizer; the SCF starts from its first iteration | yes, all of it |
+| `scf_not_converged`, relax | the positions, the last charge density (not converged), the wavefunctions written per process, the history of the optimizer; the SCF starts from its first iteration without the history of the mixing | in part, with the same parallelization |
+| `scf_not_converged`, scf | — | no: from scratch |
+| `user_request` (exit file) | as after `max_seconds` | only in a relaunch asked for by the user (`relaunch`), with the same parallelization; never by the workflow |
+| crash, kill, any other end | — | no: from scratch |
+
+A restart is decided (`policy.can_restart`) only when, besides, `prefix` and
+`outdir` are given in `input.pwi` and `OUT/<prefix>.save/` holds
+`data-file-schema.xml` and the charge density. pw.x reads the files written
+per process correctly only with the same parallelization, which it does not
+check (`INPUT_PW`, `restart_mode`). That parallelization is known only once
+the new attempt runs: before, a restart from such files (after
+`max_seconds`, `user_request`, `scf_not_converged`) needs the new attempt to
+run with the same `run_command` and the same jobscript, which sets the
+resources of the job (`jobscript_digest` of the attempt and of the
+`[execution]` jobscript), and the output of the last attempt to print its
+parallelization; otherwise it starts from scratch, with the reason.
+
+The output of the attempt then tells what was read (`engines/qe/status.py`,
+`PwRestart`) and the record keeps it per part in `restart`, with whether the
+parallelization printed in the header (MPI processes, pools, band groups, R &
+G space, FFT divisions) is that of the previous attempt. Positions, density
+or wavefunctions not read, or another parallelization, give a warning in the
+log. The result stands as any other, since the thresholds are those of the
+input, except after a restart from files written per process with another
+parallelization, or one not known: it is not reused
+(`core.store.restart_problem`), and the user decides. An `input.pwi` that
+sets `startingwfc` other than `'file'` makes pw.x skip the wavefunctions,
+recorded as not read. `wfcdir`, where pw.x writes the wavefunctions of each
+process, must be a directory inside the calculation directory (checked in
+the settings and by the worker): it is removed with `outdir` before an
+attempt from scratch and never shared with another calculation.
 
 **Launch of an attempt not recorded.** An attempt added to the record by the
 code (an empty claim released, or a claim whose worker stopped before writing
@@ -364,7 +447,10 @@ Each pass:
    and those of a preparation before `retry`. A running
    step is reconciled and decided; the launches go, after the archiving of
    the last attempt, in a new group `<system>.<step>.<k>`. When every
-   calculation is completed the step analyses them and is **completed**;
+   calculation is completed the step analyses them and is **completed**; a
+   calculation completed whose output was not parsed, or whose results
+   cannot be used (an energy model not fully known, an output of another
+   model), needs the user and is never relaunched, as for `analyse_step`;
    when what is left needs the user it has **failed**, with the
    calculations and why;
 4. saves the steps in `orchestrator.json`.
