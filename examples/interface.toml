@@ -103,6 +103,8 @@ upf_md5 = "pseudo.md5"             # Expected MD5 of the UPF files, relative to 
 scheduler = "slurm"
 jobscript = "jobscript.sh"         # Relative to this file; copied with the worker line added.
 run_command = "mpirun -np 32 pw.x -nk 4"
+# pp_command = "mpirun -np 32 pp.x"  # Required by the calculations that give the charge
+                                     # density (charge): pp.x after pw.x, in the same job.
 groups = 10                        # Jobs (workers); never more than the calculations.
                                    # Optional: else --groups, or asked in a terminal.
 walltime = 86400                   # Seconds, as in the jobscript.

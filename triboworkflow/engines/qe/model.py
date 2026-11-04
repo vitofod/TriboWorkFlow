@@ -20,7 +20,9 @@ The fingerprint (``input_fingerprint``) identifies the input of one
 calculation: engine and program, calc_type (in the workflows), energy model,
 every namelist key written except those of class ``'attempt'`` and
 ``'resource'``, and the cards as written (species with their masses,
-``K_POINTS``, cell, positions with the ``if_pos`` flags). Keys are taken in
+``K_POINTS``, cell, positions with the ``if_pos`` flags); for a calculation
+that also gives the charge density, the post-processing too (pp.x and the
+keys of its input, without those naming files, ``ppi.py``). Keys are taken in
 lower case and without blanks, in the order written; values keep the type of
 the settings, so ``40`` and ``40.0`` differ: at worst a calculation is run
 again, a result is never reused wrongly.
@@ -164,7 +166,7 @@ def energy_model(settings):
     }
 
 
-def fingerprint_data(pw, model, calc_type=None):
+def fingerprint_data(pw, model, calc_type=None, pp=None):
     """What the fingerprint of a calculation is computed from.
 
     Parameters
@@ -175,6 +177,8 @@ def fingerprint_data(pw, model, calc_type=None):
         Its energy model (``energy_model``).
     calc_type : str, optional
         calc_type of a calculation of the workflows.
+    pp : triboworkflow.engines.qe.ppi.PpInput, optional
+        The pp.x input of a calculation that also gives the charge density.
 
     Returns
     -------
@@ -182,7 +186,8 @@ def fingerprint_data(pw, model, calc_type=None):
         ``engine``, ``program``, ``energy_model``, ``namelists`` (``{namelist:
         [[key, value], ...]}`` with the keys written, except those of class
         ``'attempt'`` and ``'resource'``), ``cards`` (``{card: [line, ...]}``)
-        and, when given, ``calc_type``.
+        and, when given, ``calc_type`` and ``post_processing``
+        (``PpInput.fingerprint_data``).
     """
     data = {
         'engine': ENGINE, 'program': PROGRAM, 'energy_model': model,
@@ -193,9 +198,11 @@ def fingerprint_data(pw, model, calc_type=None):
     }
     if calc_type is not None:
         data['calc_type'] = calc_type
+    if pp is not None:
+        data['post_processing'] = pp.fingerprint_data()
     return data
 
 
-def input_fingerprint(pw, model, calc_type=None):
+def input_fingerprint(pw, model, calc_type=None, pp=None):
     """Fingerprint of a calculation (``fingerprint_data``): ``sha256:...``."""
-    return fingerprint(fingerprint_data(pw, model, calc_type), 'pw.x input')
+    return fingerprint(fingerprint_data(pw, model, calc_type, pp), 'pw.x input')

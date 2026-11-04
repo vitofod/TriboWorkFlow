@@ -442,15 +442,27 @@ def test_restart_with_another_parallelization_needs_the_user(run):
                      'last SCF cycle'),
     ('other model', 'attempt 1 completed, its results cannot be used: output of another energy '
                     'model (ecutwfc: expected 40.0, observed 45.0)'),
+    # A charge density that failed after pw.x: to the user, never relaunched.
+    ('density failed', 'attempt 1 completed, its results cannot be used: charge density failed: '
+                       'pp.x stopped on an error in routine postproc (1): reading inputpp '
+                       'namelist'),
 ])
 def test_completed_with_results_not_usable_needs_the_user(run, case, reason):
     orch = orchestrator(run, ['match', 'pes'])
     orch.run_pass()
-    work(run, 'completed' if case == 'other model' else case, only=['pes/c0'])
+    work(run, 'completed' if case in ('other model', 'density failed') else case, only=['pes/c0'])
     work(run, only=['pes/c1'])
     if case == 'other model':
         store.write_record(run.sdir, dataclasses.replace(run.record('pes/c0'),
                                                          observed={'ecutwfc': 45.0}))
+    if case == 'density failed':
+        record = run.record('pes/c0')
+        failed = dataclasses.replace(record.status, density='failed')
+        attempt = dataclasses.replace(record.attempts[-1], status=failed, density=store.DensityRun(
+            'pp.x', error='pp.x stopped on an error in routine postproc (1): reading inputpp '
+                          'namelist'))
+        store.write_record(run.sdir, dataclasses.replace(record, density=True, status=failed,
+                                                         attempts=(attempt,)))
     report = orch.run_pass()
     (pes,) = [s for s in report.steps if s.step == 'pes']
     assert (pes.status, pes.calcs) == ('failed', {'manual': 1, 'completed': 1})

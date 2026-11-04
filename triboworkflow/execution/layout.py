@@ -11,13 +11,18 @@ A run keeps the systems and the jobs that run their calculations::
     │   └── <step>/<label>/          one directory per calculation
     │       ├── input.pwi            input prepared for the calculation
     │       ├── structure_in.extxyz  its structure, with the constraints of the input
+    │       ├── input.ppi            pp.x input, if the calculation gives the charge density
     │       ├── run.pwi              input of the current attempt
     │       ├── output.pwo           output of the current attempt
     │       ├── structure_out.extxyz final structure, once the output is parsed
+    │       ├── output.ppo           pp.x output of the current attempt
+    │       ├── density.filplot      charge density written by pp.x
     │       ├── claim                taken by the worker running the attempt
     │       ├── record.json
     │       ├── OUT/                 outdir of pw.x
-    │       └── attempts/<n>/        run.pwi, output.pwo and structure_out.extxyz of attempt n
+    │       └── attempts/<n>/        the files of attempt n: run.pwi, output.pwo,
+    │                                structure_out.extxyz, and input.ppi, output.ppo and
+    │                                density.filplot of the charge density
     ├── jobs/<name>/                 one group of jobs
     │   ├── manifest.json            calculations of the group and how to run them
     │   ├── jobscript.sh             jobscript submitted for each job
@@ -31,7 +36,8 @@ A run keeps the systems and the jobs that run their calculations::
 pw.x runs inside the calculation directory, so that the relative ``outdir``
 of every calculation is its own ``OUT/``. The ``prefix`` is made of step and
 label. ``input.pwi`` is never changed after preparation: each attempt runs
-``run.pwi``, a copy with the time limit of the job written in it. A
+``run.pwi``, a copy with the time limit of the job written in it. pp.x runs
+in the same directory on ``input.ppi``, as prepared. A
 calculation whose settings changed is replaced only on request: its whole
 directory moves to ``replaced/`` and is prepared again.
 """
@@ -51,13 +57,17 @@ STRUCTURE_IN_FILE = 'structure_in.extxyz'
 RUN_INPUT_FILE = 'run.pwi'
 OUTPUT_FILE = 'output.pwo'
 STRUCTURE_OUT_FILE = 'structure_out.extxyz'
+PP_INPUT_FILE = 'input.ppi'
+PP_OUTPUT_FILE = 'output.ppo'
+DENSITY_FILE = 'density.filplot'
 CLAIM_FILE = 'claim'
 OUTDIR = 'OUT'
 ATTEMPTS_DIR = 'attempts'
 REPLACEMENT_FILE = 'replacement.json'
 
-__all__ = ['ATTEMPTS_DIR', 'CLAIM_FILE', 'INPUT_FILE', 'JOBS_DIR', 'JOBS_REGISTRY_FILE',
-           'OUTDIR', 'OUTPUT_FILE', 'RECORD_FILE', 'REPLACED_DIR', 'REPLACEMENT_FILE',
+__all__ = ['ATTEMPTS_DIR', 'CLAIM_FILE', 'DENSITY_FILE', 'INPUT_FILE', 'JOBS_DIR',
+           'JOBS_REGISTRY_FILE', 'OUTDIR', 'OUTPUT_FILE', 'PP_INPUT_FILE', 'PP_OUTPUT_FILE',
+           'RECORD_FILE', 'REPLACED_DIR', 'REPLACEMENT_FILE',
            'RUN_INPUT_FILE', 'STRUCTURE_IN_FILE', 'STRUCTURE_OUT_FILE', 'SYSTEMS_DIR',
            'attempt_dir', 'calc_dir',
            'calc_prefix', 'job_dir', 'replaced_dir', 'system_dir']

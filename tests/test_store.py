@@ -319,16 +319,17 @@ def test_record_round_trip(system_dir):
     assert path == system_dir / 'pes_scf' / 'aa' / 'record.json'
     data = read_json(path)
     assert list(data) == ['schema_version', 'calc_id', 'system', 'step', 'label', 'calc_type',
-                          'engine', 'energy_model', 'fingerprint', 'status', 'attempts',
-                          'results', 'observed', 'files']
-    assert data['calc_id'] == 'pes_scf/aa' and data['schema_version'] == 4
+                          'density', 'engine', 'energy_model', 'fingerprint', 'status',
+                          'attempts', 'results', 'observed', 'files']
+    assert data['calc_id'] == 'pes_scf/aa' and data['schema_version'] == 5
+    assert data['density'] is False
     assert data['observed'] == {'ecutwfc': 40.0}
     assert list(data['attempts'][0]) == ['n', 'job_id', 'host', 'started', 'ended',
                                          'max_seconds', 'max_seconds_cap', 'run_command',
                                          'jobscript_digest', 'input', 'output', 'exit_code',
                                          'job_state', 'stop_reason',
                                          'clean_stop', 'parse_error', 'status', 'remedies',
-                                         'restart', 'outdir_removal']
+                                         'restart', 'outdir_removal', 'density']
     assert data['attempts'][0]['input'] == {'path': 'attempts/1/run.pwi', 'digest': DIGEST}
     assert list(data['attempts'][0]['restart']) == list(RESTART_PARTS)
     assert data['attempts'][1] == {
@@ -337,8 +338,9 @@ def test_record_round_trip(system_dir):
         'jobscript_digest': None, 'input': None,
         'output': None, 'exit_code': None, 'job_state': None, 'stop_reason': None,
         'clean_stop': None, 'parse_error': None,
-        'status': {'process': None, 'scf': None, 'geometry': None, 'parsing': None},
-        'remedies': {}, 'restart': None, 'outdir_removal': None}
+        'status': {'process': None, 'scf': None, 'geometry': None, 'parsing': None,
+                   'density': None},
+        'remedies': {}, 'restart': None, 'outdir_removal': None, 'density': None}
     assert store.read_record(system_dir, 'pes_scf/aa') == record
     store.write_record(system_dir, make_record(step='adhesion', label='top_slab'))
     assert [r.calc_id for r in store.iter_records(system_dir)] == ['adhesion/top_slab',
@@ -352,6 +354,74 @@ def test_record_unknown_states_are_null():
     assert record.status == store.Status(None, None, None, None)
     assert record.results is None and not record.is_complete
     assert record.results_digest is None
+
+
+def density_run(n=1, error=None):
+    return store.DensityRun('pp.x', 'mpirun -np 4 pp.x',
+                            store.AttemptFile(f'attempts/{n}/input.ppi'),
+                            store.AttemptFile(f'attempts/{n}/output.ppo', DIGEST),
+                            store.AttemptFile(f'attempts/{n}/density.filplot', DIGEST), 0, error)
+
+
+def test_record_with_charge_density(system_dir):
+    done = store.Status('ended', 'converged', 'n/a', 'ok', 'ok')
+    attempt = full_attempt(1, status=done, density=density_run())
+    record = make_record(status=done, attempts=(attempt,), density=True)
+    path = store.write_record(system_dir, record)
+    data = read_json(path)
+    assert data['density'] is True and data['status']['density'] == 'ok'
+    assert data['attempts'][0]['density'] == {
+        'program': 'pp.x', 'command': 'mpirun -np 4 pp.x',
+        'input': {'path': 'attempts/1/input.ppi', 'digest': None},
+        'output': {'path': 'attempts/1/output.ppo', 'digest': DIGEST},
+        'density': {'path': 'attempts/1/density.filplot', 'digest': DIGEST},
+        'exit_code': 0, 'error': None}
+    assert store.read_record(system_dir, 'pes_scf/aa') == record
+    assert record.is_complete and store.can_reuse(record, FP_A)
+
+
+def test_charge_density_enters_completeness():
+    pw_done = store.Status('ended', 'converged', 'n/a', 'ok')
+    pending = make_record(status=pw_done, density=True)
+    assert pending.status.complete and not pending.is_complete
+    assert store.reuse_problem(pending, FP_A) == 'charge density not written'
+    failed = store.Status('ended', 'converged', 'n/a', 'ok', 'failed')
+    record = make_record(status=failed, density=True, attempts=(
+        full_attempt(1, status=failed, density=density_run(error='pp.x exited with code 1')),))
+    assert store.reuse_problem(record, FP_A) == 'charge density failed: pp.x exited with code 1'
+    assert record.status.summary == 'completed'
+    # A calculation without density is complete without it.
+    assert make_record(status=pw_done).is_complete
+
+
+@pytest.mark.parametrize('change, message', [
+    (dict(status=store.Status('ended', 'converged', 'n/a', 'ok', 'ok')),
+     'status.density given for a calculation that does not give the charge density'),
+    (dict(attempts=(full_attempt(1, density=density_run()),)),
+     r'attempts\[1\].density given'),
+    (dict(density=1), 'density: true or false is required'),
+])
+def test_density_fields_need_a_calculation_that_gives_it(change, message):
+    with pytest.raises(StoreError, match=message):
+        make_record(**change)
+
+
+def test_density_run_and_state_agree():
+    ok = store.Status('ended', 'converged', 'n/a', 'ok', 'ok')
+    failed = dataclasses.replace(ok, density='failed')
+    with pytest.raises(StoreError, match='recorded once its state is known'):
+        full_attempt(1, status=ok)
+    with pytest.raises(StoreError, match='given if and only if the density failed'):
+        full_attempt(1, status=failed, density=density_run())
+    with pytest.raises(StoreError, match='given if and only if the density failed'):
+        full_attempt(1, status=ok, density=density_run(error='no file'))
+    with pytest.raises(StoreError, match="status.density: 'done' is not one of ok, failed"):
+        store.Status(density='done')
+    with pytest.raises(StoreError, match='attempts.density: missing exit_code'):
+        store.DensityRun.from_dict({'program': 'pp.x', 'command': None, 'input': None,
+                                    'output': None, 'density': None, 'error': None})
+    running = full_attempt(1, status=store.Status('running'), density=density_run())
+    assert running.density.program == 'pp.x'
 
 
 def test_parsed_record_without_results_is_an_error():
@@ -452,7 +522,9 @@ INVALID_RECORDS = [
     ('schema version 1', lambda d: d.update(schema_version=1)),
     ('schema version 2', lambda d: d.update(schema_version=2)),
     ('schema version 3', lambda d: d.update(schema_version=3)),
-    ('schema version 5', lambda d: d.update(schema_version=5)),
+    ('schema version 4', lambda d: d.update(schema_version=4)),
+    ('schema version 6', lambda d: d.update(schema_version=6)),
+    ('density null', lambda d: d.update(density=None)),
     ('schema version bool', lambda d: d.update(schema_version=True)),
     ('calc_id', lambda d: d.update(calc_id='pes_scf/ab')),
     ('step with slash', lambda d: d.update(step='pes/scf', calc_id='pes/scf/aa')),

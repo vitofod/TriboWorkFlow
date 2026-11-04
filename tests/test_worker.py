@@ -5,8 +5,10 @@
 
 pw.x never runs: the run command is a small Python program written by the
 tests, which prints a synthetic pw.x output (the one given in ``fake.json``
-of the calculation directory) and exits with the code given there. The
-launch needs bash, so the tests that run the worker are POSIX only.
+of the calculation directory) and exits with the code given there. pp.x is
+another one (``fake_pp.json``: output, exit code, file of the density to
+write). The launch needs bash, so the tests that run the worker are POSIX
+only.
 """
 
 import json
@@ -20,8 +22,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import charge_files
 import pwo_helpers as pwo
 from triboworkflow.core import store
+from triboworkflow.engines.qe.ppi import density_input
 from triboworkflow.core.structures import extxyz_text, read_structure
 from triboworkflow.execution import layout
 from triboworkflow.execution.archive import archive_attempt
@@ -49,6 +53,27 @@ time.sleep(spec.get('sleep', 0))
 sys.stdout.write(spec['output'])
 sys.exit(spec.get('exit', 0))
 '''
+
+FAKE_PP = '''\
+import json, sys
+args = sys.argv[1:]
+assert args[args.index('-in') + 1] == 'input.ppi'
+with open('fake_pp.json') as f:
+    spec = json.load(f)
+if spec.get('filplot') is not None:
+    with open('density.filplot', 'w') as f:
+        f.write(spec['filplot'])
+sys.stdout.write(spec['output'])
+sys.exit(spec.get('exit', 0))
+'''
+PP_START = ['', '     Program POST-PROC v.7.2 starts on  1Jan2026 at 11: 0: 0 ', '']
+PP_DONE = '\n'.join(PP_START + ['     Calling punch_plot, plot_num =   0',
+                                '     Writing data to file  density.filplot', '',
+                                '     POST-PROC    :      0.15s CPU      0.15s WALL', '',
+                                '=' + '-' * 78 + '=', '   JOB DONE.', '=' + '-' * 78 + '=', ''])
+PP_ERROR = '\n'.join(PP_START + [' ' + '%' * 78, '     Error in routine postproc (1):',
+                                 '     reading inputpp namelist', ' ' + '%' * 78, '',
+                                 '     stopping ...', ''])
 
 # Synthetic pw.x outputs, from the lines pw.x prints.
 HEADER = ['', '     Program PWSCF v.7.2 starts on  1Jan2026 at 10: 0: 0 ', '',
@@ -106,9 +131,13 @@ def run(tmp_path):
     jobscript.write_text('#!/bin/bash\n')
     run_dir = tmp_path / 'run'
 
+    fake_pp = tmp_path / 'fake_pp.py'
+    fake_pp.write_text(FAKE_PP)
+
     def build(labels=('aa',), output=SCF_DONE, exit=0, input_text=None, sleep=0, name='pes_scf',
               run_command=None, record=True, n=1, kind='initial', level=1, values=None,
-              initial_values=None, restart=False):
+              initial_values=None, restart=False, pp=None):
+        """``pp``: for a calculation that gives the charge density, the spec of the fake pp.x."""
         calcs = []
         for label in labels:
             calc_id = f'pes_scf/{label}'
@@ -117,16 +146,25 @@ def run(tmp_path):
             (path / layout.INPUT_FILE).write_text(input_text or pwi())
             (path / 'fake.json').write_text(json.dumps({'log': str(log), 'output': output,
                                                         'exit': exit, 'sleep': sleep}))
+            if pp is not None:
+                (path / layout.PP_INPUT_FILE).write_text(
+                    density_input(layout.calc_prefix(calc_id), layout.OUTDIR,
+                                  layout.DENSITY_FILE).text)
+                (path / 'fake_pp.json').write_text(json.dumps(pp))
             if record:
                 store.write_record(layout.system_dir(run_dir, SYSTEM), store.Record(
                     system=SYSTEM, step='pes_scf', label=label, calc_type='slab_from_scratch',
                     engine=store.Engine('qe', 'pw.x'), energy_model={'ecutwfc': 40.0},
-                    fingerprint=FP, files={'input': 'input.pwi', 'output': 'output.pwo'}))
+                    fingerprint=FP, files={'input': 'input.pwi', 'output': 'output.pwo'},
+                    density=pp is not None))
             calcs.append(Launch(SYSTEM, calc_id, n, kind, level, values or {},
                                 initial_values or {}, restart))
         command = run_command or f'{shlex.quote(sys.executable)} {shlex.quote(str(fake))}'
+        pp_command = None if pp is None else \
+            f'{shlex.quote(sys.executable)} {shlex.quote(str(fake_pp))}'
         manifest = Manifest(name=name, scheduler='slurm', run_command=command, walltime=WALLTIME,
-                            max_seconds_margin=MARGIN, calculations=tuple(calcs))
+                            max_seconds_margin=MARGIN, calculations=tuple(calcs),
+                            pp_command=pp_command)
         return write_job(run_dir, manifest, jobscript) / MANIFEST_FILE
 
     build.run_dir, build.log = run_dir, log
@@ -481,6 +519,126 @@ def test_new_attempt_clears_the_results_and_archives_the_final_structure(run):
     record = record_of(run, 'aa')
     assert record.status == store.Status('crashed', None, 'n/a', None)
     assert (record.results, record.observed, record.engine.version) == (None, None, '7.2')
+
+
+# --- charge density after pw.x -----------------------------------------------------------
+
+def density_run(run, pp, output=None, s=None):
+    """A calculation that gives the charge density, with a pw.x output that is parsed."""
+    s = s or pwo.structure()
+    manifest = run(output=output or pwo.pw_output(s, forces=FORCES), pp=pp)
+    with_structure(run, s)
+    return manifest
+
+
+def good_pp(**changes):
+    return {'output': PP_DONE, 'filplot': charge_files.structure_filplot(pwo.structure()),
+            **changes}
+
+
+@posix_only
+def test_charge_density_written_after_pw(run, caplog):
+    manifest = density_run(run, good_pp())
+    caplog.set_level('INFO')
+    assert Worker(manifest, clock=Clock(0.0)).run() == [(SYSTEM, 'pes_scf/aa', 'ran')]
+    path = calc_path(run, 'aa')
+    record = record_of(run, 'aa')
+    attempt = record.attempts[-1]
+    assert record.status == attempt.status == store.Status('ended', 'converged', 'n/a', 'ok', 'ok')
+    pp_command = read_manifest(manifest)[0].pp_command
+    assert attempt.density == store.DensityRun(
+        'pp.x', pp_command,
+        store.AttemptFile('input.ppi', store.file_digest(path / layout.PP_INPUT_FILE)),
+        store.AttemptFile('output.ppo', store.file_digest(path / layout.PP_OUTPUT_FILE)),
+        store.AttemptFile('density.filplot', store.file_digest(path / layout.DENSITY_FILE)),
+        0, None)
+    assert (path / layout.PP_OUTPUT_FILE).read_text() == PP_DONE
+    assert record.is_complete and store.can_reuse(record, FP)
+    assert f'{pp_command} -in input.ppi >> output.ppo' in caplog.text
+    # Archived with the attempt; input.ppi, as prepared, stays.
+    assert archive_attempt(run.run_dir, SYSTEM, 'pes_scf/aa') == 1
+    archived = record_of(run, 'aa').attempts[-1].density
+    assert archived.output.path == 'attempts/1/output.ppo'
+    assert archived.density == store.AttemptFile('attempts/1/density.filplot',
+                                                 attempt.density.density.digest)
+    assert archived.input == attempt.density.input and (path / layout.PP_INPUT_FILE).exists()
+    assert not (path / layout.DENSITY_FILE).exists()
+
+
+@posix_only
+@pytest.mark.parametrize('pp, exit_code, error', [
+    (good_pp(output=PP_ERROR, filplot=None, exit=1), 1,
+     'pp.x stopped on an error in routine postproc (1): reading inputpp namelist'),
+    (good_pp(output='\n'.join(PP_START)), 0, 'pp.x did not close its run (no "JOB DONE.")'),
+    (good_pp(output=''), 0, 'no "Program POST-PROC v." line'),
+    (good_pp(filplot=None), 0, 'density.filplot not written'),
+    (good_pp(filplot=charge_files.structure_filplot(pwo.structure()).rsplit('\n', 2)[0]), 0,
+     'density.filplot not read: '),
+    (good_pp(filplot=charge_files.structure_filplot(pwo.structure(), plot_num=1)), 0,
+     'density.filplot: plot_num = 1, not the charge density'),
+    (good_pp(filplot=charge_files.structure_filplot(pwo.structure(), electrons=1.0,
+                                                    species=[('H', 1.0), ('Fe', 1.0)])), 0,
+     'density.filplot disagrees with structure_out.extxyz: species of atoms [1, 2]'),
+])
+def test_charge_density_that_cannot_be_used(run, caplog, pp, exit_code, error):
+    Worker(density_run(run, pp), clock=Clock(0.0)).run()
+    record = record_of(run, 'aa')
+    attempt = record.attempts[-1]
+    assert record.status == store.Status('ended', 'converged', 'n/a', 'ok', 'failed')
+    assert attempt.density.exit_code == exit_code and attempt.density.error.startswith(error)
+    assert not record.is_complete
+    assert store.reuse_problem(record, FP) == f'charge density failed: {attempt.density.error}'
+    assert 'the calculation needs the user' in caplog.text
+
+
+@posix_only
+def test_exit_code_of_pp_is_recorded_not_used(run):
+    Worker(density_run(run, good_pp(exit=139)), clock=Clock(0.0)).run()
+    attempt = record_of(run, 'aa').attempts[-1]
+    assert attempt.status.density == 'ok' and attempt.density.exit_code == 139
+
+
+@posix_only
+def test_no_pp_after_pw_not_parsed(run):
+    s = pwo.structure()
+    text = pwo.pw_output(s).replace('     convergence has been achieved in   7 iterations',
+                                    '     convergence NOT achieved after 100 iterations: stopping')
+    Worker(density_run(run, good_pp(), output=text), clock=Clock(0.0)).run()
+    record = record_of(run, 'aa')
+    assert record.status == store.Status('ended', 'not_converged', 'n/a', None, None)
+    assert record.attempts[-1].density is None
+    assert not (calc_path(run, 'aa') / layout.PP_OUTPUT_FILE).exists()
+    # A completed output that cannot be parsed: no pp.x either.
+    manifest = run(labels=('ab',), output=pwo.pw_output(s, forces=FORCES), pp=good_pp(),
+                   name='second')
+    Worker(manifest, clock=Clock(0.0)).run()  # no structure_in.extxyz
+    record = record_of(run, 'ab')
+    assert record.status.parsing == 'failed' and record.status.density is None
+    assert record.attempts[-1].density is None
+
+
+@posix_only
+def test_density_calculation_not_taken_without_pp_command_or_pp_input(run, caplog):
+    manifest = density_run(run, good_pp())
+    data = json.loads(Path(manifest).read_text())
+    Path(manifest).write_text(json.dumps({**data, 'pp_command': None}))
+    assert Worker(manifest, clock=Clock(0.0)).run() == [(SYSTEM, 'pes_scf/aa', 'error')]
+    assert 'the manifest has no pp_command to run pp.x' in caplog.text
+    path = calc_path(run, 'aa')
+    assert not (path / layout.CLAIM_FILE).exists() and record_of(run, 'aa').attempts == ()
+    Path(manifest).write_text(json.dumps(data))
+    (path / layout.PP_INPUT_FILE).unlink()
+    assert Worker(manifest, clock=Clock(0.0)).run() == [(SYSTEM, 'pes_scf/aa', 'error')]
+    assert 'input.ppi missing: the calculation gives the charge density' in caplog.text
+
+
+@posix_only
+@pytest.mark.parametrize('name', ['output.ppo', 'density.filplot'])
+def test_files_of_pp_not_archived_stop_a_new_attempt(run, caplog, name):
+    manifest = density_run(run, good_pp())
+    (calc_path(run, 'aa') / name).write_text('left by an attempt not archived')
+    assert Worker(manifest, clock=Clock(0.0)).run() == [(SYSTEM, 'pes_scf/aa', 'error')]
+    assert f'{name} exists without a claim' in caplog.text
 
 
 def add_attempts(run, label, count):

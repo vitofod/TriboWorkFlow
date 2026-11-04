@@ -103,7 +103,10 @@ def test_manifest_round_trip(tmp_path):
                     {'mixing_beta': 0.4}, True)
     digest = 'sha256:' + 'c' * 64
     data = manifest(calculations=LAUNCHES + (remedy,), jobscript_digest=digest).to_dict()
-    assert data['schema_version'] == 3 and data['jobscript_digest'] == digest
+    assert data['schema_version'] == 4 and data['jobscript_digest'] == digest
+    assert data['pp_command'] is None
+    assert list(data) == ['schema_version', 'name', 'scheduler', 'run_command', 'pp_command',
+                          'jobscript_digest', 'walltime', 'max_seconds_margin', 'calculations']
     assert data['calculations'][0] == {'system': 'Cu111_Al111', 'calc_id': 'pes_scf/aa', 'n': 1,
                                        'kind': 'initial', 'level': 1, 'values': {},
                                        'initial_values': {}, 'restart': False}
@@ -113,6 +116,8 @@ def test_manifest_round_trip(tmp_path):
                                        'initial_values': {'mixing_beta': 0.4}, 'restart': True}
     assert Manifest.from_dict(json.loads(json.dumps(data))) == \
         manifest(calculations=LAUNCHES + (remedy,), jobscript_digest=digest)
+    with_pp = manifest(pp_command='srun pp.x')
+    assert Manifest.from_dict(json.loads(json.dumps(with_pp.to_dict()))) == with_pp
 
 
 def test_manifest_from_a_generator():
@@ -123,6 +128,39 @@ def test_manifest_from_the_settings():
     settings = example_settings(max_seconds_margin=900)
     built = Manifest.from_execution('pes_scf', LAUNCHES, settings.execution)
     assert built == manifest(max_seconds_margin=900)
+    settings = example_settings(pp_command='mpirun -np 32 pp.x')
+    built = Manifest.from_execution('pes_scf', LAUNCHES, settings.execution)
+    assert built == manifest(pp_command='mpirun -np 32 pp.x')
+
+
+def give_density(run_dir, system, calc_id, pp_input=True):
+    """Record of a calculation that gives the charge density, and its input.ppi."""
+    step, label = calc_id.split('/')
+    store.write_record(layout.system_dir(run_dir, system), store.Record(
+        system=system, step=step, label=label, calc_type='slab_from_scratch',
+        engine=store.Engine('qe', 'pw.x'), energy_model={'ecutwfc': 40.0},
+        fingerprint='sha256:' + 'a' * 64, density=True))
+    if pp_input:
+        path = layout.calc_dir(run_dir, system, calc_id)
+        (path / layout.PP_INPUT_FILE).write_text('&INPUTPP\n/\n')
+
+
+def test_group_with_charge_density_needs_pp_command(run_dir, jobscript):
+    give_density(run_dir, *CALCS[1])
+    with pytest.raises(JobError, match='calculations that give the charge density, and no '
+                                       r'pp_command in \[execution\] to run pp.x: '
+                                       'Cu111_Al111/pes_scf/ab$'):
+        write_job(run_dir, manifest(), jobscript)
+    assert not layout.job_dir(run_dir, 'pes_scf').exists()
+    path = write_job(run_dir, manifest(pp_command='srun pp.x'), jobscript)
+    assert read_manifest(path / MANIFEST_FILE)[0].pp_command == 'srun pp.x'
+
+
+def test_group_with_charge_density_needs_pp_input(run_dir, jobscript):
+    give_density(run_dir, *CALCS[2], pp_input=False)
+    with pytest.raises(JobError, match='calculations that give the charge density without '
+                                       'input.ppi in .*: Cu111_Ni111/pes_scf/aa$'):
+        write_job(run_dir, manifest(pp_command='srun pp.x'), jobscript)
 
 
 @pytest.mark.parametrize('changes, message', [
@@ -138,6 +176,8 @@ def test_manifest_from_the_settings():
     ({'calculations': LAUNCHES + (LAUNCHES[0],)}, 'Cu111_Al111/pes_scf/aa is listed twice'),
     ({'calculations': LAUNCHES + (Launch('Cu111_Al111', 'pes_scf/aa', 2, 'unchanged', 1),)},
      'Cu111_Al111/pes_scf/aa is listed twice'),
+    ({'pp_command': ' '}, 'pp_command: a non-empty string or null is required'),
+    ({'pp_command': 1}, 'pp_command: a non-empty string or null is required'),
 ])
 def test_manifest_errors(changes, message):
     with pytest.raises(JobError, match=message.replace('(', r'\(').replace(')', r'\)')):
@@ -198,7 +238,8 @@ def test_launch_errors(fields, message):
 
 
 @pytest.mark.parametrize('edit, message', [
-    ({'schema_version': 2}, 'schema_version: 2; this version reads 3'),
+    ({'schema_version': 3}, 'schema_version: 3; this version reads 4'),
+    ({'pp_command': ''}, 'pp_command: a non-empty string or null is required'),
     ({'extra': 1}, "unknown 'extra'"),
     ({'calculations': {}}, 'calculations: a JSON array is required'),
     ({'calculations': [{'system': 'a'}]}, 'calculations: missing calc_id, n, kind, level, values, '

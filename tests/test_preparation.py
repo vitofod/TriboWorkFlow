@@ -11,6 +11,7 @@ expected checksum given) and a small carbon slab. No scheduler is called and
 pw.x never runs: jobs and workers are simulated as in ``run_helpers``.
 """
 
+import dataclasses
 import json
 import logging
 import os
@@ -28,7 +29,7 @@ from run_helpers import SCF_DONE, SYSTEM, Run
 from triboworkflow.cli.main import main
 from triboworkflow.core import store
 from triboworkflow.core import structures as st
-from triboworkflow.core.settings import load_settings
+from triboworkflow.core.settings import SettingsError, load_settings
 from triboworkflow.core.settings.schema import ExecutionParams, QEParams
 from triboworkflow.engines.qe.prepare import input_differences, single_input
 from triboworkflow.execution import layout
@@ -286,6 +287,125 @@ def test_calculations_given_twice_or_of_another_system(run, settings):
     other = workflow_calculation('Ag111_Au111', AA, 'slab_from_scratch', SLAB, KPOINTS, settings)
     with pytest.raises(PreparationError, match='its record is of Ag111_Au111'):
         prepare_calculations(run.dir, SYSTEM, [other])
+
+
+# --- calculations that also give the charge density -------------------------------------------
+
+PP_INPUT = ("&INPUTPP\n   prefix           = 'pes_scf_aa'\n   outdir           = 'OUT'\n"
+            "   filplot          = 'density.filplot'\n   plot_num         = 0\n"
+            "   spin_component   = 0\n/\n")
+
+
+def density_calc(settings, label='aa', calc_type='slab_from_scratch'):
+    return workflow_calculation(SYSTEM, f'pes_scf/{label}', calc_type, SLAB, KPOINTS, settings,
+                                density=True)
+
+
+@pytest.fixture
+def density_settings(settings):
+    settings.execution = dataclasses.replace(EXECUTION, pp_command='mpirun -np 4 pp.x')
+    return settings
+
+
+def test_calculation_with_charge_density(run, density_settings):
+    plain = calcs(density_settings, ('aa',))[0]
+    calc = density_calc(density_settings)
+    assert calc.pp_input_text == PP_INPUT and plain.pp_input_text is None
+    assert calc.input_text == plain.input_text  # pw.x input and energy model unchanged
+    assert calc.record.energy_model == plain.record.energy_model
+    assert calc.record.density and not plain.record.density
+    assert calc.record.fingerprint != plain.record.fingerprint
+    prepare_calculations(run.dir, SYSTEM, [calc])
+    path = run.path(AA)
+    assert (path / layout.PP_INPUT_FILE).read_text(encoding='utf-8') == PP_INPUT
+    record = run.record(AA)
+    assert record.density and record.fingerprint == calc.record.fingerprint
+    assert record.files == {'input': 'input.pwi', 'structure': 'structure_in.extxyz',
+                            'pp_input': 'input.ppi'}
+    assert check_calculations(run.dir, SYSTEM, [density_calc(density_settings)])[0].kind == \
+        'current'
+    # The same calculation without the density is another one.
+    check = check_calculations(run.dir, SYSTEM, [plain])[0]
+    assert check.kind == 'changed' and check.reasons == ('fingerprint differs from the settings',)
+
+
+@pytest.mark.parametrize('edit, reason', [
+    (lambda p: (p / 'input.ppi').unlink(), 'input.ppi missing'),
+    (lambda p: (p / 'input.ppi').write_text(PP_INPUT.replace('0\n/', '1\n/')),
+     'input.ppi differs from the one the settings give (changed by hand?)'),
+])
+def test_pp_input_changed_on_disk(run, density_settings, edit, reason):
+    prepare_calculations(run.dir, SYSTEM, [density_calc(density_settings)])
+    edit(run.path(AA))
+    check = check_calculations(run.dir, SYSTEM, [density_calc(density_settings)])[0]
+    assert check.kind == 'changed' and check.reasons == (reason,)
+
+
+def test_pp_input_of_a_calculation_without_density(run, settings):
+    prepare_calculations(run.dir, SYSTEM, calcs(settings, ('aa',)))
+    (run.path(AA) / layout.PP_INPUT_FILE).write_text(PP_INPUT)
+    check = check_calculations(run.dir, SYSTEM, calcs(settings, ('aa',)))[0]
+    assert check.reasons == ('input.ppi present, but the calculation gives no charge density',)
+
+
+def test_interrupted_preparation_with_pp_input(run, density_settings):
+    path = run.path(AA)
+    path.mkdir(parents=True)
+    (path / layout.PP_INPUT_FILE).write_text('half written')
+    assert check_calculations(run.dir, SYSTEM, [density_calc(density_settings)])[0].kind == \
+        'interrupted'
+
+
+@pytest.mark.parametrize('value', ['nowf', 'none', 'nowf  '])
+def test_disk_io_without_charge_density_refused_only_with_the_density(density_settings, value):
+    density_settings.namelists.CONTROL['disk_io'] = value
+    with pytest.raises(SettingsError) as error:
+        density_calc(density_settings)
+    assert error.value.path == 'namelists.CONTROL'
+    assert f"pes_scf/aa gives the charge density: disk_io = {value!r}: pw.x of QE 7.2 " \
+           "writes no charge density" in error.value.message
+    # A calculation without the density is written as given.
+    assert f"disk_io          = '{value}'" in calcs(density_settings, ('aa',))[0].input_text
+
+
+@pytest.mark.parametrize('version, value, refused', [
+    ('7.3', 'nowf', False), ('7.3', 'minimal', True), ('7.3.1', 'none', True),
+    ('7.2', 'minimal', False), (None, 'nowf', True), (None, 'minimal', True)])
+def test_disk_io_checked_for_the_expected_version(density_settings, version, value, refused):
+    density_settings.qe = dataclasses.replace(density_settings.qe, version=version)
+    density_settings.namelists.CONTROL['disk_io'] = value
+    if refused:
+        with pytest.raises(SettingsError, match=f'disk_io = {value!r}'):
+            density_calc(density_settings)
+    else:
+        assert f"disk_io          = '{value}'" in density_calc(density_settings).input_text
+
+
+@pytest.mark.parametrize('key, value', [('disk_io', 'NOWF'), ('disk_io', ' nowf'),
+                                        ('disk_io', 'minimal'), ('DISK_IO', 'low')])
+def test_disk_io_that_writes_the_density_passes_as_written(density_settings, key, value):
+    del density_settings.namelists.CONTROL['disk_io']
+    density_settings.namelists.CONTROL[key] = value
+    assert f"{key:16} = '{value}'" in density_calc(density_settings).input_text
+
+
+def test_disk_io_spelled_in_upper_case_is_checked(density_settings):
+    del density_settings.namelists.CONTROL['disk_io']
+    density_settings.namelists.CONTROL['DISK_IO'] = 'none'
+    with pytest.raises(SettingsError, match="DISK_IO = 'none'"):
+        density_calc(density_settings)
+
+
+def test_pp_command_required_for_the_charge_density(settings):
+    assert settings.execution is None
+    with pytest.raises(SettingsError) as error:
+        density_calc(settings)
+    assert error.value.path == 'execution.pp_command'
+    assert 'required: pes_scf/aa gives the charge density' in error.value.message
+    settings.execution = EXECUTION
+    with pytest.raises(SettingsError, match='required'):
+        density_calc(settings)
+    assert calcs(settings, ('aa',))[0].pp_input_text is None
 
 
 # --- replacement --------------------------------------------------------------------------

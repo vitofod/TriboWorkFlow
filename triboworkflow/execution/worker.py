@@ -13,7 +13,8 @@ Each one names the attempt ``n`` to run (``jobs.Launch``): the worker runs it
 only while the record has ``n - 1`` attempts, and skips it when attempt ``n``
 was already made, by another worker of the group or by an earlier group, so
 that a late job of a replaced group runs nothing. Taking a calculation and
-running it are seven steps, each completed before the next begins:
+running it are seven steps, and an eighth for a calculation that also gives
+the charge density, each completed before the next begins:
 
 1. the claim file ``claim`` is created with ``O_CREAT | O_EXCL``: exactly one
    worker succeeds, the others skip the calculation; the record is then read
@@ -61,13 +62,30 @@ running it are seven steps, each completed before the next begins:
    (``parsing.py``): the record gets ``parsing``, the results and
    ``observed``, and ``structure_out.extxyz`` is written; an output that
    cannot be parsed leaves the reason in the attempt. A version of pw.x
-   outside 7.1.x-7.3.x is read with a warning in the log.
+   outside 7.1.x-7.3.x is read with a warning in the log;
+8. for a calculation that gives the charge density (``Record.density``),
+   and only when its output was parsed (pw.x over, SCF and geometry
+   converged, results read): the attempt gets the post-processing
+   (``DensityRun``: pp.x, ``pp_command`` of the manifest, ``input.ppi``),
+   ``output.ppo`` is created with ``O_EXCL``, ``<pp_command> -in input.ppi
+   >> output.ppo`` runs in the calculation directory, with bash, and the
+   attempt and the record get the exit code, the digests of ``output.ppo``
+   and ``density.filplot`` and the state ``density``: ``'ok'`` when pp.x
+   closed its run without errors and the file is complete and agrees with
+   the final structure (``parsing.density_problem``), ``'failed'`` with the
+   reason otherwise. A failure is never run again automatically: the
+   calculation goes to the user. pp.x runs in the time kept free at the end
+   of the walltime (``max_seconds_margin``), with no limit of its own; then
+   the worker takes no more calculations if no time is left.
 
-The claim, ``run.pwi`` and ``output.pwo`` stay in place: they are moved to
-``attempts/<n>/`` and the claim removed only by the archiving of the attempt
-(``archive.py``), before a new attempt. A worker killed with its job (e.g. at
-the walltime) leaves the attempt with the process ``running``: what happened
-is then known from the scheduler, not from the worker.
+The claim, ``run.pwi`` and ``output.pwo`` (and ``output.ppo`` and
+``density.filplot``) stay in place: they are moved to ``attempts/<n>/`` and
+the claim removed only by the archiving of the attempt (``archive.py``),
+before a new attempt. A worker killed with its job (e.g. at the walltime)
+leaves the attempt with the process ``running``, or, while pp.x runs, with
+the post-processing begun and its state unknown: what happened is then known
+from the scheduler and the files, not from the worker
+(``reconcile.py``).
 
 Time limit: ``max_seconds`` of each attempt is the walltime minus the time
 since the worker started minus ``max_seconds_margin``, capped by the
@@ -108,16 +126,17 @@ from pathlib import PurePosixPath
 from ase.io.espresso import read_fortran_namelist
 
 from triboworkflow.core.settings.schema import RELAUNCH_KEYS
-from triboworkflow.core.store import (Attempt, AttemptFile, Status, file_digest, read_record,
-                                      write_record)
+from triboworkflow.core.store import (Attempt, AttemptFile, DensityRun, Status, file_digest,
+                                      read_record, write_record)
+from triboworkflow.engines.qe.ppi import PROGRAM as PP_PROGRAM
 from triboworkflow.engines.qe.results import Parsed
 from triboworkflow.engines.qe.status import (CALCULATIONS, PwOutputError, read_pw_status,
                                              record_status, version_warning)
 
 from .jobs import read_manifest
-from .layout import (CLAIM_FILE, INPUT_FILE, OUTPUT_FILE, RUN_INPUT_FILE, calc_dir,
-                     system_dir)
-from .parsing import parse_calculation, with_parsed
+from .layout import (CLAIM_FILE, DENSITY_FILE, INPUT_FILE, OUTPUT_FILE, PP_INPUT_FILE,
+                     PP_OUTPUT_FILE, RUN_INPUT_FILE, calc_dir, system_dir)
+from .parsing import density_problem, parse_calculation, with_parsed
 from .restart import previous_parallelization, restart_outcome, restart_warnings
 
 logger = logging.getLogger(__name__)
@@ -487,6 +506,8 @@ class Worker:
             if record is not None:
                 run_text, calculation, max_seconds, cap, scratch = self._prepare(launch, path,
                                                                                  left)
+                if record.density:
+                    self._check_density_input(path)
         except Exception as error:  # nothing was done: the calculation is left free
             os.close(fd)
             os.unlink(claim)
@@ -557,7 +578,61 @@ class Worker:
         # 7. End of the attempt.
         self._finish(system, calc_id, path, n, calculation, exit_code)
         logger.info('%s/%s: attempt %d ended with exit code %d', system, calc_id, n, exit_code)
+        # 8. Charge density, after pw.x.
+        self._density(system, calc_id, path, n)
         return 'ran'
+
+    def _check_density_input(self, path):
+        """Check that pp.x can run for a calculation that gives the charge density."""
+        if self.manifest.pp_command is None:
+            raise WorkerError('the calculation gives the charge density and the manifest has no '
+                              'pp_command to run pp.x')
+        if not (path / PP_INPUT_FILE).is_file():
+            raise WorkerError(f'{path / PP_INPUT_FILE} missing: the calculation gives the charge '
+                              'density')
+
+    def _density(self, system, calc_id, path, n):
+        """Run pp.x after attempt ``n`` of a calculation that gives the charge density.
+
+        Only when the record of the calculation asks for the density and the
+        output of attempt ``n`` was parsed. The post-processing is recorded
+        before pp.x starts, its outcome after it ends.
+        """
+        sdir = system_dir(self.run_dir, system)
+        record = read_record(sdir, calc_id)
+        last = record.attempts[-1]
+        if not record.density or last.n != n or record.status.parsing != 'ok':
+            return
+        command = self.manifest.pp_command
+        begun = DensityRun(PP_PROGRAM, command,
+                           AttemptFile(PP_INPUT_FILE, file_digest(path / PP_INPUT_FILE)),
+                           AttemptFile(PP_OUTPUT_FILE))
+        attempt = dataclasses.replace(last, density=begun)
+        write_record(sdir, dataclasses.replace(record, attempts=record.attempts[:-1] + (attempt,)))
+        try:
+            os.close(os.open(path / PP_OUTPUT_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666))
+        except FileExistsError:
+            # Not of this attempt: neither file is recorded.
+            done = dataclasses.replace(begun, output=None, error=(
+                f'{PP_OUTPUT_FILE} exists: an output of pp.x not archived; pp.x did not run'))
+        else:
+            line = f'{command} -in {PP_INPUT_FILE} >> {PP_OUTPUT_FILE}'
+            logger.info('%s/%s: charge density of attempt %d: %s', system, calc_id, n, line)
+            exit_code = subprocess.run(line, shell=True, cwd=path,
+                                       executable='/bin/bash').returncode
+            done = dataclasses.replace(begun, exit_code=exit_code, error=density_problem(path),
+                                       **density_files(path))
+        error, exit_code = done.error, done.exit_code
+        status = dataclasses.replace(attempt.status, density='ok' if error is None else 'failed')
+        attempt = dataclasses.replace(attempt, density=done, status=status)
+        write_record(sdir, dataclasses.replace(record, status=status,
+                                               attempts=record.attempts[:-1] + (attempt,)))
+        if error is None:
+            logger.info('%s/%s: charge density of attempt %d written (pp.x exit code %s)', system,
+                        calc_id, n, exit_code)
+        else:
+            logger.error('%s/%s: charge density of attempt %d not usable (pp.x exit code %s): %s; '
+                         'the calculation needs the user', system, calc_id, n, exit_code, error)
 
     def _next_attempt(self, launch):
         """Record of the calculation if attempt ``n`` is the next one, None if it was made.
@@ -595,7 +670,7 @@ class Worker:
             raise WorkerError(f'attempt {launch.n} runs at level {launch.level} with '
                               f'{", ".join(other)}: only {", ".join(RELAUNCH_KEYS)} are written '
                               'in the input')
-        for name in (RUN_INPUT_FILE, OUTPUT_FILE):
+        for name in (RUN_INPUT_FILE, OUTPUT_FILE, PP_OUTPUT_FILE, DENSITY_FILE):
             if (path / name).exists():
                 raise WorkerError(f'{path / name} exists without a claim: a previous attempt '
                                   'was not archived')
@@ -678,6 +753,12 @@ class Worker:
             output=AttemptFile(OUTPUT_FILE, file_digest(path / OUTPUT_FILE)),
             stop_reason=stop_reason, clean_stop=clean_stop, status=status, restart=restart)
         write_record(sdir, with_parsed(record, done, parsed, version))
+
+
+def density_files(path):
+    """``output`` and ``density`` of a ``DensityRun``: the files written, with their digests."""
+    return {role: AttemptFile(name, file_digest(path / name)) if (path / name).is_file() else None
+            for role, name in (('output', PP_OUTPUT_FILE), ('density', DENSITY_FILE))}
 
 
 def main(argv=None):

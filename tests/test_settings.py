@@ -269,6 +269,12 @@ def test_job_report_wait_default():
     assert settings.execution.job_report_wait == 3600
 
 
+def test_pp_command_is_optional():
+    assert settings_from_dict(WORKFLOW).execution.pp_command is None
+    settings = settings_from_dict(edited(WORKFLOW, {'execution.pp_command': 'srun pp.x'}))
+    assert settings.execution.pp_command == 'srun pp.x'
+
+
 def test_engine_per_step():
     settings = settings_from_dict(edited(WORKFLOW, {'interface.engines': {'ppes': 'qe'}}))
     assert settings.interface.engine_for('ppes') == 'qe'
@@ -439,6 +445,10 @@ ERRORS = [
      'must be < walltime (86400), got 86400'),
     ('margin-float', W, {'execution.max_seconds_margin': 600.0}, 'execution.max_seconds_margin',
      'expected int, got 600.0'),
+    ('pp-command-empty', W, {'execution.pp_command': '  '}, 'execution.pp_command',
+     'must not be empty'),
+    ('pp-command-type', W, {'execution.pp_command': 1}, 'execution.pp_command',
+     'expected str, got 1'),
     # [interface]
     ('one-slab', W, {'interface.slabs': WORKFLOW['interface']['slabs'][:1]}, 'interface.slabs',
      'give two slabs, bottom then top; got 1'),

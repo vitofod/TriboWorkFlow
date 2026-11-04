@@ -79,6 +79,16 @@ is over and converged, its results are read as the worker does
 not have (the worker stopped between the claim and the record) gets the
 attempt, with the launch of its group, once the run of its job is over.
 
+A calculation that gives the charge density is still ``running`` after pw.x
+while pp.x runs: its last attempt was parsed and the state ``density`` is
+not known. Once the run of the job that wrote the claim is over, the state
+is read from the files as the worker reads it (``parsing.density_problem``),
+with the exit code null; an attempt whose worker stopped before pp.x ran, or
+whose pw.x run is fixed here, gets ``density`` ``'failed'`` with the reason.
+A charge density that failed is never run again automatically: the attempt
+is ``completed`` by pw.x, and the orchestrator gives the calculation to the
+user, since its results cannot be used (``reuse_problem``).
+
 Outcome of an ended attempt (``attempt_outcome``):
 
 - ``completed``: ``Status.summary`` is ``'completed'``;
@@ -107,8 +117,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from triboworkflow.core.guard import hpc_only
-from triboworkflow.core.store import (Attempt, AttemptFile, Status, file_digest, read_record,
-                                      write_record)
+from triboworkflow.core.store import (Attempt, AttemptFile, DensityRun, Status, file_digest,
+                                      read_record, write_record)
+from triboworkflow.engines.qe.ppi import PROGRAM as PP_PROGRAM
 from triboworkflow.engines.qe.results import Parsed
 from triboworkflow.engines.qe.status import (PwOutputError, read_pw_status, record_status,
                                              version_warning)
@@ -118,11 +129,11 @@ from .jobs import MANIFEST_FILE, is_withdrawn, read_manifest
 from .layout import (CLAIM_FILE, INPUT_FILE, JOBS_DIR, OUTPUT_FILE, RUN_INPUT_FILE, calc_dir,
                      job_dir, system_dir)
 from .manager import HOLD_MESSAGES
-from .parsing import parse_calculation, with_parsed
+from .parsing import density_problem, parse_calculation, with_parsed
 from .replacement import retired_launches
 from .restart import previous_parallelization, restart_outcome, restart_warnings
 from .scheduler import REVERSIBLE_STATES, JobSchedulerError
-from .worker import WorkerError, read_input
+from .worker import WorkerError, density_files, read_input
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +263,25 @@ def attempt_outcome(attempt, scheduler):
     if scheduler.state_name(attempt.job_state) in RELAUNCH_STATES.get(scheduler.scheduler_name, ()):
         return 'unchanged', f'job {attempt.job_state}'
     return 'manual', f'job {attempt.job_state}'
+
+
+def density_pending(record):
+    """Whether the charge density of the last attempt of a record is still to be known.
+
+    True for a calculation that gives it, whose last attempt was parsed
+    (pw.x over and converged, results read) and has no ``density`` state.
+    """
+    last = record.attempts[-1] if record.attempts else None
+    return (record.density and last is not None and last.status.parsing == 'ok'
+            and last.status.density is None)
+
+
+def with_density(record, run):
+    """Record with the post-processing ``run`` of its last attempt and its state."""
+    last = record.attempts[-1]
+    status = dataclasses.replace(last.status, density='ok' if run.error is None else 'failed')
+    done = dataclasses.replace(last, density=run, status=status)
+    return dataclasses.replace(record, status=status, attempts=record.attempts[:-1] + (done,))
 
 
 def read_groups(run_dir):
@@ -444,6 +474,8 @@ class Reconciler:
             return state('uncertain', f'empty claim released in part: attempt {n} is recorded, '
                                       'not archived yet; release the claim again')
         if last.status.process != 'running':
+            if density_pending(record):
+                return self._density_end(system, path, record, claim, state)
             return state(*self._outcome(path, last))
         if last.job_id is None:
             return state('uncertain', f'attempt {n} runs without a job id: a worker started by '
@@ -474,7 +506,34 @@ class Reconciler:
                                    clean_stop=clean, input=files[RUN_INPUT_FILE],
                                    output=files[OUTPUT_FILE], restart=restart)
         fixed = with_parsed(record, done, parsed, version)
+        if density_pending(fixed):  # pp.x runs only after the worker records the end of pw.x
+            fixed = with_density(fixed, DensityRun(PP_PROGRAM, error=(
+                f'pp.x did not run: the worker stopped before recording the end of pw.x (job '
+                f'{detail})')))
         write_record(system_dir(self.run_dir, system), fixed)
+        return dataclasses.replace(state(*self._outcome(path, fixed.attempts[-1])), fixed=True)
+
+    def _density_end(self, system, path, record, claim, state):
+        """A parsed attempt whose charge density is not known: pp.x runs, or its worker stopped."""
+        last = record.attempts[-1]
+        n = last.n
+        if last.job_id is None:
+            return state('uncertain', f'charge density of attempt {n} not known, and the attempt '
+                                      'has no job id')
+        verdict, detail = self.run_over(last.job_id, claim)
+        if verdict != 'over':
+            return state(verdict, f'charge density of attempt {n} being written: {detail}')
+        if last.density is None:
+            run = DensityRun(PP_PROGRAM, error=f'pp.x did not run: the worker stopped after pw.x '
+                                               f'(job {detail})')
+        else:
+            run = dataclasses.replace(last.density, error=density_problem(path),
+                                      **density_files(path))
+        fixed = with_density(record, run)
+        write_record(system_dir(self.run_dir, system), fixed)
+        if run.error is not None:
+            logger.warning('%s/%s: charge density of attempt %d not usable: %s', system,
+                           record.calc_id, n, run.error)
         return dataclasses.replace(state(*self._outcome(path, fixed.attempts[-1])), fixed=True)
 
     def _claim_without_attempt(self, system, calc_id, path, record, claim, state):

@@ -17,13 +17,17 @@ machine with a fake engine.
 │   └── <step>/<label>/          one directory per calculation
 │       ├── input.pwi            input prepared for the calculation, never changed
 │       ├── structure_in.extxyz  its structure, with the constraints of the input
+│       ├── input.ppi            pp.x input, if the calculation gives the charge density
 │       ├── run.pwi              input of the current attempt
 │       ├── output.pwo           output of the current attempt
 │       ├── structure_out.extxyz final structure, once the output is parsed
+│       ├── output.ppo           pp.x output of the current attempt
+│       ├── density.filplot      charge density written by pp.x
 │       ├── claim                taken by the worker running the attempt
 │       ├── record.json
 │       ├── OUT/                 outdir of pw.x
-│       └── attempts/<n>/        run.pwi, output.pwo and structure_out.extxyz of attempt n
+│       └── attempts/<n>/        the files of attempt n: run.pwi, output.pwo,
+│                                structure_out.extxyz, output.ppo, density.filplot
 ├── jobs/<name>/                 one group of jobs
 │   ├── manifest.json
 │   ├── jobscript.sh
@@ -50,15 +54,18 @@ The calculations of a group are spread over several jobs, submitted from one
 jobscript (`execution/jobs.py`):
 
 - `manifest.json`: the calculations, in the order the workers take them, and
-  how to run them: scheduler, `run_command`, `walltime`, `max_seconds_margin`
-  (from `[execution]`, see `configuration.md`) and the digest of the
-  jobscript of the user (`jobscript_digest`). Each calculation names the
+  how to run them: scheduler, `run_command`, `pp_command` (null when not
+  given), `walltime`, `max_seconds_margin` (from `[execution]`, see
+  `configuration.md`) and the digest of the jobscript of the user
+  (`jobscript_digest`). A group with a calculation that gives the charge
+  density is not written without `pp_command`, nor if that calculation has
+  no `input.ppi`. Each calculation names the
   attempt the group runs (`Launch`): its number `n`, its kind (`initial`,
   `unchanged`, `remedy`, `manual`), the level of the remedies and, above
   level 1, the values of the level and the effective values at level 1, and
   whether it continues the previous attempt from `OUT/` (`restart`). A new
   attempt of a calculation always goes in a new group. `schema_version` is
-  3; this version reads no other.
+  4; this version reads no other.
 - `jobscript.sh`: the jobscript of `[execution]`, copied byte for byte, with
   one line added at the end:
 
@@ -223,22 +230,42 @@ other worker has taken it:
    reason in the attempt (`parse_error`) and in the log. A version of pw.x
    outside 7.1.x–7.3.x gives a warning in the log. For an attempt that
    continued the previous one, the record gets what pw.x read from its files
-   (`restart`, see [Restart](#restart)).
+   (`restart`, see [Restart](#restart));
+8. for a calculation that gives the charge density, once its output was
+   parsed: adds the post-processing to the attempt (`density`: pp.x,
+   `pp_command`, `input.ppi` and its digest), creates `output.ppo` with
+   `O_EXCL`, runs `<pp_command> -in input.ppi >> output.ppo` with bash in the
+   calculation directory, and records the exit code, the digests of
+   `output.ppo` and `density.filplot` and the state `density`: `ok` when pp.x
+   closed its run without errors and `density.filplot` is complete, is the
+   charge density and agrees with `structure_out.extxyz`
+   (`parsing.density_problem`, [qe_charge.md](qe_charge.md)), `failed` with
+   the reason otherwise. The exit code is recorded, the state does not come
+   from it. pp.x does not run after an attempt that was not parsed.
 
 If something is wrong before step 2 (no record, a calculation other than
 `scf` or `relax`, files of an earlier attempt still in place, a value of the
 level whose line is not alone or whose namelist is missing, an `input.pwi`
 that asks for a restart itself, a `wfcdir` outside the calculation
 directory, an `outdir` missing or outside it before an attempt from
-scratch), the worker removes its claim, logs the error and goes on, with
-nothing removed. A worker killed with its job
-leaves the attempt with the process `running`; what happened is then known
-from the scheduler.
+scratch, for a calculation that gives the charge density no `pp_command` in
+the manifest or no `input.ppi`), the worker removes its claim, logs the
+error and goes on, with nothing removed. A worker killed with its job
+leaves the attempt with the process `running`, or, during pp.x, with the
+post-processing begun and the state `density` null; what happened is then
+known from the scheduler and the files.
+
+A charge density that failed is never produced again automatically: pw.x
+completed, so the calculation is `completed`, its results cannot be used
+(`reuse_problem`: `charge density failed: <reason>`) and it goes to the
+user. A manual relaunch runs pw.x again from scratch, then pp.x.
 
 **Time limit.** `max_seconds` of each attempt is `walltime` minus the time
 since the worker started minus `max_seconds_margin`, capped by the
 `max_seconds` of `input.pwi` when given. pw.x then stops in time to write its
 restart files. When nothing is left, the worker takes no more calculations.
+pp.x runs in the time `max_seconds_margin` keeps free, with no limit of its
+own: the margin must cover it too.
 The `walltime` of `[execution]` must be the one of the jobscript. In
 `input.pwi`, `max_seconds`, `nstep` and `restart_mode` must be alone on
 their line of `&CONTROL`, `mixing_beta` on its line of `&ELECTRONS`, when
@@ -252,7 +279,9 @@ given.
 Before a calculation runs again, its last attempt is archived
 (`execution/archive.py`): `run.pwi` and `output.pwo` move to `attempts/<n>/`
 after a check of their digests, with `structure_out.extxyz` when the output
-was parsed, the record gets the new paths, and the claim is removed last. An interrupted archiving is completed by running it again.
+was parsed and, after pp.x, `output.ppo` and `density.filplot` (checked
+against the digests of the post-processing; `input.ppi` stays in place),
+the record gets the new paths, and the claim is removed last. An interrupted archiving is completed by running it again.
 An attempt still recorded as `running` is not archived; the archiving does
 not touch `OUT/`, which the next attempt continues from or the worker
 removes before an attempt from scratch. An attempt is archived only when it
@@ -300,6 +329,14 @@ it, with the restarts of the claim. Without the restart count the attempt
 waits for the end of the job, and a preempted job is `uncertain`. A claim
 without a job id, an empty claim and a job that the scheduler no longer
 reports are `uncertain`.
+
+A calculation that gives the charge density, whose last attempt was parsed
+and whose state `density` is not known, is `running` while pp.x may run:
+until the run of the job that wrote the claim is over, as above. Then the
+state is read from `output.ppo` and `density.filplot` as the worker reads
+it, with the exit code null; when the worker stopped before pp.x ran, or
+the end of pw.x is fixed here from its output, the state is `failed` with
+the reason.
 
 The fixed attempt gets the state of the job as printed, the states read from
 the output (the process `killed` when the scheduler stopped or requeued the

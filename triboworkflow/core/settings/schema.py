@@ -524,6 +524,11 @@ class ExecutionParams:
         worker added; relative to the folder of the settings file.
     run_command : str
         Command up to the input file, e.g. ``mpirun -np 32 pw.x -nk 4``.
+    pp_command : str or None
+        Command of pp.x up to the input file, e.g. ``mpirun -np 32 pp.x``:
+        the worker runs it after pw.x in the calculations that also give the
+        charge density. Required only when such calculations are prepared or
+        submitted.
     walltime, polling_interval : int
         Seconds. ``walltime`` must match the one of the jobscript.
     groups : int or None
@@ -549,10 +554,14 @@ class ExecutionParams:
     groups: int | None = None
     max_seconds_margin: int = 600
     job_report_wait: int = 3600
+    pp_command: str | None = None
 
     def check(self, path):
         """Validate the table; errors name ``path``."""
         _choice(f'{path}.scheduler', self.scheduler, SCHEDULERS)
+        if self.pp_command is not None and not self.pp_command.strip():
+            raise SettingsError(f'{path}.pp_command', 'must not be empty; leave it out when no '
+                                'calculation gives the charge density')
         if self.groups is not None:
             _positive(f'{path}.groups', self.groups)
         _positive(f'{path}.walltime', self.walltime)

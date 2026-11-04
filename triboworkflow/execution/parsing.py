@@ -21,6 +21,13 @@ A structure of the input that cannot be read, an unexpected error of the
 parser or a final structure that cannot be written give ``parsing =
 'failed'`` with the reason, never an exception: the attempt is recorded in
 any case.
+
+``density_problem`` tells whether the charge density that pp.x wrote after
+pw.x can be used: the output of pp.x (``output.ppo``) closes its run without
+errors (``ppi.pp_output_problem``), and the file of the density
+(``density.filplot``) is complete, is the charge density and agrees with the
+final structure of the calculation (``structure_out.extxyz``,
+``density.structure_differences``).
 """
 
 import dataclasses
@@ -30,11 +37,14 @@ from pathlib import Path
 from triboworkflow.core.store import Record
 from triboworkflow.core.store.atomic import read_json, write_text
 from triboworkflow.core.structures import StructureError, read_structure
+from triboworkflow.engines.qe.density import (DENSITY_PLOT_NUM, DensityError, read_filplot,
+                                              structure_differences)
+from triboworkflow.engines.qe.ppi import pp_output_problem
 from triboworkflow.engines.qe.results import Parsed, parse_output
 from triboworkflow.engines.qe.status import pw_status
 
-from .layout import (INPUT_FILE, OUTPUT_FILE, RECORD_FILE, STRUCTURE_IN_FILE,
-                     STRUCTURE_OUT_FILE)
+from .layout import (DENSITY_FILE, INPUT_FILE, OUTPUT_FILE, PP_OUTPUT_FILE, RECORD_FILE,
+                     STRUCTURE_IN_FILE, STRUCTURE_OUT_FILE)
 
 logger = logging.getLogger(__name__)
 
@@ -125,3 +135,46 @@ def with_parsed(record, attempt, parsed, version):
     return dataclasses.replace(record, status=status, attempts=record.attempts[:-1] + (done,),
                                results=parsed.results, observed=parsed.observed,
                                engine=dataclasses.replace(record.engine, version=version))
+
+
+def density_problem(path):
+    """Why the charge density written by pp.x in a calculation directory cannot be used.
+
+    Parameters
+    ----------
+    path : path-like
+        Directory of the calculation, with ``output.ppo``,
+        ``density.filplot`` and ``structure_out.extxyz``.
+
+    Returns
+    -------
+    str or None
+        The reason (an output that is missing or does not close its run, an
+        error of pp.x, a file of the density missing, incomplete, not the
+        charge density or of another structure); None when the density can
+        be used.
+    """
+    path = Path(path)
+    try:
+        text = (path / PP_OUTPUT_FILE).read_text(encoding='utf-8', errors='replace')
+    except OSError as error:
+        return f'{PP_OUTPUT_FILE} not read: {error}'
+    problem = pp_output_problem(text)
+    if problem is not None:
+        return problem
+    if not (path / DENSITY_FILE).is_file():
+        return f'{DENSITY_FILE} not written'
+    try:
+        filplot = read_filplot(path / DENSITY_FILE)
+    except (OSError, DensityError) as error:
+        return f'{DENSITY_FILE} not read: {error}'
+    if filplot.plot_num != DENSITY_PLOT_NUM:
+        return f'{DENSITY_FILE}: plot_num = {filplot.plot_num}, not the charge density'
+    try:
+        structure = read_structure(path / STRUCTURE_OUT_FILE, format='extxyz')
+    except (OSError, StructureError) as error:
+        return f'{STRUCTURE_OUT_FILE} not read: {error}'
+    differences = structure_differences(filplot, structure)
+    if differences:
+        return f'{DENSITY_FILE} disagrees with {STRUCTURE_OUT_FILE}: {"; ".join(differences)}'
+    return None

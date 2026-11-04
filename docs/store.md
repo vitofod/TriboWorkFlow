@@ -38,14 +38,15 @@ MLIP) never run locally.
 
 | Key | Content |
 |---|---|
-| `schema_version` | 4 |
+| `schema_version` | 5 |
 | `calc_id` | `<step>/<label>`: the directory of the calculation within the system |
 | `system`, `step`, `label` | names of the three directories; no `/`, `\`, NUL, `.` or `..` |
 | `calc_type` | kind of calculation, which fixes its constraints |
+| `density` | true when the calculation also gives the charge density, written by a post-processing program after the engine (pp.x after pw.x, [qe_charge.md](qe_charge.md)); false otherwise |
 | `engine` | `name`, `program`, `version` (as printed in the output; null until read) |
 | `energy_model` | written by the engine, not empty: pseudopotentials and their digests or the MLIP model, cutoffs, k-points, smearing, spin, vdW; a null marks a part not known |
-| `fingerprint` | `sha256:` and 64 hex digits: digest of the normalized input and of the energy model |
-| `status` | `process`, `scf`, `geometry`, `parsing`, each null until known |
+| `fingerprint` | `sha256:` and 64 hex digits: digest of the normalized input (with the post-processing, for a calculation that gives the charge density) and of the energy model |
+| `status` | `process`, `scf`, `geometry`, `parsing`, `density`, each null until known |
 | `attempts` | one entry per run, numbered from 1 (below) |
 | `results` | results read from the output, or null; never null once `parsing` is `ok` |
 | `observed` | what the output tells of the energy model, with the keys and the form of `energy_model` (written by the parser), or null; never null once `parsing` is `ok`, empty if the engine observes nothing |
@@ -62,6 +63,7 @@ States:
 | `scf` | `converged`, `not_converged` |
 | `geometry` | `converged`, `not_converged` (the run is over without convergence), `max_steps`, `n/a` (no relaxation) |
 | `parsing` | `ok`, `failed` |
+| `density` | `ok` (written and complete), `failed`; always null for a calculation without `density` |
 
 For whoever looks at a calculation, `Status.summary` sums the states up in
 one word:
@@ -75,11 +77,13 @@ one word:
 | `crashed` | `process` `crashed` or `killed` |
 | `unknown` | `process` null |
 
-It describes the calculation, not the reading of its output (`parsing` does
-not enter it); the separate states tell the details.
+It describes the calculation, not the reading of its output nor the
+post-processing (`parsing` and `density` do not enter it); the separate
+states tell the details.
 
 A record is complete when `process` is `ended`, `scf` is `converged`,
-`geometry` is `converged` or `n/a`, and `parsing` is `ok`. `can_reuse(record,
+`geometry` is `converged` or `n/a`, `parsing` is `ok` and, for a calculation
+that gives the charge density, `density` is `ok`. `can_reuse(record,
 fingerprint)` is true only for a complete record with results, with that
 fingerprint, with an energy model fully known and with an output that agrees
 with it, so deciding reuse and reading the results always agree. A record
@@ -134,10 +138,11 @@ source establishes it:
 | `stop_reason` | why the run stopped, read from the output | output |
 | `clean_stop` | whether the engine closed the run, read from the output | output |
 | `parse_error` | why the output could not be parsed; given if and only if `status.parsing` is `failed` | parser |
-| `status` | `process`, `scf`, `geometry`, `parsing` at the end of the attempt | output, job |
+| `status` | `process`, `scf`, `geometry`, `parsing`, `density` at the end of the attempt | output, job, post-processing |
 | `remedies` | launch of the attempt: `kind` (`initial`, `unchanged`, `remedy`, `manual`), `level` of the remedies, `values` of the level and `initial_values` (effective values at level 1), both empty at level 1, and `restart` (whether it continued the previous attempt from its output directory); empty when not known | worker, reconciliation |
 | `restart` | for an attempt launched to continue the previous one, what its output says it read from the files of that one: `positions`, `density`, `wavefunctions`, `scf_iteration`, `bfgs_history`, each true, false or null (not told), and `same_parallelization` (the parallelization printed equals that of the previous attempt; null if either is not known); null for any other attempt | output |
 | `outdir_removal` | for an attempt from scratch after the first, the removal of the directories the engine writes (`outdir`, and `wfcdir` when given) before the run: `started` (begun, its end not recorded), `removed`, `absent` (nothing to remove) or `failed` (the attempt did not run); null for a first attempt or a restart | worker |
+| `density` | for a calculation that gives the charge density, once its post-processing started: `program` (e.g. `pp.x`), `command` (up to the input file), `input`, `output` and `density` (the file of the charge density) as `{"path", "digest"}` or null, `exit_code`, and `error` (why the density is not usable; given if and only if `status.density` is `failed`); null otherwise, and required once `status.density` is known | worker, archiving |
 
 The exit code, the state of the job and the reason of the stop are kept
 apart and never derived from one another; the states of the calculation

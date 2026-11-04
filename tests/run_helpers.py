@@ -193,7 +193,7 @@ class Run:
         """Write, register and submit a group; the ids of its jobs."""
         write_job(self.dir, Manifest(name=name, scheduler='slurm', run_command='pw.x',
                                      walltime=3600, max_seconds_margin=60,
-                                     calculations=launches), self.jobscript)
+                                     calculations=launches, pp_command='pp.x'), self.jobscript)
         self.manager.add_group(name, len(launches))
         self.manager.cycle()
         return self.manager.group_jobs(name)

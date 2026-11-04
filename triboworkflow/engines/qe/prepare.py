@@ -11,6 +11,14 @@ its record, with the energy model and the fingerprint (``model.py``) and no
 attempt. The changes made to the settings (``PwInput.changes``) come with
 it, to be logged.
 
+The step decides whether a calculation also gives the charge density (the
+charge analysis does): then it has a pp.x input too (``ppi.density_input``,
+with the ``prefix`` and ``outdir`` of pw.x), its record has ``density`` and
+its fingerprint the post-processing; the energy model is the same. Such a
+calculation requires ``[execution] pp_command`` and a ``disk_io`` with which
+pw.x writes the charge density (``ppi.disk_io_problem``); the other
+calculations are not checked.
+
 ``single_input`` gives the input and the extxyz of the single calculation of
 ``[structure]``: structure and constraints of the file and of the settings
 (``load_structure``), ``K_POINTS`` of ``[k_points]`` and every ``&CONTROL``
@@ -27,6 +35,7 @@ line.
 import re
 from dataclasses import dataclass
 
+from triboworkflow.core.settings import SettingsError
 from triboworkflow.core.store import Engine, Record
 from triboworkflow.core.store.record import split_calc_id
 from triboworkflow.core.structures import (calc_type_if_pos, extxyz_text, load_structure,
@@ -34,6 +43,7 @@ from triboworkflow.core.structures import (calc_type_if_pos, extxyz_text, load_s
 
 from .keys import key_class
 from .model import ENGINE, PROGRAM, energy_model, input_fingerprint
+from .ppi import density_input, disk_io_problem
 from .pwi import kpoints_card, pw_input, workflow_input
 
 # Classes of the keys that a difference of input leaves to the attempts.
@@ -126,6 +136,9 @@ class QECalculation:
         Its record before any attempt; ``files`` is set where it is written.
     changes : tuple of str
         Changes made to the settings in the input (``PwInput.changes``).
+    pp_input_text : str or None
+        Text of the pp.x input of a calculation that also gives the charge
+        density; None for the others.
     """
 
     calc_id: str
@@ -133,6 +146,7 @@ class QECalculation:
     structure_text: str
     record: Record
     changes: tuple = ()
+    pp_input_text: str | None = None
 
     def input_differences(self, kept):
         """``input_differences`` of an input on disk from this one."""
@@ -143,7 +157,8 @@ class QECalculation:
         return structure_differences(kept, self.structure_text)
 
 
-def qe_calculation(system, calc_id, calc_type, structure, kpoints, settings, prefix, outdir):
+def qe_calculation(system, calc_id, calc_type, structure, kpoints, settings, prefix, outdir,
+                   density_file=None):
     """A pw.x calculation of the workflows, from a structure of ``VaspInputSet``.
 
     Parameters
@@ -158,6 +173,10 @@ def qe_calculation(system, calc_id, calc_type, structure, kpoints, settings, pre
     settings : triboworkflow.core.settings.Settings
     prefix, outdir : str
         ``prefix`` and ``outdir`` of the calculation.
+    density_file : str, optional
+        For a calculation that also gives the charge density, as its step
+        decides: the file that pp.x writes, relative to the directory of the
+        calculation. None for the others.
 
     Returns
     -------
@@ -166,20 +185,34 @@ def qe_calculation(system, calc_id, calc_type, structure, kpoints, settings, pre
     Raises
     ------
     PwInputError
-        As ``workflow_input``.
+        As ``workflow_input`` and ``ppi.density_input``.
     SettingsError
-        As ``energy_model``.
+        As ``energy_model``; for a calculation that gives the charge density,
+        also without ``[execution] pp_command``, or with a ``disk_io`` with
+        which pw.x writes no charge density (``ppi.disk_io_problem``).
     StructureError
         If the structure cannot be written as extxyz.
     """
     pw = workflow_input(structure, kpoints, calc_type, settings, prefix, outdir)
     model = energy_model(settings)
+    pp = None
+    if density_file is not None:
+        problem = disk_io_problem(settings.namelists.CONTROL, settings.qe.version)
+        if problem is not None:
+            raise SettingsError('namelists.CONTROL', f'{calc_id} gives the charge density: '
+                                f'{problem}', settings.source)
+        if settings.execution is None or settings.execution.pp_command is None:
+            raise SettingsError('execution.pp_command', f'required: {calc_id} gives the charge '
+                                'density, which pp.x writes after pw.x', settings.source)
+        pp = density_input(prefix, outdir, density_file)
     step, label = split_calc_id(calc_id)
     record = Record(system=system, step=step, label=label, calc_type=calc_type,
                     engine=Engine(ENGINE, PROGRAM), energy_model=model,
-                    fingerprint=input_fingerprint(pw, model, calc_type))
+                    fingerprint=input_fingerprint(pw, model, calc_type, pp),
+                    density=pp is not None)
     shown = with_if_pos(structure, calc_type_if_pos(structure))
-    return QECalculation(calc_id, pw.text, extxyz_text(shown), record, pw.changes)
+    return QECalculation(calc_id, pw.text, extxyz_text(shown), record, pw.changes,
+                         None if pp is None else pp.text)
 
 
 @dataclass(frozen=True)

@@ -231,6 +231,11 @@ The `pw.x` expected on the machine that runs the calculations.
   version (e.g. `8.0`) is accepted with a warning: the results are not
   guaranteed and may hold errors, so check them. The outputs of any version
   are read, with the same warning in the log.
+- In the calculations that give the charge density the version also chooses
+  the values of `disk_io` refused at the preparation, those with which
+  `pw.x` writes no charge density; without a version, or with another
+  release, the values of every release are refused
+  ([qe_charge.md](qe_charge.md)).
 - Version and checksums enter the energy model of every calculation (see
   [Fingerprint and energy model](#fingerprint-and-energy-model)); the path
   of the manifest does not. Each output is compared with them: the version
@@ -290,6 +295,7 @@ Needed only to run on HPC. No value is tied to a specific machine.
 | `scheduler` | str | R | `slurm`, `pbs`, `torque`, `lsf`, `sge`, `htcondor`, `condor` (the names of Xsorb) |
 | `jobscript` | str | R | user jobscript, relative to the folder of the settings file; copied for every group of jobs with the launch line of the worker added, never changed |
 | `run_command` | str | R | command up to the input file, e.g. `mpirun -np 32 pw.x -nk 4` |
+| `pp_command` | str | none | command of pp.x up to the input file, e.g. `mpirun -np 32 pp.x`: run after pw.x, in the same job, in the calculations that also give the charge density (the charge analysis, [qe_charge.md](qe_charge.md)); required only when such calculations are prepared or submitted, not empty |
 | `walltime` | int | R | > 0 s, walltime of each job; keep it equal to the one of the jobscript |
 | `polling_interval` | int | R | > 0 s, time between two checks of the jobs |
 | `groups` | int | none | > 0, jobs (workers) over which the calculations of a group are spread: 1 runs them one after the other, one per calculation runs them all at once; never more jobs than calculations are submitted. When left out, give it on the command line (`--groups`); in a terminal the command asks for it, elsewhere it stops with an error |

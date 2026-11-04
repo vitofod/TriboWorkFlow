@@ -557,6 +557,219 @@ def case_custom_slab(tc, name):
     return {'slab': slab.as_dict(), 'labels': slab.labels}
 
 
+# Charge density. The workflow reads three densities on the same grid and in
+# the same cell (interface, bottom slab, top slab), averages them along each
+# axis and integrates |interface - bottom - top| (chgcar_integrator, on
+# CHGCAR files). analyzer.py reads the files that pp.x writes; no Firetask
+# calls it, its cases characterise it for the comparison of Q18. The
+# densities are synthetic (tests/charge_files.py): Gaussian layers of a toy
+# Cu/Al interface, with charge moved between the slabs in the interface.
+CHARGE_PARTS = ('interface', 'bot_slab', 'top_slab')
+CHARGE_GRID = (6, 5, 40)
+CHARGE_CELLS = {
+    'orthorhombic': np.diag([2.5, 2.8, 20.0]),
+    'hexagonal': np.array([[2.556, 0.0, 0.0], [-1.278, 2.556 * math.sqrt(3) / 2, 0.0],
+                           [0.0, 0.0, 20.0]]),
+}
+CHARGE_LAYERS = {'bot_slab': [(4.0, 11.0), (6.1, 11.0), (8.2, 11.0)],
+                 'top_slab': [(10.6, 3.0), (12.9, 3.0), (15.2, 3.0)]}
+CHARGE_SPECIES = {'bot_slab': ('Cu', 11.0), 'top_slab': ('Al', 3.0)}
+CHARGE_TRANSFER = (9.4, 0.4, 0.5)
+# integrate_in of the workflow: the two layers facing each other.
+CHARGE_INTEGRATE_IN = (8.2, 10.6)
+CHARGE_ECUTWFC, CHARGE_DUAL = 40.0, 4.0
+
+
+def charge_part(cell, part):
+    """Layers, species, counts, fractional positions and density of a part."""
+    import charge_files
+    slabs = ['bot_slab', 'top_slab'] if part == 'interface' else [part]
+    layers = [layer for s in slabs for layer in CHARGE_LAYERS[s]]
+    transfer = CHARGE_TRANSFER if part == 'interface' else None
+    values = charge_files.slab_density(cell, CHARGE_GRID, layers, transfer=transfer)
+    species = [CHARGE_SPECIES[s] for s in slabs]
+    counts = [len(CHARGE_LAYERS[s]) for s in slabs]
+    inplane = [(0.0, 0.0), (0.5, 0.5), (0.0, 0.5)]
+    frac = [(*inplane[i % 3], z / cell[2, 2]) for s in slabs
+            for i, (z, _) in enumerate(CHARGE_LAYERS[s])]
+    return species, counts, frac, values
+
+
+def write_chgcars(cell_name):
+    """CHGCAR files of the three parts in the working folder; their paths."""
+    import charge_files
+    cell = CHARGE_CELLS[cell_name]
+    paths = []
+    for part in CHARGE_PARTS:
+        species, counts, frac, values = charge_part(cell, part)
+        Path(part).mkdir()
+        Path(part, 'CHGCAR').write_text(charge_files.chgcar_text(
+            lattice=cell, species=[s for s, _ in species], counts=counts, frac=frac,
+            values=values))
+        paths.append(f'{part}/CHGCAR')
+    return paths
+
+
+def filplot_of(cell, part, title='', nrx=None):
+    """pp.x filplot text of a part (ibrav 0, alat the length of a1)."""
+    import charge_files
+    species, counts, frac, values = charge_part(cell, part)
+    bohr = charge_files.BOHR_TO_ANGSTROM
+    alat = np.linalg.norm(cell[0]) / bohr
+    tau = np.asarray(frac) @ cell / (alat * bohr)
+    ityp = [nt for nt, n in enumerate(counts, 1) for _ in range(n)]
+    nr = CHARGE_GRID
+    if nrx is not None:
+        nrx = tuple(n + d for n, d in zip(nr, nrx))
+    return charge_files.filplot_text(
+        values=values * bohr ** 3, celldm=[alat], species=species,
+        atoms=list(zip(tau.tolist(), ityp)), ibrav=0, at=cell / (alat * bohr), nrx=nrx,
+        gcutm=CHARGE_DUAL * CHARGE_ECUTWFC / (2 * math.pi / alat) ** 2,
+        dual=CHARGE_DUAL, ecut=CHARGE_ECUTWFC, title=title)
+
+
+def write_filplots(cell_name, **kwargs):
+    """Filplots of the three parts in the working folder; their paths."""
+    paths = []
+    for part in CHARGE_PARTS:
+        Path(part).write_text(filplot_of(CHARGE_CELLS[cell_name], part, **kwargs))
+        paths.append(part)
+    return paths
+
+
+def chgcar_summary(chgcar):
+    """What pymatgen read: cell, volume, species and the total density."""
+    return {'lattice': chgcar.structure.lattice.matrix, 'volume': chgcar.structure.volume,
+            'species': [str(s) for s in chgcar.structure.species],
+            'total': chgcar.data['total']}
+
+
+def case_chgcar_average(tc, cell_name):
+    """Averages along x, y and z of the three densities, as FT_AverageCharge."""
+    ci = tc['physics.electronics.charge.chgcar_integrator']
+    paths = write_chgcars(cell_name)
+    chgcars = ci.extract_chgcar_data(paths)
+    data = {'read': chgcar_summary(chgcars[0]),
+            'single': chgcar_summary(ci.extract_chgcar_data(paths[0])),
+            'average': {part: {str(ax): ci.chgcar_average_along_axis(chg, ax, to_plot=False)
+                               for ax in (0, 1, 2)}
+                        for part, chg in zip(CHARGE_PARTS, chgcars)}}
+    return data
+
+
+def case_chgcar_displacement(tc, cell_name):
+    """Charge displacement of interface - bottom - top, as FT_ChargeDisplacement,
+    with the variants of the integration limits and of the algebra."""
+    ci = tc['physics.electronics.charge.chgcar_integrator']
+    paths = write_chgcars(cell_name)
+    operations, axis = ['-', '-'], 2
+    combined = ci.chgcar_algebra_from_file(paths, operations, axis)
+    p1, p2 = CHARGE_INTEGRATE_IN
+
+    def summary(result, curve=False):
+        integral, width, xy, curve_integral = result
+        out = {'integral': integral, 'width': width, 'xy': xy}
+        if curve:
+            out['curve_integral'] = curve_integral
+        return out
+
+    data = {
+        'combined': combined.data['total'],
+        'interface': summary(ci.charge_displacement(combined, axis, p1, p2, 10000, False)),
+        'all': summary(ci.charge_displacement(combined, axis, rescale=10000, to_plot=False)),
+        'interface_101': summary(ci.charge_displacement(combined, axis, p1, p2, 101), True),
+        'swapped_101': summary(ci.charge_displacement(combined, axis, p2, p1, 101)),
+        'outside_101': summary(ci.charge_displacement(combined, axis, -1.0, 1000.0, 101)),
+    }
+    from_list = ci.chgcar_algebra_from_list(ci.extract_chgcar_data(paths), operations, axis)
+    data['from_list'] = from_list.data['total']
+    total = ci.chgcar_algebra_from_list(ci.extract_chgcar_data(paths), ['+', '+'])
+    data['sum'] = total.data['total']
+    data['bad_operation'] = outcome(ci.chgcar_algebra_from_list,
+                                    ci.extract_chgcar_data(paths), ['*', '-'])
+    Path('not_a_chgcar').write_text('this is not a CHGCAR\n')
+    data['not_a_chgcar'] = outcome(ci.extract_chgcar_data, 'not_a_chgcar')
+    data['not_a_chgcar_in_list'] = outcome(ci.extract_chgcar_data, [paths[0], 'not_a_chgcar'])
+    data['wrong_type'] = outcome(ci.extract_chgcar_data, 3)
+    return data
+
+
+def analyzer_state(analyzer):
+    return {'params': analyzer.params, 'cell': analyzer.cell, 'filetype': analyzer.filetype,
+            'grid': analyzer.charge_grid}
+
+
+def case_qecharge_analyzer(tc, cell_name):
+    """QEChargeAnalyzer on the pp.x filplot of the interface: reading, cell
+    and planar averages; then the variants of the file header."""
+    an = tc['physics.electronics.charge.analyzer']
+    path = write_filplots(cell_name)[0]
+    analyzer = an.QEChargeAnalyzer(path, unpack=False)
+    data = {'read': analyzer_state(analyzer)}
+    analyzer.average_charge('xyz')
+    analyzer.average_charge('xy', shift=0, rescale=200, get_inter=True)
+    data['charge'] = analyzer.charge
+    cell = CHARGE_CELLS[cell_name]
+
+    def variant(name, **kwargs):
+        Path(name).write_text(filplot_of(cell, 'interface', **kwargs))
+        result = outcome(lambda: analyzer_state(an.QEChargeAnalyzer(name, unpack=False)))
+        if 'result' in result:
+            result['result'] = {'params': result['result']['params'],
+                                'grid_shape': list(np.shape(result['result']['grid']['ndarray']))}
+        return result
+
+    data['titled'] = variant('titled', title='charge density of the interface')
+    data['padded_x'] = variant('padded_x', nrx=(1, 0, 0))
+    data['padded_z'] = variant('padded_z', nrx=(0, 0, 1))
+    return data
+
+
+def case_qecharge_ibrav(tc):
+    """QEChargeAnalyzer on filplots with ibrav != 0 (cell from celldm): fcc
+    (ibrav 2, the layout of the pp.x example of silicon) and simple cubic."""
+    import charge_files
+    an = tc['physics.electronics.charge.analyzer']
+    n, alat = 8, 10.2
+    k, j, i = np.meshgrid(*[np.arange(n)] * 3, indexing='ij')
+    modulation = 1 + 0.3 * np.cos(2 * math.pi * i / n) * np.cos(2 * math.pi * j / n) \
+        * np.cos(2 * math.pi * k / n)
+    data = {}
+    for ibrav, volume in ((2, alat ** 3 / 4), (1, alat ** 3)):
+        name = f'si_charge_{ibrav}'
+        Path(name).write_text(charge_files.filplot_text(
+            values=8.0 / volume * modulation, celldm=[alat], species=[('Si', 4.0)],
+            atoms=[((0.0, 0.0, 0.0), 1), ((0.25, 0.25, 0.25), 1)], ibrav=ibrav,
+            gcutm=72.0 / (2 * math.pi / alat) ** 2, dual=4.0, ecut=18.0))
+
+        def read_and_average():
+            analyzer = an.QEChargeAnalyzer(name, unpack=False)
+            state = analyzer_state(analyzer)
+            analyzer.average_charge('xyz')
+            analyzer.average_charge('xy', shift=0, rescale=100, get_inter=True)
+            return {'read': state, 'charge': analyzer.charge}
+
+        data[str(ibrav)] = outcome(read_and_average)
+    return data
+
+
+def case_qecharge_processor(tc, cell_name):
+    """QEChargeProcessor on the three filplots: planar averages and charge
+    displacement; then the same difference with QEChargeAnalyzer objects."""
+    an = tc['physics.electronics.charge.analyzer']
+    paths = write_filplots(cell_name)
+    processor = an.QEChargeProcessor(paths, unpack=False)
+    processor.average_charge(axis='xy', rescale=200, get_inter=True)
+    processor.displace_charge(axis='xy', rescale=200, save_charge=False)
+    data = {'charge': processor.charge, 'charge_arrays': processor.charge_arrays,
+            'charge_diff': processor.charge_diff}
+    analyzers = [an.QEChargeAnalyzer(p, unpack=False) for p in paths]
+    difference = analyzers[0] - analyzers[1] - analyzers[2]
+    difference.average_charge('xy', shift=0, rescale=200, get_inter=True)
+    data['difference'] = {'grid': difference.charge_grid, 'charge': difference.charge}
+    return data
+
+
 CASES = {}
 for _pair in PAIRS:
     CASES[f'matcher_{_pair}'] = (case_matcher, {'pair': _pair})
@@ -584,6 +797,13 @@ CASES['uber_ppes_data'] = (case_uber, {})
 CASES['uber0_cu111'] = (case_uber0, {})
 for _name in CUSTOM_SLABS:
     CASES[f'custom_slab_{_name}'] = (case_custom_slab, {'name': _name})
+for _cell in CHARGE_CELLS:
+    for _case, _func in (('chgcar_average', case_chgcar_average),
+                         ('chgcar_displacement', case_chgcar_displacement),
+                         ('qecharge_analyzer', case_qecharge_analyzer),
+                         ('qecharge_processor', case_qecharge_processor)):
+        CASES[f'{_case}_{_cell}'] = (_func, {'cell_name': _cell})
+CASES['qecharge_ibrav'] = (case_qecharge_ibrav, {})
 
 
 # =============================================================================

@@ -16,7 +16,10 @@ attempt is archived:
 3. ``run.pwi`` and ``output.pwo`` are moved to ``attempts/<n>/`` with
    ``os.replace``, after checking them against the digests recorded, and
    ``structure_out.extxyz`` with them when the output was parsed (it has no
-   digest: it is read again from the output when needed);
+   digest: it is read again from the output when needed); for a calculation
+   that gives the charge density, ``output.ppo`` and ``density.filplot`` too,
+   checked against the digests of the post-processing (``input.ppi``, as
+   prepared, stays in place);
 4. attempt ``n`` in the record gets the archived paths and their digests;
 5. the claim is removed, last.
 
@@ -38,11 +41,16 @@ import os
 from triboworkflow.core.store import Attempt, AttemptFile, file_digest, read_record, write_record
 from triboworkflow.core.store.atomic import write_json
 
-from .layout import (ATTEMPTS_DIR, CLAIM_FILE, OUTPUT_FILE, RUN_INPUT_FILE, STRUCTURE_OUT_FILE,
-                     attempt_dir, calc_dir, system_dir)
+from .layout import (ATTEMPTS_DIR, CLAIM_FILE, DENSITY_FILE, OUTPUT_FILE, PP_OUTPUT_FILE,
+                     RUN_INPUT_FILE, STRUCTURE_OUT_FILE, attempt_dir, calc_dir, system_dir)
 
 _CLAIM_KEYS = ('n', 'job_id', 'host', 'pid', 'since')
 RESTART_COUNT_KEY = 'restart_count'
+# Files of an attempt, moved to its archive: of the engine, the final
+# structure, and of the post-processing of the charge density.
+ATTEMPT_FILES = (RUN_INPUT_FILE, OUTPUT_FILE, STRUCTURE_OUT_FILE, PP_OUTPUT_FILE, DENSITY_FILE)
+# Files of an attempt that only a worker writes, never there without a claim.
+_RUN_FILES = (RUN_INPUT_FILE, OUTPUT_FILE, PP_OUTPUT_FILE, DENSITY_FILE)
 
 
 class ArchiveError(RuntimeError):
@@ -150,7 +158,7 @@ def archive_attempt(run_dir, system, calc_id, launch=None):
     sdir = system_dir(run_dir, system)
     claim_path = path / CLAIM_FILE
     if not claim_path.exists():
-        left = [name for name in (RUN_INPUT_FILE, OUTPUT_FILE) if (path / name).exists()]
+        left = [name for name in _RUN_FILES if (path / name).exists()]
         if left:
             raise ArchiveError(f'{path}: {", ".join(left)} without a claim: the attempt they '
                                'belong to is unknown')
@@ -185,8 +193,11 @@ def archive_attempt(run_dir, system, calc_id, launch=None):
 
     # 3. Files to the archive, once all of them are checked.
     archive = attempt_dir(path, n)
-    recorded = {RUN_INPUT_FILE: attempt.input, OUTPUT_FILE: attempt.output}
-    for name in (RUN_INPUT_FILE, OUTPUT_FILE, STRUCTURE_OUT_FILE):
+    post = attempt.density
+    recorded = {RUN_INPUT_FILE: attempt.input, OUTPUT_FILE: attempt.output,
+                PP_OUTPUT_FILE: post.output if post is not None else None,
+                DENSITY_FILE: post.density if post is not None else None}
+    for name in ATTEMPT_FILES:
         source, target = path / name, archive / name
         if source.exists() and target.exists():
             raise ArchiveError(f'{source} and {target} both exist; nothing was moved or deleted')
@@ -196,18 +207,21 @@ def archive_attempt(run_dir, system, calc_id, launch=None):
         for found in (source, target):
             if found.exists():
                 _check_digest(found, digest, f'attempt {n}')
-    for name in (RUN_INPUT_FILE, OUTPUT_FILE, STRUCTURE_OUT_FILE):
+    for name in ATTEMPT_FILES:
         if (path / name).exists():
             archive.mkdir(parents=True, exist_ok=True)
             os.replace(path / name, archive / name)
 
     # 4. Archived files in the record.
     files = {}
-    for name in (RUN_INPUT_FILE, OUTPUT_FILE):
+    for name in recorded:
         target = archive / name
         files[name] = (AttemptFile(f'{ATTEMPTS_DIR}/{n}/{name}', file_digest(target))
                        if target.exists() else None)
     done = dataclasses.replace(attempt, input=files[RUN_INPUT_FILE], output=files[OUTPUT_FILE])
+    if post is not None:
+        done = dataclasses.replace(done, density=dataclasses.replace(
+            post, output=files[PP_OUTPUT_FILE], density=files[DENSITY_FILE]))
     if done != attempt:
         write_record(sdir, dataclasses.replace(record, attempts=record.attempts[:-1] + (done,)))
 

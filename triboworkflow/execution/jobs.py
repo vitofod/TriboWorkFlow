@@ -10,8 +10,9 @@ lives in ``<run>/jobs/<name>/`` (see ``layout.py``):
 
 - ``manifest.json``: the calculations, in the order the workers take them,
   each with the attempt to run (``Launch``), and how to run them
-  (scheduler, command, digest of the jobscript of the user, walltime, time
-  margin);
+  (scheduler, command, command of the post-processing of the calculations
+  that give the charge density, digest of the jobscript of the user,
+  walltime, time margin);
 - ``jobscript.sh``: the jobscript of the user, copied unchanged, with one
   line added at the end that starts the worker on the manifest;
 - ``submitted.json``: the ids of the jobs submitted so far and, while a
@@ -52,14 +53,14 @@ from pathlib import Path
 from triboworkflow.core.guard import NotOnHPCError, hpc_only
 from triboworkflow.core.store.atomic import check_json_value, read_json, write_json
 from triboworkflow.core.store.fingerprint import bytes_digest, check_fingerprint
-from triboworkflow.core.store.record import check_keys, check_name, split_calc_id
+from triboworkflow.core.store.record import check_keys, check_name, read_record, split_calc_id
 
-from .layout import INPUT_FILE, calc_dir, job_dir
+from .layout import INPUT_FILE, PP_INPUT_FILE, calc_dir, job_dir, system_dir
 from .scheduler import JobSchedulerError
 
 logger = logging.getLogger(__name__)
 
-MANIFEST_VERSION = 3
+MANIFEST_VERSION = 4
 MANIFEST_FILE = 'manifest.json'
 JOBSCRIPT_FILE = 'jobscript.sh'
 SUBMITTED_FILE = 'submitted.json'
@@ -77,8 +78,8 @@ WORKER_MODULE = 'triboworkflow.execution.worker'
 # convergence; asked for by the user.
 LAUNCH_KINDS = ('initial', 'unchanged', 'remedy', 'manual')
 
-_MANIFEST_KEYS = ('schema_version', 'name', 'scheduler', 'run_command', 'jobscript_digest',
-                  'walltime', 'max_seconds_margin', 'calculations')
+_MANIFEST_KEYS = ('schema_version', 'name', 'scheduler', 'run_command', 'pp_command',
+                  'jobscript_digest', 'walltime', 'max_seconds_margin', 'calculations')
 _LAUNCH_KEYS = ('system', 'calc_id', 'n', 'kind', 'level', 'values', 'initial_values', 'restart')
 
 
@@ -234,6 +235,10 @@ class Manifest:
         ``file_digest`` of the jobscript of the user, which sets the
         resources of the jobs; ``write_job`` sets it from the jobscript it
         copies.
+    pp_command : str or None, optional
+        Command of pp.x up to the input file, run after pw.x in the
+        calculations that give the charge density; required when the group
+        has one of them (``write_job``).
 
     Raises
     ------
@@ -248,6 +253,7 @@ class Manifest:
     max_seconds_margin: int
     calculations: tuple
     jobscript_digest: str | None = None
+    pp_command: str | None = None
 
     def __post_init__(self):
         try:
@@ -258,6 +264,10 @@ class Manifest:
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
                 raise JobError(f'{field_name}: a non-empty string is required, not {value!r}')
+        if self.pp_command is not None and (not isinstance(self.pp_command, str)
+                                            or not self.pp_command.strip()):
+            raise JobError(f'pp_command: a non-empty string or null is required, not '
+                           f'{self.pp_command!r}')
         if self.jobscript_digest is not None:
             try:
                 check_fingerprint(self.jobscript_digest, 'jobscript_digest')
@@ -295,13 +305,13 @@ class Manifest:
         """
         return cls(name=name, scheduler=execution.scheduler, run_command=execution.run_command,
                    walltime=execution.walltime, max_seconds_margin=execution.max_seconds_margin,
-                   calculations=tuple(calculations))
+                   calculations=tuple(calculations), pp_command=execution.pp_command)
 
     def to_dict(self):
         """JSON object of the manifest."""
         return {'schema_version': MANIFEST_VERSION, 'name': self.name,
                 'scheduler': self.scheduler, 'run_command': self.run_command,
-                'jobscript_digest': self.jobscript_digest,
+                'pp_command': self.pp_command, 'jobscript_digest': self.jobscript_digest,
                 'walltime': self.walltime, 'max_seconds_margin': self.max_seconds_margin,
                 'calculations': [launch.to_dict() for launch in self.calculations]}
 
@@ -321,7 +331,8 @@ class Manifest:
                        run_command=data['run_command'], walltime=data['walltime'],
                        max_seconds_margin=data['max_seconds_margin'],
                        calculations=tuple(calculations),
-                       jobscript_digest=data['jobscript_digest'])
+                       jobscript_digest=data['jobscript_digest'],
+                       pp_command=data['pp_command'])
         except ValueError as error:  # JobError, and StoreError from check_keys
             raise JobError(f'{source}: {error}' if source else str(error)) from None
 
@@ -393,13 +404,24 @@ def write_job(run_dir, manifest, jobscript, python=None):
     Raises
     ------
     JobError
-        If a calculation has no ``input.pwi``, the jobscript is missing or
-        the group already exists.
+        If a calculation has no ``input.pwi``, one that gives the charge
+        density has no ``input.ppi`` or the manifest no ``pp_command``, the
+        jobscript is missing or the group already exists.
     """
     missing = [f'{c.system}/{c.calc_id}' for c in manifest.calculations
                if not (calc_dir(run_dir, c.system, c.calc_id) / INPUT_FILE).is_file()]
     if missing:
         raise JobError(f'calculations without {INPUT_FILE} in {run_dir}: {", ".join(missing)}')
+    density = [c for c in manifest.calculations if _gives_density(run_dir, c)]
+    names = ', '.join(f'{c.system}/{c.calc_id}' for c in density)
+    if density and manifest.pp_command is None:
+        raise JobError('calculations that give the charge density, and no pp_command in '
+                       f'[execution] to run pp.x: {names}')
+    missing = [f'{c.system}/{c.calc_id}' for c in density
+               if not (calc_dir(run_dir, c.system, c.calc_id) / PP_INPUT_FILE).is_file()]
+    if missing:
+        raise JobError(f'calculations that give the charge density without {PP_INPUT_FILE} in '
+                       f'{run_dir}: {", ".join(missing)}')
     jobscript = Path(jobscript)
     if not jobscript.is_file():
         raise JobError(f'jobscript {jobscript} not found')
@@ -415,6 +437,17 @@ def write_job(run_dir, manifest, jobscript, python=None):
     line = worker_line(path / MANIFEST_FILE, python)
     (path / JOBSCRIPT_FILE).write_bytes(template + os.fsencode(f'\n{line}\n'))
     return path
+
+
+def _gives_density(run_dir, launch):
+    """Whether the record of a calculation says it gives the charge density; False without one."""
+    try:
+        record = read_record(system_dir(run_dir, launch.system), launch.calc_id)
+    except FileNotFoundError:
+        return False
+    except ValueError as error:
+        raise JobError(f'{launch.system}/{launch.calc_id}: {error}') from None
+    return record.density
 
 
 def is_withdrawn(path):

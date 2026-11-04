@@ -13,6 +13,7 @@ import dataclasses
 
 import pytest
 
+import charge_files
 import pwo_helpers as pwo
 from run_helpers import (DROP, HEADER, POLL, SCF_DONE, SCF_MAX_SECONDS, SCF_TRUNCATED, SINCE,
                          SYSTEM, Run, text)
@@ -284,6 +285,106 @@ def test_restart_read_from_the_output_of_an_attempt_killed(run):
     assert run.record(calc_id).attempts[-1].restart == {
         'positions': True, 'density': True, 'wavefunctions': True, 'scf_iteration': False,
         'bfgs_history': None, 'same_parallelization': True}
+
+
+# --- charge density after pw.x -----------------------------------------------------------
+
+PP_START = '\n     Program POST-PROC v.7.2 starts on  1Jan2026 at 11: 0: 0 \n'
+PP_DONE = PP_START + '\n     Writing data to file  density.filplot\n\n   JOB DONE.\n'
+
+
+def density_calc(run):
+    """A calculation that gives the charge density, its pw.x started in job 1000."""
+    s = pwo.structure()
+    calc_id = run.calc()
+    store.write_record(run.sdir, dataclasses.replace(run.record(calc_id), density=True))
+    (run.path(calc_id) / layout.STRUCTURE_IN_FILE).write_text(extxyz_text(s))
+    (run.path(calc_id) / layout.PP_INPUT_FILE).write_text('&INPUTPP\n/\n')
+    (job_id,) = run.group('g1', Launch.initial(SYSTEM, calc_id))
+    run.poll(**{job_id: 'RUNNING'})
+    run.start(calc_id, job_id, output=pwo.pw_output(s, forces=pwo_forces(s)))
+    return s, calc_id, job_id
+
+
+def pw_ended(run, calc_id, s, begun=True):
+    """What the worker leaves once pw.x ended and was parsed, and, with ``begun``, pp.x started."""
+    path = run.path(calc_id)
+    (path / layout.STRUCTURE_OUT_FILE).write_text(extxyz_text(s))
+    run.finish(calc_id, status=store.Status('ended', 'converged', 'n/a', 'ok'),
+               stop_reason='completed', clean_stop=True)
+    if begun:
+        record = run.record(calc_id)
+        attempt = dataclasses.replace(record.attempts[-1], density=store.DensityRun(
+            'pp.x', 'pp.x', store.AttemptFile('input.ppi'), store.AttemptFile('output.ppo')))
+        store.write_record(run.sdir, dataclasses.replace(record, attempts=(attempt,)))
+
+
+def test_pp_running_after_pw_is_running(run):
+    s, calc_id, job_id = density_calc(run)
+    pw_ended(run, calc_id, s)
+    (run.path(calc_id) / layout.PP_OUTPUT_FILE).write_text(PP_START)
+    before = run.record(calc_id)
+    state = run.reconcile(calc_id)
+    assert (state.state, state.fixed) == ('running', False)
+    assert state.reason.startswith(f'charge density of attempt 1 being written: job {job_id} '
+                                   'RUNNING')
+    assert run.record(calc_id) == before
+
+
+def test_pp_over_with_the_job_gives_the_state(run):
+    s, calc_id, job_id = density_calc(run)
+    pw_ended(run, calc_id, s)
+    path = run.path(calc_id)
+    (path / layout.PP_OUTPUT_FILE).write_text(PP_DONE)
+    (path / layout.DENSITY_FILE).write_text(charge_files.structure_filplot(s))
+    run.poll(60, **{job_id: 'TIMEOUT'})
+    state = run.reconcile(calc_id)
+    assert (state.state, state.fixed) == ('completed', True)
+    record = run.record(calc_id)
+    assert record.status == store.Status('ended', 'converged', 'n/a', 'ok', 'ok')
+    run_ = record.attempts[-1].density
+    assert (run_.exit_code, run_.error) == (None, None)
+    assert run_.density == store.AttemptFile('density.filplot',
+                                             store.file_digest(path / layout.DENSITY_FILE))
+    assert record.is_complete
+
+
+@pytest.mark.parametrize('begun, output, error', [
+    (True, PP_START, 'pp.x did not close its run (no "JOB DONE.")'),
+    (True, None, 'output.ppo not read: '),
+    (False, None, 'pp.x did not run: the worker stopped after pw.x (job COMPLETED)'),
+])
+def test_pp_stopped_with_the_job(run, caplog, begun, output, error):
+    s, calc_id, job_id = density_calc(run)
+    pw_ended(run, calc_id, s, begun)
+    if output is not None:
+        (run.path(calc_id) / layout.PP_OUTPUT_FILE).write_text(output)
+    run.poll(60, **{job_id: 'COMPLETED'})
+    assert run.reconcile(calc_id).state == 'completed'
+    record = run.record(calc_id)
+    assert record.status.density == 'failed'
+    assert record.attempts[-1].density.error.startswith(error)
+    assert store.reuse_problem(record, record.fingerprint).startswith(
+        f'charge density failed: {error}')
+    assert 'charge density of attempt 1 not usable' in caplog.text
+
+
+def test_pw_fixed_from_its_output_leaves_the_density_failed(run):
+    s, calc_id, job_id = density_calc(run)
+    run.poll(60, **{job_id: 'TIMEOUT'})  # killed before the worker recorded the end of pw.x
+    assert run.reconcile(calc_id).state == 'completed'
+    record = run.record(calc_id)
+    assert record.status == store.Status('ended', 'converged', 'n/a', 'ok', 'failed')
+    assert record.attempts[-1].density == store.DensityRun(
+        'pp.x', error='pp.x did not run: the worker stopped before recording the end of pw.x '
+                      '(job TIMEOUT)')
+
+
+def test_calculation_without_density_is_not_post_processed(run):
+    calc_id, job_id = started(run, 'TIMEOUT', output=SCF_DONE)
+    run.reconcile(calc_id)
+    record = run.record(calc_id)
+    assert record.status.density is None and record.attempts[-1].density is None
 
 
 # --- requeued jobs ---------------------------------------------------------------------

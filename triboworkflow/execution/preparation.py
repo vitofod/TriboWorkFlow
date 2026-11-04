@@ -8,8 +8,9 @@ A calculation is given as the settings make it now, nothing written (e.g.
 of its structure, its record before any attempt, and the changes made to the
 settings. ``prepare_calculations`` writes, in
 ``<run>/systems/<system>/<step>/<label>/``, ``input.pwi``,
-``structure_in.extxyz`` and, last, ``record.json``: a directory with the
-first two files and no record is a preparation interrupted, written again.
+``structure_in.extxyz``, ``input.ppi`` for a calculation that also gives the
+charge density, and, last, ``record.json``: a directory with those files and
+no record is a preparation interrupted, written again.
 
 What is already on disk is compared first (``check_calculations``), and
 nothing is overwritten:
@@ -22,9 +23,10 @@ nothing is overwritten:
   one requested;
 - ``changed``: another fingerprint, a record that cannot be read, an input
   that differs elsewhere (e.g. changed by hand), an extxyz whose cell,
-  positions, labels or constraints differ from the input, a file missing, or
-  a directory without record that holds other files. The preparation stops
-  with the list of these calculations, and writes nothing.
+  positions, labels or constraints differ from the input, a pp.x input that
+  differs or is there for a calculation without charge density, a file
+  missing, or a directory without record that holds other files. The
+  preparation stops with the list of these calculations, and writes nothing.
 
 The changes made to the settings in a new input (e.g. ``nstep = 1`` in an
 scf) are logged, one line per calculation and change, with the values.
@@ -61,8 +63,8 @@ from triboworkflow.core.store.record import RECORD_FILE, split_calc_id
 from triboworkflow.core.structures import StructureError
 from triboworkflow.engines.qe.prepare import qe_calculation
 
-from .layout import (CLAIM_FILE, INPUT_FILE, OUTDIR, STRUCTURE_IN_FILE, calc_dir, calc_prefix,
-                     system_dir)
+from .layout import (CLAIM_FILE, DENSITY_FILE, INPUT_FILE, OUTDIR, PP_INPUT_FILE,
+                     STRUCTURE_IN_FILE, calc_dir, calc_prefix, system_dir)
 from .reconcile import read_groups
 from .replacement import new_replacement, retired_launches, unfinished
 
@@ -72,7 +74,7 @@ CHECK_KINDS = ('new', 'interrupted', 'current', 'kept', 'changed')
 REPLACED_KINDS = ('kept', 'changed')
 
 # Files that a preparation writes before the record.
-_PREPARED_FILES = (INPUT_FILE, STRUCTURE_IN_FILE)
+_PREPARED_FILES = (INPUT_FILE, STRUCTURE_IN_FILE, PP_INPUT_FILE)
 
 
 class PreparationError(ValueError):
@@ -114,18 +116,26 @@ class CalcCheck:
     warnings: tuple = ()
 
 
-def workflow_calculation(system, calc_id, calc_type, structure, kpoints, settings):
+def workflow_calculation(system, calc_id, calc_type, structure, kpoints, settings,
+                         density=False):
     """A pw.x calculation of the workflows, with its own ``prefix`` and ``outdir``.
 
     ``qe_calculation`` with ``prefix = calc_prefix(calc_id)`` and ``outdir =
-    OUTDIR``; the other parameters are the same.
+    OUTDIR``; the other parameters are the same. With ``density`` (decided
+    by the step) the calculation also gives the charge density, which pp.x
+    writes in ``DENSITY_FILE``.
     """
     return qe_calculation(system, calc_id, calc_type, structure, kpoints, settings,
-                          calc_prefix(calc_id), OUTDIR)
+                          calc_prefix(calc_id), OUTDIR, DENSITY_FILE if density else None)
 
 
 def _is_temporary(name):
     return name.startswith('.') and name.endswith('.tmp')
+
+
+def _pp_input_text(calc):
+    """Text of the pp.x input of a calculation that gives the charge density, else None."""
+    return getattr(calc, 'pp_input_text', None)
 
 
 def _check(run_dir, system, calc):
@@ -172,6 +182,15 @@ def _check(run_dir, system, calc):
                     warnings.append(f'{STRUCTURE_IN_FILE}: {", ".join(other) or "its text"} '
                                     'differ from the structure of the settings, not written in '
                                     'the input')
+    pp_path, pp_text = path / PP_INPUT_FILE, _pp_input_text(calc)
+    if pp_text is None:
+        if pp_path.exists():
+            reasons.append(f'{PP_INPUT_FILE} present, but the calculation gives no charge density')
+    elif not pp_path.is_file():
+        reasons.append(f'{PP_INPUT_FILE} missing')
+    elif pp_path.read_text(encoding='utf-8') != pp_text:
+        reasons.append(f'{PP_INPUT_FILE} differs from the one the settings give (changed by '
+                       'hand?)')
     if reasons:
         return CalcCheck(calc_id, 'changed', tuple(reasons), tuple(warnings))
     return CalcCheck(calc_id, 'kept' if warnings else 'current', (), tuple(warnings))
@@ -277,13 +296,17 @@ def prepare_calculations(run_dir, system, calcs, step=None):
 
 
 def _write(run_dir, system, calc):
-    """Write input, extxyz and, last, the record of a calculation; log its changes."""
+    """Write inputs, extxyz and, last, the record of a calculation; log its changes."""
     path = calc_dir(run_dir, system, calc.calc_id)
     path.mkdir(parents=True, exist_ok=True)
     write_text(path / INPUT_FILE, calc.input_text)
     write_text(path / STRUCTURE_IN_FILE, calc.structure_text)
-    record = dataclasses.replace(calc.record, files={'input': INPUT_FILE,
-                                                     'structure': STRUCTURE_IN_FILE})
+    files = {'input': INPUT_FILE, 'structure': STRUCTURE_IN_FILE}
+    pp_text = _pp_input_text(calc)
+    if pp_text is not None:
+        write_text(path / PP_INPUT_FILE, pp_text)
+        files['pp_input'] = PP_INPUT_FILE
+    record = dataclasses.replace(calc.record, files=files)
     write_record(system_dir(run_dir, system), record)
     for change in calc.changes:
         logger.warning('%s/%s: %s', system, calc.calc_id, change)

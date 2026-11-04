@@ -37,6 +37,13 @@ and its states, but it does not stand for its energy model, so it is never
 reused and its energies are never combined. A parsed output always leaves
 ``observed``, empty if the engine observes nothing.
 
+A calculation may also give the charge density (``density``): after its
+engine, the worker runs a post-processing program (pp.x for pw.x) that
+writes it. Its outcome is a state of its own (``Status.density``), and the
+record of such a calculation is complete only when the density was written
+too; the program, its files and its outcome are kept with the attempt
+(``DensityRun``).
+
 The states, the results and ``observed`` describe the last run. Each run is
 also kept as an ``Attempt``: where and when it ran, with which command,
 jobscript and time limit, the input and the output with their digests, the
@@ -62,23 +69,26 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from .atomic import StoreError, check_json_value, read_json, write_json
 from .fingerprint import canonical_json, check_fingerprint, content_digest
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 RECORD_FILE = 'record.json'
 
 PROCESS_STATES = ('pending', 'running', 'ended', 'crashed', 'killed')
 SCF_STATES = ('converged', 'not_converged')
 GEOMETRY_STATES = ('converged', 'not_converged', 'max_steps', 'n/a')
 PARSING_STATES = ('ok', 'failed')
+DENSITY_STATES = ('ok', 'failed')
 SUMMARY_STATES = ('pending', 'running', 'completed', 'not_converged', 'crashed', 'unknown')
 
-_RECORD_KEYS = ('schema_version', 'calc_id', 'system', 'step', 'label', 'calc_type', 'engine',
-                'energy_model', 'fingerprint', 'status', 'attempts', 'results', 'observed',
-                'files')
-_STATUS_KEYS = ('process', 'scf', 'geometry', 'parsing')
+_RECORD_KEYS = ('schema_version', 'calc_id', 'system', 'step', 'label', 'calc_type', 'density',
+                'engine', 'energy_model', 'fingerprint', 'status', 'attempts', 'results',
+                'observed', 'files')
+_STATUS_KEYS = ('process', 'scf', 'geometry', 'parsing', 'density')
 _ATTEMPT_KEYS = ('n', 'job_id', 'host', 'started', 'ended', 'max_seconds', 'max_seconds_cap',
                  'run_command', 'jobscript_digest', 'input', 'output', 'exit_code', 'job_state',
                  'stop_reason',
-                 'clean_stop', 'parse_error', 'status', 'remedies', 'restart', 'outdir_removal')
+                 'clean_stop', 'parse_error', 'status', 'remedies', 'restart', 'outdir_removal',
+                 'density')
+_DENSITY_RUN_KEYS = ('program', 'command', 'input', 'output', 'density', 'exit_code', 'error')
 # Removal of the output directories of the previous attempts before an attempt
 # from scratch: begun and not known to be over, done, nothing to remove,
 # stopped by an error.
@@ -212,16 +222,22 @@ class Status:
         relaxation).
     parsing : str or None, optional
         Reading of the output: ``'ok'`` or ``'failed'``.
+    density : str or None, optional
+        Charge density of a calculation that gives it (``Record.density``):
+        ``'ok'`` (written and complete) or ``'failed'``; None until known,
+        and always for the other calculations.
     """
 
     process: str | None = None
     scf: str | None = None
     geometry: str | None = None
     parsing: str | None = None
+    density: str | None = None
 
     def __post_init__(self):
         for name, allowed in (('process', PROCESS_STATES), ('scf', SCF_STATES),
-                              ('geometry', GEOMETRY_STATES), ('parsing', PARSING_STATES)):
+                              ('geometry', GEOMETRY_STATES), ('parsing', PARSING_STATES),
+                              ('density', DENSITY_STATES)):
             value = getattr(self, name)
             if value is not None and value not in allowed:
                 raise StoreError(f'status.{name}: {value!r} is not one of '
@@ -230,7 +246,11 @@ class Status:
     @property
     def complete(self):
         """True when the process ended, the SCF and the geometry converged
-        (or the geometry does not apply) and the output was parsed."""
+        (or the geometry does not apply) and the output was parsed.
+
+        The charge density does not enter: ``Record.is_complete`` adds it for
+        the calculations that give it.
+        """
         return (self.process == 'ended' and self.scf == 'converged'
                 and self.geometry in ('converged', 'n/a') and self.parsing == 'ok')
 
@@ -243,8 +263,8 @@ class Status:
         ``'not_converged'`` (ended without convergence, whichever part did
         not converge), ``'crashed'`` (crashed or killed) or ``'unknown'``
         (end of the process not known). It describes the calculation, not the
-        reading of its output: ``parsing`` does not enter it. The separate
-        states tell the details.
+        reading of its output nor the post-processing: ``parsing`` and
+        ``density`` do not enter it. The separate states tell the details.
         """
         if self.process is None:
             return 'unknown'
@@ -258,7 +278,7 @@ class Status:
 
 def _status_dict(status):
     return {'process': status.process, 'scf': status.scf, 'geometry': status.geometry,
-            'parsing': status.parsing}
+            'parsing': status.parsing, 'density': status.density}
 
 
 @dataclass(frozen=True)
@@ -316,6 +336,66 @@ def _seconds(value, where):
     if type(value) not in (int, float) or not math.isfinite(value):
         raise StoreError(f'{where}: a finite number of seconds is required, not {value!r}')
     return value
+
+
+@dataclass(frozen=True)
+class DensityRun:
+    """The post-processing that wrote the charge density of an attempt.
+
+    Parameters
+    ----------
+    program : str
+        Program run after the engine (e.g. ``'pp.x'``).
+    command : str or None, optional
+        Command that ran it, up to the input file; None when not recorded.
+    input, output : AttemptFile or None, optional
+        Its input and the output it wrote.
+    density : AttemptFile or None, optional
+        The file of the charge density; None when none was written.
+    exit_code : int or None, optional
+        Exit status of the command, as seen by the worker; None when the
+        worker did not see it end.
+    error : str or None, optional
+        Why the charge density is not usable; given if and only if the
+        ``density`` state of the attempt is ``'failed'``.
+    """
+
+    program: str
+    command: str | None = None
+    input: AttemptFile | None = None
+    output: AttemptFile | None = None
+    density: AttemptFile | None = None
+    exit_code: int | None = None
+    error: str | None = None
+
+    def __post_init__(self):
+        _text(self.program, 'attempts.density.program')
+        _optional_text(self.command, 'attempts.density.command')
+        for name in ('input', 'output', 'density'):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, AttemptFile):
+                raise StoreError(f'attempts.density.{name}: an AttemptFile or None is required')
+        if self.exit_code is not None and type(self.exit_code) is not int:
+            raise StoreError(f'attempts.density.exit_code: an integer or null is required, '
+                             f'not {self.exit_code!r}')
+        _optional_text(self.error, 'attempts.density.error')
+
+    def to_dict(self):
+        """JSON object of the post-processing, with the keys in the order of the file."""
+        return {'program': self.program, 'command': self.command,
+                **{name: None if getattr(self, name) is None else getattr(self, name).to_dict()
+                   for name in ('input', 'output', 'density')},
+                'exit_code': self.exit_code, 'error': self.error}
+
+    @classmethod
+    def from_dict(cls, data):
+        """Post-processing from its JSON object, or None from null."""
+        if data is None:
+            return None
+        fields = dict(check_keys(data, _DENSITY_RUN_KEYS, 'attempts.density'))
+        for name in ('input', 'output', 'density'):
+            fields[name] = AttemptFile.from_dict(data[name])
+        return cls(**fields)
 
 
 @dataclass(frozen=True)
@@ -385,6 +465,10 @@ class Attempt:
         ``'absent'`` (nothing to remove) or ``'failed'`` (an error stopped it
         and the attempt did not run). None for a first attempt, an attempt
         that continues the previous one, or when not recorded.
+    density : DensityRun or None, optional
+        The post-processing that wrote the charge density, for a calculation
+        that gives it, once started; None otherwise. Required when
+        ``status.density`` is known.
     """
 
     n: int
@@ -407,6 +491,7 @@ class Attempt:
     remedies: dict = field(default_factory=dict)
     restart: dict | None = None
     outdir_removal: str | None = None
+    density: DensityRun | None = None
 
     def __post_init__(self):
         if type(self.n) is not int or self.n < 1:
@@ -448,6 +533,17 @@ class Attempt:
         if not isinstance(self.remedies, dict):
             raise StoreError('attempts.remedies: a JSON object is required')
         check_json_value(self.remedies, 'attempts.remedies')
+        if self.density is not None and not isinstance(self.density, DensityRun):
+            raise StoreError('attempts.density: a DensityRun or None is required')
+        if self.status.density is not None and self.density is None:
+            raise StoreError(f'attempts.density: null with status.density '
+                             f'{self.status.density!r}; the post-processing is recorded once '
+                             'its state is known')
+        error = None if self.density is None else self.density.error
+        if (error is not None) != (self.status.density == 'failed'):
+            raise StoreError(f'attempts.density.error: {error!r} with status.density '
+                             f'{self.status.density!r}; the reason is given if and only if the '
+                             'density failed')
         object.__setattr__(self, 'remedies', copy.deepcopy(self.remedies))
 
     def to_dict(self):
@@ -463,7 +559,8 @@ class Attempt:
                 'parse_error': self.parse_error, 'status': _status_dict(self.status),
                 'remedies': copy.deepcopy(self.remedies),
                 'restart': None if self.restart is None else dict(self.restart),
-                'outdir_removal': self.outdir_removal}
+                'outdir_removal': self.outdir_removal,
+                'density': None if self.density is None else self.density.to_dict()}
 
     @classmethod
     def from_dict(cls, data):
@@ -473,6 +570,7 @@ class Attempt:
         fields['input'] = AttemptFile.from_dict(data['input'])
         fields['output'] = AttemptFile.from_dict(data['output'])
         fields['status'] = Status(**check_keys(data['status'], _STATUS_KEYS, 'attempts.status'))
+        fields['density'] = DensityRun.from_dict(data['density'])
         return cls(**fields)
 
 
@@ -512,6 +610,11 @@ class Record:
     files : dict, optional
         {role: file name relative to the calculation directory}, e.g.
         ``{'input': 'input.pwi', 'output': 'output.pwo'}``.
+    density : bool, optional
+        Whether the calculation also gives the charge density, written by a
+        post-processing program after the engine. False by default; only
+        then ``status.density`` and those of the attempts stay null, and no
+        attempt has a ``DensityRun``.
 
     Raises
     ------
@@ -531,12 +634,15 @@ class Record:
     results: dict | None = None
     observed: dict | None = None
     files: dict = field(default_factory=dict)
+    density: bool = False
 
     def __post_init__(self):
         check_name(self.system, 'system')
         check_name(self.step, 'step')
         check_name(self.label, 'label')
         _text(self.calc_type, 'calc_type')
+        if type(self.density) is not bool:
+            raise StoreError(f'density: true or false is required, not {self.density!r}')
         if not isinstance(self.engine, Engine):
             raise StoreError('engine: an Engine is required')
         if not isinstance(self.energy_model, dict) or not self.energy_model:
@@ -552,6 +658,13 @@ class Record:
         numbers = [a.n for a in attempts]
         if numbers != list(range(1, len(attempts) + 1)):
             raise StoreError(f'attempts: numbered {numbers}, not 1, 2, ... in order')
+        if not self.density:
+            found = (['status.density'] if self.status.density is not None else []) + \
+                [f'attempts[{a.n}].density' for a in attempts
+                 if a.status.density is not None or a.density is not None]
+            if found:
+                raise StoreError(f'{", ".join(found)} given for a calculation that does not give '
+                                 'the charge density (density false)')
         if self.results is not None:
             if not isinstance(self.results, dict):
                 raise StoreError('results: a JSON object or null is required')
@@ -584,8 +697,12 @@ class Record:
 
     @property
     def is_complete(self):
-        """True when the states allow the results to be used (``Status.complete``)."""
-        return self.status.complete
+        """True when the states allow the results to be used.
+
+        ``Status.complete`` and, for a calculation that gives the charge
+        density, ``status.density`` ``'ok'``.
+        """
+        return self.status.complete and (not self.density or self.status.density == 'ok')
 
     @property
     def results_digest(self):
@@ -605,6 +722,7 @@ class Record:
             'step': self.step,
             'label': self.label,
             'calc_type': self.calc_type,
+            'density': self.density,
             'engine': {'name': self.engine.name, 'program': self.engine.program,
                        'version': self.engine.version},
             'energy_model': copy.deepcopy(self.energy_model),
@@ -649,7 +767,7 @@ class Record:
                          energy_model=data['energy_model'], fingerprint=data['fingerprint'],
                          status=Status(**status), attempts=tuple(attempts),
                          results=data['results'], observed=data['observed'],
-                         files=data['files'])
+                         files=data['files'], density=data['density'])
             if data['calc_id'] != record.calc_id:
                 raise StoreError(f'calc_id: {data["calc_id"]!r} is not "<step>/<label>" '
                                  f'= {record.calc_id!r}')
@@ -830,8 +948,12 @@ def reuse_problem(record, fingerprint):
         return 'no record'
     if record.fingerprint != fingerprint:
         return 'another fingerprint'
-    if not record.is_complete or record.results is None:
+    if not record.status.complete or record.results is None:
         return 'not complete or without results'
+    if not record.is_complete:
+        error = record.attempts[-1].density if record.attempts else None
+        why = f': {error.error}' if error is not None and error.error else ''
+        return f'charge density {record.status.density or "not written"}{why}'
     problem = restart_problem(record)
     if problem is not None:
         return problem
