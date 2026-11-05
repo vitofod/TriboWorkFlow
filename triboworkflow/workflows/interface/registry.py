@@ -8,11 +8,17 @@
 ``execution.orchestrator.Step`` built without arguments. Each step adds
 itself here once it is implemented; until then the command line answers that
 the step is not available, and nothing is prepared or submitted.
+
+In this version only ``match`` is available: a run lists only ``match`` in
+``[interface].steps``; with any other step the command line stops with
+``step '<name>' not available in this version`` before doing anything.
 """
 
 from triboworkflow.execution.orchestrator import Step
 
-STEPS: dict[str, type[Step]] = {}
+from .match import MatchStep
+
+STEPS: dict[str, type[Step]] = {'match': MatchStep}
 
 
 class StepNotAvailable(LookupError):

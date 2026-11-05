@@ -317,8 +317,8 @@ each run.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `slabs` | list | R | two `[[interface.slabs]]` entries: bottom slab, then top slab |
-| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `plotpes`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides |
+| `slabs` | list | R | two `[[interface.slabs]]` entries, slab 1 then slab 2: their order gives the interface id (`mid1_mid2`) and the strain weights (`strain_weight_1` goes with slab 1); the slab on top is decided by the matching (see below) |
+| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `plotpes`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. In this version only `match` is available: with any other step the command line stops with `step '<name>' not available in this version` |
 | `set_bm` | bool | `true` | strain weights from the bulk moduli of the two materials |
 | `engine` | str | `"qe"` | engine of the steps that run calculations |
 | `engines` | table | `{}` | per-step engine for `pes`, `adhesion`, `ppes`, `charge`; only `qe` for now |
@@ -330,9 +330,15 @@ each run.
 | `file` | str | R | slab structure, relative to the folder of the settings file; `""` is a placeholder. A pymatgen JSON slab is used as stored, any other file is turned into a slab ([structures.md](structures.md)) |
 | `mid` | str | R | material id; the interface id is `mid1_mid2` |
 | `miller` | 3 int | R | |
-| `formula` | str | — | |
-| `name` | str | — | tells apart homonyms (e.g. C diamond, C graphene) |
+| `formula` | str | — | given for both slabs together with `name`, or for neither |
+| `name` | str | — | tells apart homonyms (e.g. C diamond, C graphene); given for both slabs together with `formula`, or for neither |
 | `bulk_modulus` | float | R with `set_bm = true` | bulk modulus of the material in GPa; read only with `set_bm = true` |
+
+The ids of the interface are `mid1_mid2`, `formula1_formula2` and
+`name1_name2`. Without `formula` and `name` the interface takes the reduced
+formulas of the slabs and a name made of formula and Miller indices: Cu(111)
+and Al(111) give `Cu_Al` and `Cu111-Al111`. `formula` without `name`, or the
+reverse, or the ids of one slab only, are errors.
 
 With `set_bm = true` the workflow sets `strain_weight_1` and
 `strain_weight_2` to the two bulk moduli, replacing any value given in
@@ -340,24 +346,44 @@ With `set_bm = true` the workflow sets `strain_weight_1` and
 (default 1:1).
 
 `[interface.inter_params]`: the parameters of the interface matching; other
-keys are errors. Missing keys take the defaults below, filled by the
-vendored `read_default_params`; the values are checked by the vendored
-`InterfaceMatcher`.
+keys are errors. Missing keys take the defaults below; the values are
+checked by the vendored `InterfaceMatcher`, except `best_match`, checked
+here.
 
-| Key | Type | Default |
-|---|---|---|
-| `max_area` | float | 150 |
-| `interface_distance` | float | 2 |
-| `max_angle_tol` | float | 0.01 |
-| `max_length_tol` | float | 0.02 |
-| `max_area_ratio_tol` | float | 0.05 |
-| `strain_weight_1`, `strain_weight_2` | float | 1, 1 |
-| `best_match` | str | `"area"` |
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `max_area` | float | 160 | largest area of the interface cell, in angstrom^2 |
+| `interface_distance` | float | 2 | distance between the two slabs, in angstrom |
+| `max_angle_tol` | float | 0.4 | tolerance on the angles of the lattice match, the same at every attempt |
+| `max_length_tol` | float | 0.02 | tolerance on the lengths of the lattice vectors |
+| `max_area_ratio_tol` | float | 0.05 | tolerance on the ratio of the areas of the two cells |
+| `strain_weight_1`, `strain_weight_2` | float | 1, 1 | weights of the strain of slab 1 and slab 2 |
+| `best_match` | str | `"area"` | the only value: the matching returns the match of smallest area |
 
-The interface generation of the workflow overwrites `max_angle_tol` with
-0.4 before matching, whatever its value.
+The matching (step `match`, [interface.md](interface.md)) puts on top the
+slab whose formula and Miller indices come first in alphabetical order (in
+the example, Al(111) on Cu(111)), whatever the order of `[[interface.slabs]]`; with the same
+formula and indices, slab 1 goes on top. When no match is found, `max_area`,
+`max_length_tol` and `max_area_ratio_tol` are multiplied by 1.01, then by
+1.02, and so on, until a match is found; when the factor reaches 1.5 the step
+stops with `Matching not converged`. `max_angle_tol` is never enlarged. The
+values used are written in `inter_params` of the document and in the message
+of the step.
+
+`max_angle_tol` has two meanings in the matching code, which uses it twice:
+in the search of the supercells it is relative (0.4 allows the angles of the
+two cells to differ by 40%), in the mapping of each slab to its supercell it
+is absolute, in degrees (0.4°).
 
 To remove: the bulk moduli replace the weights as in TribChem's
-`FT_StartInterfaceMatch.set_bulk_modulus`; the defaults are those of
-`highput/firetasks/defaults.json`; the forced 0.4 is in
-`highput/firetasks/slabs.py`.
+`FT_StartInterfaceMatch.set_bulk_modulus`; the keys left out take first
+160 for `max_area`, the default of TribChem's command line (Q23), and 0.4 for
+`max_angle_tol`, then the defaults of `highput/firetasks/defaults.json`
+(`max_area` 150 there). TribChem's Firetasks forced `max_angle_tol` to 0.4 at
+every attempt, so the 0.01 of its command line had no effect; here a value
+given is used at every attempt (DEV-01). `best_match = "mismatch"` had no
+effect in TribChem (the match of smallest area is always taken), and is an
+error here (DEV-34). The two meanings of `max_angle_tol` are those of
+pymatgen 2024.6.10 (`ZSLGenerator` and `Lattice.find_mapping`, A74).
+`formula` without `name` is refused by TribChem's own check of the inputs
+(A75).

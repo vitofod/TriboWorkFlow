@@ -6,7 +6,7 @@
 A run is the folder of its ``config.toml``; the system is the interface of
 its two slabs; the number of jobs per group comes from the command line,
 then from the settings, then from a question in a terminal, else an error;
-the steps come from the registry, empty in this version.
+the steps come from the registry, with only ``match`` in this version.
 """
 
 import io
@@ -78,8 +78,14 @@ def test_terminal_without_answer_is_an_error():
 def test_step_not_in_the_registry(tmp_path):
     with pytest.raises(StepNotAvailable, match="step 'pes' not available in this version"):
         get_step('pes')
-    with pytest.raises(StepNotAvailable, match="step 'match' not available"):
+    with pytest.raises(StepNotAvailable, match="step 'pes' not available"):
         build_orchestrator(write_run(tmp_path))
+
+
+def test_only_match_is_in_the_registry(tmp_path):
+    from triboworkflow.workflows.interface.match import MatchStep
+    assert type(get_step('match')) is MatchStep
+    assert build_orchestrator(write_run(tmp_path, steps=('match',))).order == ['match']
 
 
 def test_daemon_factory_takes_the_groups_of_start(tmp_path, fake_steps):

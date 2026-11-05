@@ -82,8 +82,8 @@ def load_run(run_dir):
 
 def system_name(settings):
     """System of the run: ``<mid1>_<mid2>`` of the two slabs."""
-    bottom, top = settings.interface.slabs
-    return f'{bottom.mid}_{top.mid}'
+    first, second = settings.interface.slabs
+    return f'{first.mid}_{second.mid}'
 
 
 def execution_of(settings):

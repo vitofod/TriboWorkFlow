@@ -505,7 +505,7 @@ def config_text(machine, case, system, steps, control, groups):
         for name in ('bottom', 'top'):
             parts.append(_toml_table('interface.slabs', {
                 'file': f'{STRUCTURES_DIR}/{name}.extxyz', 'mid': f'{system}111',
-                'formula': system, 'miller': [1, 1, 1]}, array=True))
+                'miller': [1, 1, 1]}, array=True))
     for name, values in _namelists(machine, control).items():
         if values:
             parts.append(_toml_table(f'namelists.{name}', values))

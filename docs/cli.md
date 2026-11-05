@@ -15,10 +15,11 @@ a command the help is printed and the code is 2. `triboworkflow <command>
 
 The steps themselves (`match`, `pes`, `plotpes`, `shear`, `adhesion`,
 `ppes`, `charge`) come from a registry that each step joins once it is
-implemented. Until then a command on a step answers
-`step 'pes' not available in this version`, and nothing is prepared or
-submitted; `check`, `status`, `stop` and the actions on jobs and groups work
-on any run.
+implemented. In this version only `match` is implemented
+([interface.md](interface.md)): a command on a run whose `[interface].steps`
+lists another step answers `step 'pes' not available in this version`, and
+nothing is prepared or submitted; `check`, `status`, `stop` and the actions on
+jobs and groups work on any run.
 
 ## The run
 

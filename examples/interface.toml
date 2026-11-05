@@ -21,27 +21,32 @@ engine = "qe"                      # Engine of the steps that run calculations.
 # engines = { pes = "qe" }         # Per-step engine: pes, adhesion, ppes, charge.
 set_bm = true                      # Strain weights = bulk moduli of the two materials.
 
-# Bottom slab first, then top slab.
+# The two slabs; the interface id is mid1_mid2. The slab on top is the one
+# whose formula and Miller indices come first alphabetically (here Al(111)),
+# whatever the order of this list. formula and name are given for both slabs
+# or for neither: here the interface takes Cu_Al and Cu111-Al111 from the slabs.
 [[interface.slabs]]
 file = "slabs/Cu111.extxyz"
 mid = "mp-30"
-formula = "Cu"
+# formula = "Cu"
+# name = "Cu-fcc"                  # Tells apart homonyms.
 miller = [1, 1, 1]
 bulk_modulus = 140.0               # GPa, bulk modulus of the material.
 
 [[interface.slabs]]
 file = "slabs/Al111.extxyz"
 mid = "mp-134"
-formula = "Al"
 miller = [1, 1, 1]
 bulk_modulus = 76.0                # GPa
 
-[interface.inter_params]           # Missing keys take the defaults of the matching.
-max_area = 150.0
-interface_distance = 2.0
+[interface.inter_params]           # Missing keys take the defaults (docs/configuration.md).
+max_area = 160.0                   # angstrom^2; enlarged, with the length and area ratio
+                                   # tolerances, at every new attempt of the matching.
+interface_distance = 2.0           # angstrom
+# max_angle_tol = 0.4              # Default; the same value at every attempt.
 max_length_tol = 0.02
 max_area_ratio_tol = 0.05
-best_match = "area"
+best_match = "area"                # The only criterion: the match of smallest area.
 
 [namelists.CONTROL]
 nstep = 150                        # Relax; recommended 150, at most 250. Raised by the relaunches.

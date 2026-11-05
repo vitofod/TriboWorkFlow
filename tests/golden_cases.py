@@ -4,7 +4,9 @@ Every case calls TribChem code under a root package, 'tribchem' in the
 historic environment or 'triboworkflow.vendored' in the development one,
 with the arguments that the TribChem Firetasks and workflows pass, and
 returns plain JSON data. The custom_slab cases instead compare a Firetask that
-is not vendored (FT_StoreCustomSlab) with its port in triboworkflow.core.structures.
+is not vendored (FT_StoreCustomSlab) with its port in triboworkflow.core.structures,
+and the match_step cases the Firetasks of the matching with the step match
+(triboworkflow.workflows.interface.match).
 The golden values are the results obtained in the
 historic environment, stored in tests/golden/<case>.json:
 tests/historic/test_golden.py checks that they are reproduced there and
@@ -557,6 +559,161 @@ def case_custom_slab(tc, name):
     return {'slab': slab.as_dict(), 'labels': slab.labels}
 
 
+# Step match: the Firetasks of TribChem (historic) and the step of
+# triboworkflow (port) on the same slabs and parameters, compared through the
+# database calls that they make. The matching parameters are those that
+# TribChem's command line passes to FT_StartInterfaceMatch
+# (core/cli/calc_interface_cli.py:151-167: floats, best_match dropped), with
+# max_angle_tol = 0.4, the value that the historic Firetasks use at every
+# attempt and the default of the port (DEV-01).
+MATCH_CLI = {'max_area': 160.0, 'interface_distance': 2.0, 'max_angle_tol': 0.4,
+             'max_length_tol': 0.02, 'max_area_ratio_tol': 0.05}
+MATCH_MIDS = {'cu111': 'mp-30', 'al111': 'mp-134', 'pt111': 'mp-126', 'ag111': 'mp-124'}
+MATCH_MODULI = {'cu111': 140.0, 'al111': 76.0, 'pt111': 230.0, 'ag111': 100.0}  # GPa
+MATCH_COLLECTION = 'PBE.interface_elements'
+# (slab 1, slab 2, inter_params, set_bm)
+MATCH_STEPS = {
+    'cu111_al111': ('cu111', 'al111', MATCH_CLI, True),
+    'al111_cu111': ('al111', 'cu111', MATCH_CLI, True),
+    'cu111_cu111': ('cu111', 'cu111', MATCH_CLI, True),
+    # Larger tolerances: with those of the command line the match has 150
+    # atoms, and the high-symmetry points take minutes.
+    'pt111_ag111': ('pt111', 'ag111', MATCH_CLI | {'max_length_tol': 0.05,
+                                                   'max_area_ratio_tol': 0.1}, False),
+    'cu111_al111_enlarged': ('cu111', 'al111', MATCH_CLI | {'max_area': 20.0}, True),
+    'cu111_al111_not_converged': ('cu111', 'al111', MATCH_CLI | {'max_area': 0.0}, True),
+}
+
+
+def match_step_historic(tc, names, inter_params, set_bm):
+    """FT_StartInterfaceMatch (inputs and document of the interface), then the
+    two Firetasks of InterfaceWF.match_interface, each on its own copy of the
+    parameters as FireWorks gives them, with the database calls recorded.
+
+    The database returns the slabs (with comp_params), the bulk moduli and no
+    interface document. The comp_params of the inserted document are dropped:
+    the port does not write them (DEV-35). The recursion of
+    FT_GenerateInterface fails at the first failed attempt (A73): the final
+    parameters come from the recursion of FT_GetHighSymmetryPts (DEV-33),
+    and FT_GenerateInterface runs with them, matching at its first attempt.
+    """
+    run_ft = tc['highput.firetasks.run']
+    core = tc['highput.firetasks.core']
+    errors = tc['highput.utils.errors']
+    interface_wf = tc['highput.workflows.interface'].InterfaceWF
+    dicts = slab_dicts()
+    mids = [MATCH_MIDS[n] for n in names]
+    calls = []
+
+    def query_db(collection, db_file=None, database=None, entry=None, fltr=None, **kwargs):
+        if collection in ('slabs_1', 'slabs_2'):
+            return {'comp_params': COMP_PARAMS}, copy.deepcopy(dicts[names[int(collection[-1]) - 1]])
+        if collection == 'PBE.bulk_elements':
+            return None, MATCH_MODULI[names[mids.index(fltr['mid'])]]
+        if collection == MATCH_COLLECTION:
+            return None, None
+        raise AssertionError(f'unexpected query of {collection}')
+
+    def update_db(self, data, collection, entry=None, db_file=None, database=None, fltr=None,
+                  update_op='$set', upsert=False, to_mongodb=True, **kwargs):
+        calls.append({'call': 'update_db', 'data': copy.deepcopy(data), 'collection': collection,
+                      'entry': copy.deepcopy(entry), 'fltr': copy.deepcopy(fltr),
+                      'update_op': update_op, 'to_mongodb': to_mongodb})
+
+    def insert_db(self, field, collection, db_file=None, database=None, duplicates=False,
+                  message=None):
+        field = copy.deepcopy(field)
+        field.pop('comp_params')
+        calls.append({'call': 'insert_db', 'field': field, 'collection': collection})
+
+    saved = core.FireTaskTribChem.update_db, core.FireTaskTribChem.insert_db
+    core.FireTaskTribChem.update_db, core.FireTaskTribChem.insert_db = update_db, insert_db
+    try:
+        start = run_ft.FT_StartInterfaceMatch(
+            mid=mids, miller=[[1, 1, 1], [1, 1, 1]], collection_slab1='slabs_1',
+            collection_slab2='slabs_2', collection_inter=MATCH_COLLECTION,
+            inter_params=copy.deepcopy(inter_params), set_bm=set_bm, db_file='golden')
+        start.query_db = query_db
+        params = start.read_runtask('StartInterfaceMatch', {})
+        errors.InterfaceMatchError.check_inputs(params)
+        params = start.query_structure(params)
+        start.set_interface_document(params)
+        wf = start.run_func(interface_wf.match_interface, **params)
+        tasks = {type(t).__name__: t for fw in wf.fws for t in fw.tasks}
+        generate = copy.deepcopy(tasks['FT_GenerateInterface'])
+        highsym = copy.deepcopy(tasks['FT_GetHighSymmetryPts'])
+        probe = copy.deepcopy(tasks['FT_GetHighSymmetryPts'])
+        probe_params = probe.read_runtask('GetHighSymmetryPts', {})
+        try:
+            probe.generate_interface(probe_params)
+        except errors.InterfaceMatchError as error:
+            return {'calls': calls, 'error': type(error).__name__, 'message': str(error)}
+        generate['inter_params'] = probe_params['inter_params']
+        generate.run_task({})
+        highsym.run_task({})
+    finally:
+        core.FireTaskTribChem.update_db, core.FireTaskTribChem.insert_db = saved
+    return {'calls': calls}
+
+
+def match_step_port(names, inter_params, set_bm):
+    """The inputs of the step from settings with the slabs written to files,
+    then run_match on a store that records the database calls."""
+    import tomllib
+
+    from triboworkflow.core.settings.loader import settings_from_dict
+    from triboworkflow.core.store import SystemDocument
+    from triboworkflow.core.store.legacy import LegacyStore
+    from triboworkflow.workflows.interface import match as step
+
+    class Recording(LegacyStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = []
+
+        def update_db(self, data, collection, *, entry=None, fltr=None, update_op='$set',
+                      to_mongodb=True):
+            self.calls.append({'call': 'update_db', 'data': copy.deepcopy(data),
+                               'collection': collection, 'entry': copy.deepcopy(entry),
+                               'fltr': copy.deepcopy(fltr), 'update_op': update_op,
+                               'to_mongodb': to_mongodb})
+            super().update_db(data, collection, entry=entry, fltr=fltr, update_op=update_op,
+                              to_mongodb=to_mongodb)
+
+        def insert_db(self, field, collection, *, duplicates=False):
+            self.calls.append({'call': 'insert_db', 'field': copy.deepcopy(field),
+                               'collection': collection})
+            super().insert_db(field, collection, duplicates=duplicates)
+
+    data = tomllib.loads((ROOT / 'examples' / 'interface.toml').read_text(encoding='utf-8'))
+    dicts = slab_dicts()
+    slabs = []
+    for i, name in enumerate(names, 1):
+        Path(f'slab_{i}.json').write_text(json.dumps(dicts[name]))
+        slab = {'file': f'slab_{i}.json', 'mid': MATCH_MIDS[name], 'miller': [1, 1, 1]}
+        if set_bm:
+            slab['bulk_modulus'] = MATCH_MODULI[name]
+        slabs.append(slab)
+    data['interface'].update({'slabs': slabs, 'set_bm': set_bm, 'steps': ['match'],
+                              'inter_params': dict(inter_params)})
+    inputs = step.match_inputs(settings_from_dict(data))
+    store = Recording('.', SystemDocument(), step.COLLECTION)
+    try:
+        step.run_match(inputs, store)
+    except step.InterfaceMatchError as error:
+        return {'calls': store.calls, 'error': type(error).__name__, 'message': str(error)}
+    return {'calls': store.calls}
+
+
+def case_match_step(tc, name):
+    """Database calls of the step match: document, interface, parameters, points."""
+    slab_1, slab_2, inter_params, set_bm = MATCH_STEPS[name]
+    names = [slab_1, slab_2]
+    if tc.root == HISTORIC:
+        return match_step_historic(tc, names, inter_params, set_bm)
+    return match_step_port(names, inter_params, set_bm)
+
+
 # Charge density. The workflow reads three densities on the same grid and in
 # the same cell (interface, bottom slab, top slab), averages them along each
 # axis and integrates |interface - bottom - top| (chgcar_integrator, on
@@ -797,6 +954,8 @@ CASES['uber_ppes_data'] = (case_uber, {})
 CASES['uber0_cu111'] = (case_uber0, {})
 for _name in CUSTOM_SLABS:
     CASES[f'custom_slab_{_name}'] = (case_custom_slab, {'name': _name})
+for _name in MATCH_STEPS:
+    CASES[f'match_step_{_name}'] = (case_match_step, {'name': _name})
 for _cell in CHARGE_CELLS:
     for _case, _func in (('chgcar_average', case_chgcar_average),
                          ('chgcar_displacement', case_chgcar_displacement),

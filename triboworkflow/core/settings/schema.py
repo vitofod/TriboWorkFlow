@@ -60,6 +60,15 @@ QE_VERSION_FORMAT = re.compile(r'[0-9]+\.[0-9]+(\.[0-9]+)?')
 INTERFACE_STEPS = ('match', 'pes', 'plotpes', 'shear', 'adhesion', 'ppes', 'charge')
 # Interface steps that run calculations; match, plotpes and shear only analyse.
 STEPS_WITH_ENGINE = ('pes', 'adhesion', 'ppes', 'charge')
+# Defaults of [interface.inter_params] that the workflow sets before those of
+# the matching: the largest area of the interface cell (angstrom^2) and the
+# angle tolerance, used unchanged at every attempt of the matching.
+# To remove: 160 is the default of TribChem's command line
+# (core/cli/calc_interface_cli.py), which the historic runs used; 0.4 is the
+# value that FT_GenerateInterface forced at every attempt.
+INTER_PARAMS_DEFAULTS = {'max_area': 160.0, 'max_angle_tol': 0.4}
+# Criteria of best_match: the matching returns the match of smallest area.
+BEST_MATCH = ('area',)
 
 # &CONTROL keys of a single calculation: in the workflow the code sets them
 # for every calculation (own prefix and outdir, calculation from calc_type).
@@ -589,7 +598,10 @@ class SlabParams:
     miller : list of int
         Miller indices of the surface.
     formula, name : str or None
-        Further identifiers (``name`` tells apart homonyms).
+        Further identifiers (``name`` tells apart homonyms), given for both
+        slabs or for neither; when not given, the interface takes the reduced
+        formula of each slab and a name made of formula and Miller indices
+        (e.g. ``Cu_Al`` and ``Cu111-Al111``).
     bulk_modulus : float or None
         Bulk modulus of the material in GPa, used with ``set_bm = true``.
     """
@@ -610,28 +622,38 @@ class SlabParams:
 class InterParams:
     """``[interface.inter_params]``: parameters of the interface matching.
 
-    Missing keys take the defaults of the matching (``given`` returns only the
-    keys set here); the matching itself checks the values.
+    ``given`` returns only the keys set here. The keys left out take the
+    defaults of the workflow (``INTER_PARAMS_DEFAULTS``: ``max_area`` and
+    ``max_angle_tol``), then those of the matching. The matching itself checks
+    the values, except ``best_match``, which is checked here.
 
     Attributes
     ----------
     max_area : float or None
-        Largest area of the interface cell.
+        Largest area of the interface cell, in angstrom^2.
     interface_distance : float or None
-        Distance between the two slabs.
-    max_angle_tol, max_length_tol, max_area_ratio_tol : float or None
-        Tolerances of the lattice match.
+        Distance between the two slabs, in angstrom.
+    max_angle_tol : float or None
+        Tolerance on the angles of the lattice match. The same value is used
+        at every attempt of the matching, also when the other tolerances are
+        enlarged.
+    max_length_tol, max_area_ratio_tol : float or None
+        Tolerances of the lattice match, enlarged at every attempt.
     strain_weight_1, strain_weight_2 : float or None
         Weights of the strain of the two slabs.
     best_match : str or None
-        Criterion to choose among the matches.
+        Criterion to choose among the matches: only ``'area'``, the match of
+        smallest area, which the matching always returns.
 
     Notes
     -----
     To remove: these are the keys of TribChem's ``inter_params``; the defaults
-    are those of ``highput/firetasks/defaults.json``, filled by the vendored
+    of the keys not in ``INTER_PARAMS_DEFAULTS`` are those of
+    ``highput/firetasks/defaults.json``, filled by the vendored
     ``read_default_params`` as ``FT_StartInterfaceMatch`` does, and the values
-    are checked by the vendored ``InterfaceMatcher``.
+    are checked by the vendored ``InterfaceMatcher``. ``best_match =
+    'mismatch'`` had no effect there (``ZSLGenerator`` called with
+    ``lowest=True`` returns the smallest area first).
     """
 
     max_area: float | None = None
@@ -653,6 +675,23 @@ class InterParams:
         """
         return {k: v for k, v in asdict(self).items() if v is not None}
 
+    def requested(self):
+        """The keys set in the settings, with the defaults of the workflow.
+
+        Returns
+        -------
+        dict
+            ``INTER_PARAMS_DEFAULTS`` updated with ``given``; the matching
+            fills the keys still missing with its own defaults.
+        """
+        return INTER_PARAMS_DEFAULTS | self.given()
+
+    def check(self, path):
+        """Validate the table; errors name ``path``."""
+        if self.best_match is not None:
+            _choice(f'{path}.best_match', self.best_match, BEST_MATCH,
+                    '; the matching always returns the match of smallest area')
+
 
 @dataclass
 class InterfaceParams:
@@ -661,7 +700,10 @@ class InterfaceParams:
     Attributes
     ----------
     slabs : list of SlabParams
-        Bottom slab, then top slab.
+        The two slabs. Their order gives the interface id (``mid1_mid2``) and
+        the strain weights (``strain_weight_1`` goes with the first slab); the
+        slab on top is the one whose formula and Miller indices come first in
+        alphabetical order, whatever the order here.
     steps : list of str
         Steps to run, from ``INTERFACE_STEPS``, each at most once. A step runs
         once the steps it needs are done; among the steps that are ready, the
@@ -699,7 +741,18 @@ class InterfaceParams:
     def check(self, path):
         """Validate the table; errors name ``path``."""
         if len(self.slabs) != 2:
-            raise SettingsError(f'{path}.slabs', f'give two slabs, bottom then top; got {len(self.slabs)}')
+            raise SettingsError(f'{path}.slabs', f'give two slabs; got {len(self.slabs)}')
+        # The matching takes formula and name of both slabs, or none of them.
+        # To remove: the vendored InterfaceMatchError.check_inputs refuses the
+        # other cases, although generate_interface_ids could make the name
+        # from the formula (A75); here the error names the field.
+        ids =[(i, key) for i in range(2) for key in ('formula', 'name')]
+        missing = [(i, key) for i, key in ids if getattr(self.slabs[i], key) is None]
+        if missing and len(missing) < len(ids):
+            i, key = missing[0]
+            raise SettingsError(f'{path}.slabs[{i}].{key}',
+                                'give formula and name of both slabs, or none of them (the '
+                                'ids of the interface are then made from the slabs)')
         if not self.steps:
             raise SettingsError(f'{path}.steps', f'give at least one step of: {", ".join(INTERFACE_STEPS)}')
         for i, step in enumerate(self.steps):

@@ -1,0 +1,28 @@
+{
+ "calls": [
+  {
+   "call": "insert_db",
+   "field": {
+    "mid": "mp-30_mp-134",
+    "formula": "Cu_Al",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ],
+    "structure": {},
+    "name": "Cu111-Al111"
+   },
+   "collection": "PBE.interface_elements"
+  }
+ ],
+ "error": "InterfaceMatchError",
+ "message": "Error in generating the interface. Matching not converged"
+}

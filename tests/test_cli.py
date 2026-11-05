@@ -298,7 +298,7 @@ def test_start_reports_a_step_not_available(tmp_path, fake_scheduler_bin, capsys
     run_dir = write_run(tmp_path)
     assert cli(run_dir, 'start') == 1
     assert 'orchestrator.log' in capsys.readouterr().err
-    assert "step 'match' not available" in (run_dir / 'orchestrator.log').read_text()
+    assert "step 'pes' not available" in (run_dir / 'orchestrator.log').read_text()
     assert not (run_dir / 'orchestrator.pid').exists() and not (run_dir / 'run.lock').exists()
     assert not fake_scheduler_bin.exists()
 

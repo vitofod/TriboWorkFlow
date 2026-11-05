@@ -116,7 +116,8 @@ def load_workflow_slabs(settings):
     Returns
     -------
     list of WorkflowSlab
-        Bottom slab, then top slab.
+        In the order of ``[[interface.slabs]]``; the matching decides which
+        one is on top.
 
     Raises
     ------

@@ -16,8 +16,8 @@ import pytest
 
 from triboworkflow.core.settings import (Settings, SettingsError, load_settings,
                                          settings_from_dict, validate)
-from triboworkflow.core.settings.schema import (INTERFACE_STEPS, GenerationParams, InterParams,
-                                                key_name)
+from triboworkflow.core.settings.schema import (INTER_PARAMS_DEFAULTS, INTERFACE_STEPS,
+                                                GenerationParams, InterParams, key_name)
 from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
 from triboworkflow.vendored.highput.utils.tasktools import read_default_params
 
@@ -203,9 +203,11 @@ ACCEPTED = [
     ('bulk-modulus-unused', W, {'interface.set_bm': False}),
     ('weights-with-set-bm', W, {'interface.inter_params.strain_weight_1': 1.0}),
     ('inter-params-values', W, {'interface.inter_params.max_area': 0.0,
-                                'interface.inter_params.best_match': 'strain'}),
+                                'interface.inter_params.max_angle_tol': -1.0}),
     ('bulk-modulus-0', W, {'interface.slabs[0].bulk_modulus': 0.0}),
     ('miller-zero', W, {'interface.slabs[1].miller': [0, 0, 0]}),
+    ('formula-and-name', W, {'interface.slabs[0].formula': 'Cu', 'interface.slabs[0].name': 'a',
+                             'interface.slabs[1].formula': 'Al', 'interface.slabs[1].name': 'b'}),
     ('qe-without-manifest', W, {'qe.upf_md5': DELETE}),
     ('match-only-without-qe', W, {'qe': DELETE, 'interface.steps': ['match', 'shear']}),
     ('single-without-qe', S, {'qe': DELETE}),
@@ -332,12 +334,27 @@ def test_inter_params_keys_are_the_matching_keys():
 
 
 def test_inter_params_defaults_filled_by_read_default_params():
-    # The workflow fills the missing keys with read_default_params.
-    given = settings_from_dict(copy.deepcopy(WORKFLOW)).interface.inter_params.given()
-    params = read_default_params(str(MATCHING_DEFAULTS), 'inter_params', given)
-    assert params == {'max_area': 150.0, 'interface_distance': 2.0, 'max_angle_tol': 0.01,
+    # The workflow sets its own defaults, then read_default_params the others.
+    requested = InterParams().requested()
+    assert requested == INTER_PARAMS_DEFAULTS == {'max_area': 160.0, 'max_angle_tol': 0.4}
+    params = read_default_params(str(MATCHING_DEFAULTS), 'inter_params', requested)
+    assert params == {'max_area': 160.0, 'interface_distance': 2, 'max_angle_tol': 0.4,
                       'max_length_tol': 0.02, 'max_area_ratio_tol': 0.05,
                       'strain_weight_1': 1, 'strain_weight_2': 1, 'best_match': 'area'}
+
+
+def test_inter_params_given_replace_the_defaults_of_the_workflow():
+    data = edited(WORKFLOW, {'interface.inter_params': {'max_area': 150, 'max_angle_tol': 0.2}})
+    inter_params = settings_from_dict(data).interface.inter_params
+    assert inter_params.given() == {'max_area': 150.0, 'max_angle_tol': 0.2}
+    assert inter_params.requested() == {'max_area': 150.0, 'max_angle_tol': 0.2}
+
+
+def test_inter_params_of_the_example():
+    inter_params = settings_from_dict(copy.deepcopy(WORKFLOW)).interface.inter_params
+    assert inter_params.requested() == {'max_area': 160.0, 'max_angle_tol': 0.4,
+                                        'interface_distance': 2.0, 'max_length_tol': 0.02,
+                                        'max_area_ratio_tol': 0.05, 'best_match': 'area'}
 
 
 # --- errors -------------------------------------------------------------------------
@@ -459,8 +476,16 @@ ERRORS = [
      'expected str, got 1'),
     # [interface]
     ('one-slab', W, {'interface.slabs': WORKFLOW['interface']['slabs'][:1]}, 'interface.slabs',
-     'give two slabs, bottom then top; got 1'),
+     'give two slabs; got 1'),
     ('slab-key', W, {'interface.slabs[0].thickness': 3}, 'interface.slabs[0].thickness', 'unknown key'),
+    # formula and name of both slabs, or none of them.
+    ('formula-without-name', W, {'interface.slabs[0].formula': 'Cu', 'interface.slabs[1].formula': 'Al'},
+     'interface.slabs[0].name', 'give formula and name of both slabs, or none of them (the ids of '
+     'the interface are then made from the slabs)'),
+    ('name-without-formula', W, {'interface.slabs[0].name': 'a', 'interface.slabs[1].name': 'b'},
+     'interface.slabs[0].formula', 'give formula and name of both slabs, or none of them'),
+    ('ids-of-one-slab', W, {'interface.slabs[1].formula': 'Al', 'interface.slabs[1].name': 'b'},
+     'interface.slabs[0].formula', 'give formula and name of both slabs'),
     ('miller-length', W, {'interface.slabs[0].miller': [1, 1]}, 'interface.slabs[0].miller', 'three values'),
     ('engine', W, {'interface.engine': 'mace'}, 'interface.engine', 'not available yet'),
     ('engines-step', W, {'interface.engines': {'shear': 'qe'}}, 'interface.engines', "'shear' is not allowed"),
@@ -469,6 +494,13 @@ ERRORS = [
      'required with set_bm = true'),
     ('inter-params-key', W, {'interface.inter_params.vacuum': 15.0}, 'interface.inter_params.vacuum',
      'allowed keys: max_area, '),
+    # Only the match of smallest area is available.
+    ('best-match-mismatch', W, {'interface.inter_params.best_match': 'mismatch'},
+     'interface.inter_params.best_match',
+     "'mismatch' is not allowed; allowed values: 'area'; the matching always returns the match "
+     'of smallest area'),
+    ('best-match-other', W, {'interface.inter_params.best_match': 'strain'},
+     'interface.inter_params.best_match', "'strain' is not allowed"),
     # [qe]
     ('qe-version', W, {'qe.version': '7.2MaX'}, 'qe.version',
      "'7.2MaX' is not a version of pw.x: give major.minor or major.minor.patch"),
