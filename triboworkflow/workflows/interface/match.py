@@ -19,7 +19,8 @@ The work goes in this order:
 
 1. inputs (``match_inputs``): the slabs (``read_workflow_slab``); the
    matching parameters: the keys of ``[interface.inter_params]``, then the
-   defaults of the workflow (``INTER_PARAMS_DEFAULTS``), then those of the
+   defaults of the workflow (``INTER_PARAMS_DEFAULTS``: ``max_area`` 160.0,
+   ``interface_distance`` 2.0, ``max_angle_tol`` 0.4), then those of the
    matching; with ``set_bm`` the strain weights are the bulk moduli of the
    two slabs; the ids of the interface: ``mid`` is ``mid1_mid2``, ``formula``
    and ``name`` join those of the settings, or are made from the slabs (e.g.

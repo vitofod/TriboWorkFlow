@@ -61,12 +61,15 @@ INTERFACE_STEPS = ('match', 'pes', 'plotpes', 'shear', 'adhesion', 'ppes', 'char
 # Interface steps that run calculations; match, plotpes and shear only analyse.
 STEPS_WITH_ENGINE = ('pes', 'adhesion', 'ppes', 'charge')
 # Defaults of [interface.inter_params] that the workflow sets before those of
-# the matching: the largest area of the interface cell (angstrom^2) and the
-# angle tolerance, used unchanged at every attempt of the matching.
-# To remove: 160 is the default of TribChem's command line
-# (core/cli/calc_interface_cli.py), which the historic runs used; 0.4 is the
-# value that FT_GenerateInterface forced at every attempt.
-INTER_PARAMS_DEFAULTS = {'max_area': 160.0, 'max_angle_tol': 0.4}
+# the matching: the largest area of the interface cell (angstrom^2), the
+# distance between the two slabs (angstrom) and the angle tolerance, used
+# unchanged at every attempt of the matching.
+# To remove: 160.0 and 2.0 are the defaults of TribChem's command line, as
+# floats (entrypoints/parsers/utils.py:692, 696; core/cli/calc_interface_cli.py
+# :166-167), which the historic runs used; defaults.json has 150 and the
+# integer 2 (A76); 0.4 is the value that FT_GenerateInterface forced at every
+# attempt.
+INTER_PARAMS_DEFAULTS = {'max_area': 160.0, 'interface_distance': 2.0, 'max_angle_tol': 0.4}
 # Criteria of best_match: the matching returns the match of smallest area.
 BEST_MATCH = ('area',)
 
@@ -623,8 +626,9 @@ class InterParams:
     """``[interface.inter_params]``: parameters of the interface matching.
 
     ``given`` returns only the keys set here. The keys left out take the
-    defaults of the workflow (``INTER_PARAMS_DEFAULTS``: ``max_area`` and
-    ``max_angle_tol``), then those of the matching. The matching itself checks
+    defaults of the workflow (``INTER_PARAMS_DEFAULTS``: ``max_area``,
+    ``interface_distance`` and ``max_angle_tol``), then those of the
+    matching. The matching itself checks
     the values, except ``best_match``, which is checked here.
 
     Attributes

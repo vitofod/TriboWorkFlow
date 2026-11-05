@@ -336,18 +336,22 @@ def test_inter_params_keys_are_the_matching_keys():
 def test_inter_params_defaults_filled_by_read_default_params():
     # The workflow sets its own defaults, then read_default_params the others.
     requested = InterParams().requested()
-    assert requested == INTER_PARAMS_DEFAULTS == {'max_area': 160.0, 'max_angle_tol': 0.4}
+    assert requested == INTER_PARAMS_DEFAULTS == {'max_area': 160.0, 'interface_distance': 2.0,
+                                                  'max_angle_tol': 0.4}
     params = read_default_params(str(MATCHING_DEFAULTS), 'inter_params', requested)
-    assert params == {'max_area': 160.0, 'interface_distance': 2, 'max_angle_tol': 0.4,
+    assert params == {'max_area': 160.0, 'interface_distance': 2.0, 'max_angle_tol': 0.4,
                       'max_length_tol': 0.02, 'max_area_ratio_tol': 0.05,
                       'strain_weight_1': 1, 'strain_weight_2': 1, 'best_match': 'area'}
+    # Floats, as the historic command line passes them (the defaults file has the integer 2).
+    assert type(params['max_area']) is type(params['interface_distance']) is float
 
 
 def test_inter_params_given_replace_the_defaults_of_the_workflow():
     data = edited(WORKFLOW, {'interface.inter_params': {'max_area': 150, 'max_angle_tol': 0.2}})
     inter_params = settings_from_dict(data).interface.inter_params
     assert inter_params.given() == {'max_area': 150.0, 'max_angle_tol': 0.2}
-    assert inter_params.requested() == {'max_area': 150.0, 'max_angle_tol': 0.2}
+    assert inter_params.requested() == {'max_area': 150.0, 'interface_distance': 2.0,
+                                        'max_angle_tol': 0.2}
 
 
 def test_inter_params_of_the_example():

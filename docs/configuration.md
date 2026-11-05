@@ -352,8 +352,8 @@ here.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `max_area` | float | 160 | largest area of the interface cell, in angstrom^2 |
-| `interface_distance` | float | 2 | distance between the two slabs, in angstrom |
+| `max_area` | float | 160.0 | largest area of the interface cell, in angstrom^2 |
+| `interface_distance` | float | 2.0 | distance between the two slabs, in angstrom |
 | `max_angle_tol` | float | 0.4 | tolerance on the angles of the lattice match, the same at every attempt |
 | `max_length_tol` | float | 0.02 | tolerance on the lengths of the lattice vectors |
 | `max_area_ratio_tol` | float | 0.05 | tolerance on the ratio of the areas of the two cells |
@@ -377,9 +377,10 @@ is absolute, in degrees (0.4°).
 
 To remove: the bulk moduli replace the weights as in TribChem's
 `FT_StartInterfaceMatch.set_bulk_modulus`; the keys left out take first
-160 for `max_area`, the default of TribChem's command line (Q23), and 0.4 for
+160.0 for `max_area` and 2.0 for `interface_distance`, the defaults of
+TribChem's command line, which passes them as floats (Q23, A76), and 0.4 for
 `max_angle_tol`, then the defaults of `highput/firetasks/defaults.json`
-(`max_area` 150 there). TribChem's Firetasks forced `max_angle_tol` to 0.4 at
+(`max_area` 150 and `interface_distance` the integer 2 there). TribChem's Firetasks forced `max_angle_tol` to 0.4 at
 every attempt, so the 0.01 of its command line had no effect; here a value
 given is used at every attempt (DEV-01). `best_match = "mismatch"` had no
 effect in TribChem (the match of smallest area is always taken), and is an

@@ -20,8 +20,8 @@ soon as it starts.
    ([structures.md](structures.md)); a slab rotated to the frame of the
    workflow, or with data dropped, is reported with a warning. The matching
    parameters are the keys of `[interface.inter_params]`, then the defaults
-   (`max_area` 160, `max_angle_tol` 0.4, then the defaults of the matching
-   code); with `set_bm = true` the strain weights are the bulk moduli of the
+   (`max_area` 160.0, `interface_distance` 2.0, `max_angle_tol` 0.4, then the
+   defaults of the matching code); with `set_bm = true` the strain weights are the bulk moduli of the
    two slabs. The ids of the interface are `mid1_mid2`, `formula1_formula2`
    and `name1_name2`, or, without formula and name, made from the slabs
    (`Cu_Al`, `Cu111-Al111`).

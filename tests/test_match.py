@@ -248,10 +248,12 @@ def matching_parameters(**given):
 
 
 def test_defaults_of_the_matching_parameters():
-    assert matching_parameters() == {
-        'max_area': 160.0, 'interface_distance': 2, 'max_angle_tol': 0.4,
+    params = matching_parameters()
+    assert params == {
+        'max_area': 160.0, 'interface_distance': 2.0, 'max_angle_tol': 0.4,
         'max_length_tol': 0.02, 'max_area_ratio_tol': 0.05, 'strain_weight_1': 140.0,
         'strain_weight_2': 76.0, 'best_match': 'area'}
+    assert type(params['interface_distance']) is float
 
 
 def test_max_angle_tol_is_used_unchanged_at_every_attempt(monkeypatch):
