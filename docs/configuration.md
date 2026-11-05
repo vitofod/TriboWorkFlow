@@ -277,7 +277,8 @@ combined with others.
 ## `[generation]` (one calculation)
 
 Read only with `[structure]`, by `triboworkflow gen` (`cli.md`); in the
-workflow the file names are fixed.
+workflow the file names are fixed. With `[structure]` and no `[generation]`,
+every key takes its default.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|

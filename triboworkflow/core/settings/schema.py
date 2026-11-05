@@ -739,7 +739,8 @@ class Settings:
     interface : InterfaceParams or None
         Given for the interface workflow.
     generation : GenerationParams or None
-        Used with ``structure``.
+        Used with ``structure``; with ``structure`` and no ``[generation]``
+        the loader gives the defaults.
     execution : ExecutionParams or None
     qe : QEParams
         Expected version of pw.x and checksums of the UPF files.

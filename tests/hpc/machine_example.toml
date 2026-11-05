@@ -1,0 +1,57 @@
+# Author: Vito Foderà
+# Created: 2026-11-04
+#
+# Machine file of tests/hpc/qe_check.py: what the runs of the check take from
+# the HPC machine. Paths are relative to this file, or absolute. Fill in the
+# values marked <...>; the others are an example for a Slurm machine with QE
+# 7.2 from a module and mpirun as launcher.
+
+scheduler = "slurm"
+jobscript = "jobscript_example.sh"     # resources and environment, with {time}
+run_command = "mpirun -np 4 --map-by socket:PE=8 --rank-by core pw.x -nk 2"
+pp_command = "mpirun -np 4 --map-by socket:PE=8 --rank-by core pp.x"   # case density
+polling_interval = 120                 # seconds between two passes of the orchestrator
+# max_seconds_margin = 600             # seconds; 600 is the value to validate
+# job_report_wait = 3600
+
+[qe]
+version = "7.2"                        # as pw.x prints it
+pseudo_dir = "<pseudo_dir>"            # absolute path of the UPF files
+upf_md5 = "<pseudo_dir>/pseudo.md5"    # md5sum *.UPF > pseudo.md5, in pseudo_dir
+
+# Both species are needed: each run declares the other one without atoms.
+[species.Al]
+mass = 26.9815
+pseudopotential = "<UPF file of Al>"
+
+[species.Si]
+mass = 28.085
+pseudopotential = "<UPF file of Si>"
+
+[k_points]
+kdens = 5.0                            # k-points per 1/angstrom, as [k_points] kdens
+
+# Values of the namelists that replace the defaults of qe_check.py (see
+# NAMELIST_DEFAULTS there: ecutwfc 30, ecutrho 240, smearing mv 0.02,
+# conv_thr 1e-7, mixing_beta 0.4, nstep 150, disk_io low, ...).
+[namelists.SYSTEM]
+ecutwfc = 30.0
+ecutrho = 240.0
+
+# Structures (see STRUCTURE_DEFAULTS): layers of the small slabs (even for
+# Si), supercell and layers of the slab of the long calculations, vacuum on
+# each side, extra gap of the interface and shift of the top layer of the
+# slabs to relax, in angstrom.
+[structures]
+layers = 4
+big_size = [3, 3]
+big_layers = 6
+
+# Per case: walltime (seconds; the jobscript gets it as {time}), jobs per
+# group, and for the case restart the nstep of the relax stopped at
+# max_steps and the electron_maxstep of the one stopped with
+# scf_not_converged.
+[cases.restart]
+walltime = 720
+# nstep = 2
+# electron_maxstep = 6

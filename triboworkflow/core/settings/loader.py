@@ -21,6 +21,10 @@ converted by dacite. Differences:
   booleans are not accepted for numbers;
 - after dacite, ``validate`` runs the ``check`` methods of the schema, then
   logs as warnings the ``advice`` of the tables that give it.
+
+A file with ``[structure]`` and without ``[generation]`` gets the defaults of
+``[generation]`` (``GenerationParams()``), as documented for its keys; in the
+workflow ``[generation]`` is not read and stays as given.
 """
 
 import logging
@@ -33,7 +37,8 @@ from pathlib import Path
 from dacite import (Config, DaciteError, MissingValueError, WrongTypeError,
                     from_dict)
 
-from .schema import KEY_HINTS, SCHEMA_VERSION, Settings, SettingsError, join, walk
+from .schema import (KEY_HINTS, SCHEMA_VERSION, GenerationParams, Settings, SettingsError, join,
+                     walk)
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +111,8 @@ def settings_from_dict(data):
         raise SettingsError(error.field_path, 'required key missing') from None
     except DaciteError as error:
         raise SettingsError('', str(error)) from None
+    if settings.structure is not None and settings.generation is None:
+        settings.generation = GenerationParams()
     validate(settings)
     return settings
 

@@ -759,6 +759,16 @@ def test_gen_never_overwrites_unless_asked(tmp_path, capsys):
     assert main(['gen', str(path)]) == 0  # overwrite = true
 
 
+def test_gen_without_generation_takes_its_defaults(tmp_path, capsys):
+    path = copy_example(tmp_path, table=('[generation]\nfile_prefix = "input.pwi"\n'
+                                         'overwrite = false\n', ''))
+    assert '[generation]' not in path.read_text(encoding='utf-8')
+    assert main(['gen', str(path)]) == 0
+    assert (tmp_path / 'input.pwi').is_file() and (tmp_path / 'input.extxyz').is_file()
+    assert main(['gen', str(path)]) == 1  # overwrite = false
+    assert 'already exist and [generation].overwrite is false' in capsys.readouterr().err
+
+
 def test_gen_refuses_a_workflow_and_placeholders(tmp_path, capsys):
     root = Path(__file__).resolve().parents[1] / 'examples'
     assert main(['gen', str(root / 'interface.toml')]) == 1

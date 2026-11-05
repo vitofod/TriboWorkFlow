@@ -16,7 +16,8 @@ import pytest
 
 from triboworkflow.core.settings import (Settings, SettingsError, load_settings,
                                          settings_from_dict, validate)
-from triboworkflow.core.settings.schema import INTERFACE_STEPS, InterParams, key_name
+from triboworkflow.core.settings.schema import (INTERFACE_STEPS, GenerationParams, InterParams,
+                                                key_name)
 from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
 from triboworkflow.vendored.highput.utils.tasktools import read_default_params
 
@@ -117,6 +118,13 @@ def test_integers_accepted_for_reals_of_the_schema():
 
 def test_settings_from_dict_returns_settings():
     assert isinstance(settings_from_dict(copy.deepcopy(SINGLE)), Settings)
+
+
+def test_generation_defaults_with_structure_only():
+    single = settings_from_dict(edited(SINGLE, {'generation': DELETE}))
+    assert single.generation == GenerationParams()
+    assert single.generation.file_prefix == 'input.pwi' and single.generation.overwrite is False
+    assert settings_from_dict(copy.deepcopy(WORKFLOW)).generation is None
 
 
 def test_validate_after_changes():

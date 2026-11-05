@@ -676,3 +676,6 @@ python tests/hpc/hpc_check.py locks-report <dir>/locks
 
 `report` and `locks-report` exit with status 1 when a calculation ran twice
 or a lock had more than one owner.
+
+The check with real pw.x and pp.x calculations through the whole chain,
+`tests/hpc/qe_check.py`, is described in `hpc_check.md`.
