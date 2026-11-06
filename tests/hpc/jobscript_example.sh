@@ -17,6 +17,9 @@
 #SBATCH --account=<account>
 #SBATCH --partition=boost_usr_prod
 #SBATCH --qos=boost_qos_dbg
+# Round 5 of docs/hpc_check.md requeues a job: where Slurm does not requeue by
+# default (JobRequeue = 0 in "scontrol show config"), the jobscript of that run
+# needs "#SBATCH --requeue".
 # %j: each job of a group writes its own files.
 #SBATCH --output=job.%j.out
 #SBATCH --error=job.%j.err

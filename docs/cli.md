@@ -202,8 +202,9 @@ triboworkflow analyse ppes
   differs, with its attempts and `OUT/`, to `replaced/<system>/ppes/<k>/`,
   withdraws the groups listing them that never had a job submitted, and
   prepares the step again. It is refused, with the reason of each
-  calculation and nothing changed, while a worker holds a calculation (a
-  claim) or a job of a group listing it may still run: cancel the job, let
+  calculation and nothing changed, while a worker may still hold a
+  calculation (an empty claim, or one whose job is not over) or a job of a
+  group listing it may still run: cancel the job, let
   the orchestrator query the jobs again on the HPC machine (`start`), then
   repeat. A group submitted in part (some jobs over, the others refused, or
   held back since the settings changed) also stops it: it is not complete

@@ -36,8 +36,11 @@ A replacement, asked by the user, moves the directories of the calculations
 they are prepared again. Every check comes before any change, and the
 replacement is refused, with the reason of each calculation, if:
 
-- the calculation has a claim, even empty: a worker holds it, or stopped
-  right after taking it;
+- the calculation has a claim whose worker may still run: an empty claim or
+  one that cannot be read (a worker taking it, or stopped right after), a
+  claim without a job, or one whose job is not in a final state confirmed by
+  the last query of the job manager. A worker leaves its claim when the
+  calculation is over, so the claim of a job that ended does not stop it;
 - a group of jobs listing it may still run or submit a job: a job not in a
   final state confirmed by the last query, a submission of outcome not
   known or interrupted, jobs still to submit. A group submitted in part
@@ -63,6 +66,7 @@ from triboworkflow.core.store.record import RECORD_FILE, split_calc_id
 from triboworkflow.core.structures import StructureError
 from triboworkflow.engines.qe.prepare import qe_calculation
 
+from .archive import read_claim
 from .layout import (CLAIM_FILE, DENSITY_FILE, INPUT_FILE, OUTDIR, PP_INPUT_FILE,
                      STRUCTURE_IN_FILE, calc_dir, calc_prefix, system_dir)
 from .reconcile import read_groups
@@ -360,9 +364,9 @@ def start_replacement(run_dir, system, step, calcs, manager, command, at):
     for calc, check in targets:
         calc_id = calc.calc_id
         blockers = []
-        if (calc_dir(run_dir, system, calc_id) / CLAIM_FILE).exists():
-            blockers.append('it has a claim: a worker holds it, or stopped right after taking it '
-                            '("triboworkflow status" tells)')
+        claim = _claim_problem(calc_dir(run_dir, system, calc_id), manager)
+        if claim is not None:
+            blockers.append(claim)
         try:
             old = read_record(sdir, calc_id)
         except (OSError, ValueError):
@@ -399,6 +403,36 @@ def start_replacement(run_dir, system, step, calcs, manager, command, at):
     return replacement
 
 
+def _claim_problem(path, manager):
+    """Why the claim of the calculation in ``path`` stops its replacement, or None.
+
+    None also when there is no claim. The worker of the claim may still run
+    unless the claim names a job that the job manager follows and that is in
+    a final state confirmed by its last query (as ``JobManager.open_reason``
+    asks of the jobs of a group). The scheduler is not asked.
+    """
+    if not (path / CLAIM_FILE).exists():
+        return None
+    claim = read_claim(path / CLAIM_FILE)
+    if claim is None:
+        return ('its claim is empty or cannot be read: a worker is taking it, or stopped right '
+                'after ("triboworkflow status" tells)')
+    job_id = claim['job_id']
+    if job_id is None:
+        return 'its claim gives no job: whether its worker is over is not known'
+    job = manager.jobs.get(job_id)
+    if job is None:
+        return (f'job {job_id} of its claim is not followed by the job manager: whether its '
+                'worker is over is not known')
+    if not (job['reported'] is True and job['error'] is None
+            and manager.scheduler.is_final(job['state'])):
+        state = 'not queried yet' if job['state'] is None else job['state']
+        return (f'job {job_id} of its claim is not in a final state confirmed by the last query '
+                f'({state}); once it is over, query it again on the HPC machine (e.g. '
+                '"triboworkflow start")')
+    return None
+
+
 def _partly_submitted(name, step, submitted, missing, refused):
     """Why a group submitted in part stops a replacement, and how to go on."""
     why = 'its last submission was refused' if refused else 'held back since the settings changed'
@@ -417,13 +451,13 @@ def complete_replacement(run_dir, replacement, manager):
 
     A group already withdrawn and a directory already moved are left as
     they are. The claim of a calculation is checked again before its
-    directory moves.
+    directory moves, as when the replacement started.
 
     Raises
     ------
     ReplacementError
         If a directory and its copy both exist or are both missing, or a
-        calculation not moved yet has a claim now.
+        calculation not moved yet has a claim whose worker may still run.
     JobManagerError
         If a group to withdraw has a job now.
     """
@@ -442,8 +476,9 @@ def complete_replacement(run_dir, replacement, manager):
             continue
         if not source.exists():
             raise ReplacementError(f'{calc_id}: neither {source} nor its copy {target} exists')
-        if (source / CLAIM_FILE).exists():
-            raise ReplacementError(f'{calc_id}: a claim appeared in {source}; not moved')
+        problem = _claim_problem(source, manager)
+        if problem is not None:
+            raise ReplacementError(f'{calc_id}: {problem}; {source} not moved')
         target.parent.mkdir(parents=True, exist_ok=True)
         os.rename(source, target)
         logger.info('%s/%s: directory moved to %s', replacement.system, calc_id, target)

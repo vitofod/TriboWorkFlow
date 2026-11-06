@@ -540,7 +540,10 @@ again: to avoid it, restore those values before replacing.
 
 Every check comes before any change. The replacement is refused, with the
 reason of each calculation and nothing changed, when a calculation has a
-claim (even empty), or a group of jobs listing it may still run or submit a
+claim whose worker may still run (an empty claim or one that cannot be read,
+a claim without a job, or one whose job is not in a final state confirmed by
+the last query; the claim a worker leaves on a calculation over does not
+stop it), or a group of jobs listing it may still run or submit a
 job: a job not in a final state confirmed by the last query, a submission of
 outcome not known or interrupted (`pending`), jobs still to submit. A group
 submitted in part, with some jobs over and the others refused or held back,
@@ -652,7 +655,12 @@ python tests/hpc/hpc_check.py prepare <dir>/check_run --jobscript job.sh --launc
 Run it again on a new directory with `--submit` to submit the jobs. Each fake
 calculation runs through the launcher (`--launcher`, as in `run_command`)
 and exits on every rank with 0, 2, 3 or 255 in turn, the codes of pw.x 7.2.
-Once the jobs are over:
+Only rank 0 writes the output and the log of the run: the rank is the one
+the launcher gives, from `OMPI_COMM_WORLD_RANK`, `PMIX_RANK`, `PMI_RANK` or
+`SLURM_PROCID`, the first one set and not empty (under `mpirun` in a Slurm
+job, `SLURM_PROCID` is 0 in every process). Before an exit code other than
+0 the other ranks wait a few seconds, since the launcher stops the
+remaining processes once one exits so. Once the jobs are over:
 
 ```bash
 python tests/hpc/hpc_check.py report <dir>/check_run
@@ -660,8 +668,9 @@ python tests/hpc/hpc_check.py report <dir>/check_run
 
 The report says whether each calculation ran at most once, compares the
 exit code of the fake engine with the one the worker saw through the
-launcher, lists the `max_seconds` written for each job, and how the
-calculations were spread over jobs and hosts. With a short walltime (e.g.
+launcher, lists the `max_seconds` written for each job, how the
+calculations were spread over jobs and hosts, and the logs that cannot be
+read. With a short walltime (e.g.
 `--walltime 900 --margin 600 --sleep 120` and `--time=00:15:00`) each
 worker stops after three calculations for lack of time.
 
@@ -674,8 +683,8 @@ srun -N 2 -n 64 python tests/hpc/hpc_check.py locks <dir>/locks --method mkdir -
 python tests/hpc/hpc_check.py locks-report <dir>/locks
 ```
 
-`report` and `locks-report` exit with status 1 when a calculation ran twice
-or a lock had more than one owner.
+`report` and `locks-report` exit with status 1 when a calculation ran twice,
+a log cannot be read, or a lock had more than one owner.
 
 The check with real pw.x and pp.x calculations through the whole chain,
 `tests/hpc/qe_check.py`, is described in `hpc_check.md`.

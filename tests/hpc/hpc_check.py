@@ -14,10 +14,17 @@ Commands:
     when it ran; every rank exits with the code given to the calculation, in
     turn 0, 2, 3 and 255 (the codes of pw.x 7.2 for a run that ended, an SCF
     not converged, a relaxation not converged, a stop at ``max_seconds``).
+    The rank is the one the launcher gives (``RANK_VARIABLES``, the first
+    one set and not empty): under ``mpirun`` in a Slurm job every process
+    has the ``SLURM_PROCID`` of the batch step, 0. A launcher stops the other
+    processes once one exits with a code other than 0, so the other ranks
+    wait ``RANK_WAIT`` seconds before such an exit: rank 0 writes its output
+    and its log first. The log is written whole or not at all.
 ``report RUN``
     Once the jobs are over: whether each calculation ran exactly once, the
     exit codes seen by the worker against those of the fake engine, the
-    claims, and how the calculations were spread over jobs and hosts.
+    claims, how the calculations were spread over jobs and hosts, and the
+    logs that cannot be read.
 ``locks DIR``
     One contender of the lock check: tries to take every one of ``--names``
     locks with ``O_CREAT | O_EXCL`` or ``mkdir`` and writes those it took.
@@ -27,7 +34,7 @@ Commands:
     Whether each lock was taken by exactly one contender.
 
 The exit status of ``report`` and ``locks-report`` is 1 when a calculation
-ran twice or a lock had more than one owner.
+ran twice, a log cannot be read, or a lock had more than one owner.
 """
 
 import argparse
@@ -53,16 +60,19 @@ EXIT_CODES = (0, 2, 3, 255)
 FAKE_FILE = 'fake_pw.py'
 SPEC_FILE = 'fake.json'
 LOG_DIR = 'fake_log'
+# Variables of the rank, those of the launcher first: OpenMPI, PMIx, PMI, Slurm.
+RANK_VARIABLES = ('OMPI_COMM_WORLD_RANK', 'PMIX_RANK', 'PMI_RANK', 'SLURM_PROCID')
+# Seconds the ranks other than 0 wait before an exit code other than 0.
+RANK_WAIT = 5.0
 
-FAKE_ENGINE = '''\
+FAKE_ENGINE = f'''\
 # Fake pw.x of hpc_check.py: no calculation.
 import json, os, socket, sys, time
 args = sys.argv[1:]
 run_input = args[args.index('-in') + 1]
 with open('fake.json') as f:
     spec = json.load(f)
-rank = next((os.environ[v] for v in ('SLURM_PROCID', 'PMI_RANK', 'OMPI_COMM_WORLD_RANK',
-                                     'PMIX_RANK') if v in os.environ), '0')
+rank = next((os.environ[v] for v in {RANK_VARIABLES!r} if os.environ.get(v)), '0')
 started = time.time()
 time.sleep(spec['sleep'])
 if rank == '0':
@@ -70,13 +80,16 @@ if rank == '0':
                         if line.strip().lower().startswith('max_seconds')), None)
     sys.stdout.write(spec['output'])
     sys.stdout.flush()
-    entry = {'label': os.path.basename(os.getcwd()), 'host': socket.gethostname(),
+    entry = {{'label': os.path.basename(os.getcwd()), 'host': socket.gethostname(),
              'job_id': os.environ.get('SLURM_JOB_ID') or os.environ.get('PBS_JOBID'),
              'started': started, 'ended': time.time(), 'exit': spec['exit'],
-             'max_seconds': max_seconds}
+             'max_seconds': max_seconds}}
     path = os.path.join(spec['log'], entry['label'] + '.' + str(os.getpid()) + '.json')
-    with open(path, 'w') as f:
+    with open(path + '.tmp', 'w') as f:
         json.dump(entry, f)
+    os.replace(path + '.tmp', path)
+elif spec['exit'] != 0:
+    time.sleep(spec['rank_wait'])
 sys.exit(spec['exit'])
 '''
 
@@ -111,7 +124,7 @@ def prepare(args):
         (path / layout.INPUT_FILE).write_text(
             INPUT.format(prefix=layout.calc_prefix(calc_id), outdir=layout.OUTDIR))
         (path / SPEC_FILE).write_text(json.dumps({
-            'log': str(log_dir), 'sleep': args.sleep, 'output': OUTPUT,
+            'log': str(log_dir), 'sleep': args.sleep, 'rank_wait': RANK_WAIT, 'output': OUTPUT,
             'exit': EXIT_CODES[i % len(EXIT_CODES)]}))
         store.write_record(sdir, store.Record(
             system=SYSTEM, step=STEP, label=f'c{i:03d}', calc_type='fake',
@@ -143,8 +156,13 @@ def report(args):
     submitted = layout.job_dir(run_dir, 'check') / SUBMITTED_FILE
     job_ids = json.loads(submitted.read_text())['job_ids'] if submitted.exists() else []
     runs = defaultdict(list)
-    for path in (run_dir / LOG_DIR).glob('*.json'):
-        entry = json.loads(path.read_text())
+    unreadable = []
+    for path in sorted((run_dir / LOG_DIR).glob('*.json')):
+        try:
+            entry = json.loads(path.read_text())
+        except ValueError as err:
+            unreadable.append(f'{path.name} ({err})')
+            continue
         runs[entry['label']].append(entry)
     sdir = layout.system_dir(run_dir, SYSTEM)
     failed = False
@@ -195,9 +213,17 @@ def report(args):
     print(f'Runs of different jobs that overlap in time (consecutive pairs): {overlaps}')
     if not_run:
         print(f'Not run ({len(not_run)}): {", ".join(not_run)} (time over, or jobs not finished)')
-    print('RESULT: ' + ('a calculation ran more than once' if failed
-                        else 'each calculation ran at most once'))
-    return 1 if failed else 0
+    if unreadable:
+        print(f'Logs that cannot be read ({len(unreadable)}), e.g. of a rank 0 stopped while '
+              f'writing: {", ".join(unreadable)}')
+    if failed:
+        result = 'a calculation ran more than once'
+    elif unreadable:
+        result = 'a log of the fake engine cannot be read'
+    else:
+        result = 'each calculation ran at most once'
+    print(f'RESULT: {result}')
+    return 1 if failed or unreadable else 0
 
 
 def locks(args):

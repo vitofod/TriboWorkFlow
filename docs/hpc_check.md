@@ -52,6 +52,15 @@ machine file or of the UPF files shows there, before anything is submitted.
 Save the output of every command of the rounds, e.g. with
 `2>&1 | tee -a $R/<run>/qe_check/console.log`.
 
+With a QoS that limits the jobs of a user (e.g. a debug QoS with 2 jobs
+running and 4 submitted), run one run at a time and keep the jobs within the
+limit: `--groups` of `hpc_check.py prepare` and of `write` (e.g. `--groups 2`
+for the case `restart`, whose relaunches add groups). A submission that the
+scheduler refuses is never repeated automatically: the group waits for the
+user (`cli status` names it). `clear-refusal` is refused while the
+orchestrator runs: `$QC cli stop -r <run>`, `$QC cli clear-refusal <group>
+-r <run>`, `$QC cli start -r <run>`.
+
 ## 1. Fake engine (`hpc_check.py`)
 
 As in `execution.md`, with the launcher of the machine (`mpirun` here):
@@ -63,8 +72,10 @@ python $REPO/tests/hpc/hpc_check.py prepare $R/fake_short --jobscript <job15.sh>
 ```
 
 `<job.sh>` and `<job15.sh>` are jobscripts with a fixed `--time`
-(`00:30:00` and `00:15:00`), not the template with `{time}`. Locks on two nodes, within one allocation (`salloc -N 2 ...`), the
-contenders started by `mpirun` (or `srun` where it works):
+(`00:30:00` and `00:15:00`), not the template with `{time}`. Locks on two
+nodes, within one allocation (`salloc -N 2 ...`, or a job with `--nodes=2`
+running the commands below), the contenders started by `mpirun` (or `srun`
+where it works):
 
 ```bash
 mpirun -np 64 python $REPO/tests/hpc/hpc_check.py locks $R/locks --method excl --start-at $(( $(date +%s) + 30 ))
@@ -116,7 +127,11 @@ At the end: `$QC snapshot $R/chain_Al` and `$QC report $R/chain_Al`.
 The walltime of the case is the margin (600 s) plus about two minutes:
 `long_scf` and `long_relax` must run longer than that, so that pw.x stops at
 the `max_seconds` set by the walltime. If they end earlier, make them
-larger in `[structures]` (`big_size`, `big_layers`) of the machine file.
+larger in `[structures]` (`big_size`, `big_layers`) of the machine file. On
+GPUs the default structure ends early: on A100 GPUs `long_scf` ran past
+`max_seconds` only with `big_layers = 48` (432 atoms), and then needed more
+than three attempts, which the verdicts do not require. Use a copy of the
+machine file for this run.
 
 ```bash
 $QC write $M $R/restart --case restart --system Al
@@ -132,6 +147,11 @@ start`; at the end `snapshot` and `report`.
 
 ## 5. By hand: scancel, exit file, hold, requeue (case `manual`)
 
+Where Slurm does not requeue a job by default (`scontrol show config` gives
+`JobRequeue = 0`), add `#SBATCH --requeue` to `$R/manual/jobscript.sh` right
+after `write`, before the groups are written; otherwise `scontrol requeue`
+is refused.
+
 ```bash
 $QC write $M $R/manual --case manual --system Al
 $QC cli prepare adhesion -r $R/manual
@@ -145,11 +165,15 @@ $QC cli start -r $R/manual
 The claim of a calculation names the job that runs it
 (`systems/<system>/adhesion/<label>/claim`, `job_id`):
 
-- `to_cancel`: `scancel <its job>` while pw.x runs; the orchestrator
-  relaunches it from scratch.
+- `to_cancel`: `scancel <its job>` while pw.x runs. A job `CANCELLED` is
+  left to the user (`execution.md`, the states of the jobs): the calculation
+  needs the user, and is relaunched by hand from scratch: `cli stop`, `$QC
+  cli relaunch adhesion/to_cancel -r $R/manual`, `cli start`.
 - `to_exit`: while pw.x runs, `touch
   systems/<system>/adhesion/to_exit/adhesion_to_exit.EXIT`; pw.x stops and
-  the calculation waits for the user: `cli stop`, `$QC cli relaunch
+  the calculation waits for the user. The relaunch is refused until the job
+  of its claim is over (its worker may go on with other calculations): once
+  `squeue` no longer lists it, `cli stop`, `$QC cli relaunch
   adhesion/to_exit -r $R/manual`, `cli start`.
 - `to_requeue`: `scontrol requeue <its job>` while pw.x runs; `$QC snapshot`
   right after, and again once the job runs again.

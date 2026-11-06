@@ -35,7 +35,6 @@ from triboworkflow.engines.qe.prepare import input_differences, single_input
 from triboworkflow.execution import layout
 from triboworkflow.execution import orchestrator as orchestrator_module
 from triboworkflow.execution import preparation
-from triboworkflow.execution.archive import archive_attempt
 from triboworkflow.execution.jobs import WITHDRAWN_FILE, Launch, Manifest, write_job
 from triboworkflow.execution.orchestrator import Orchestrator, OrchestratorError, Step
 from triboworkflow.execution.preparation import (PreparationError, ReplacementError,
@@ -108,13 +107,16 @@ def kinds(run, settings, labels=LABELS):
 
 
 def first_attempt(run, taken=(AA,)):
-    """A group listing aa and ab, submitted; its workers run ``taken``; its jobs end."""
+    """A group listing aa and ab, submitted; its workers run ``taken``; its jobs end.
+
+    As a worker leaves them: the claim, ``run.pwi`` and ``output.pwo`` stay
+    in the directory of each calculation taken.
+    """
     jobs = run.group(GROUP, Launch.initial(SYSTEM, AA), Launch.initial(SYSTEM, AB))
     for calc_id in taken:
         run.start(calc_id, jobs[0], output=SCF_DONE)
         run.finish(calc_id, status=store.Status('ended', 'converged', 'n/a'),
                    stop_reason='completed', clean_stop=True)
-        archive_attempt(run.dir, SYSTEM, calc_id)
     run.poll(**{job_id: 'COMPLETED' for job_id in jobs})
     assert run.manager.group_complete(GROUP)
     return jobs
@@ -414,7 +416,7 @@ def test_replace_moves_the_calculations_and_prepares_them_again(run, settings, c
     step = PesStep(settings)
     orch = orchestrator(run, step)
     orch.prepare_step(SYSTEM, 'pes')
-    first_attempt(run)
+    jobs = first_attempt(run)
     old = {calc_id: (run.files(calc_id), run.record(calc_id)) for calc_id in (AA, AB)}
     change_ecutwfc(settings)
     with caplog.at_level(logging.WARNING, logger='triboworkflow'):
@@ -436,7 +438,9 @@ def test_replace_moves_the_calculations_and_prepares_them_again(run, settings, c
         assert json.loads((kept / 'record.json').read_text()) == old[calc_id][1].to_dict()
         record = run.record(calc_id)
         assert record.attempts == () and record.fingerprint != old[calc_id][1].fingerprint
-    assert (replacement.old_dir(AA) / 'attempts' / '1' / 'output.pwo').read_text() == SCF_DONE
+    # The claim left by the worker of a job over did not stop it, and moved with the rest.
+    assert json.loads((replacement.old_dir(AA) / 'claim').read_text())['job_id'] == jobs[0]
+    assert (replacement.old_dir(AA) / 'output.pwo').read_text() == SCF_DONE
     assert len(json.loads((replacement.old_dir(AA) / 'record.json').read_text())['attempts']) == 1
     # The old launches no longer count for the calculations prepared again.
     assert retired_launches(run.dir) == {(SYSTEM, AA): {GROUP: True}, (SYSTEM, AB): {GROUP: False}}
@@ -551,13 +555,60 @@ def test_replacement_refused_while_a_job_or_a_worker_may_use_the_calculations(ru
         orch.replace_step(SYSTEM, 'pes')
     message = str(error.value)
     assert message.startswith(f'{SYSTEM}/pes: nothing replaced')
-    assert f'{AA}: it has a claim' in message
+    assert f'{AA}: job {jobs[0]} of its claim is not in a final state confirmed by the last ' \
+           'query (PENDING)' in message
     assert f'group {GROUP}: jobs not in a final state confirmed by the last query: ' \
            f'{jobs[0]} PENDING, {jobs[1]} PENDING' in message
     assert f'{AB}: group {GROUP}' in message
     assert not (run.dir / 'replaced').exists()
     assert {calc_id: run.files(calc_id) for calc_id in (AA, AB)} == before
     assert unfinished(run.dir) == []
+
+
+@pytest.mark.parametrize('job_id, message', [
+    ('', 'its claim is empty or cannot be read: a worker is taking it, or stopped right after'),
+    (None, 'its claim gives no job: whether its worker is over is not known'),
+    ('999', 'job 999 of its claim is not followed by the job manager: whether its worker is '
+            'over is not known'),
+], ids=['empty claim', 'claim without a job', 'job not followed'])
+def test_replacement_refused_with_a_claim_whose_worker_may_still_run(run, settings, job_id,
+                                                                     message):
+    """The jobs of the group are over: only the claim of aa stops the replacement."""
+    orch = orchestrator(run, PesStep(settings))
+    orch.prepare_step(SYSTEM, 'pes')
+    first_attempt(run)
+    if job_id == '':
+        (run.path(AA) / layout.CLAIM_FILE).write_text('')
+    else:
+        run.claim(AA, 1, job_id)
+    change_ecutwfc(settings)
+    before = {calc_id: run.files(calc_id) for calc_id in (AA, AB)}
+    with pytest.raises(ReplacementError) as error:
+        orch.replace_step(SYSTEM, 'pes')
+    assert str(error.value) == f'{SYSTEM}/pes: nothing replaced, since jobs or workers may ' \
+                               f'still use these calculations: {AA}: {message}' + \
+        (' ("triboworkflow status" tells)' if job_id == '' else '')
+    assert not (run.dir / 'replaced').exists()
+    assert {calc_id: run.files(calc_id) for calc_id in (AA, AB)} == before
+
+
+def test_replacement_completed_only_while_no_worker_may_hold_a_calculation(run, settings,
+                                                                           monkeypatch):
+    """Between the journal and the move, a worker takes aa again (an empty claim)."""
+    orch = orchestrator(run, PesStep(settings))
+    orch.prepare_step(SYSTEM, 'pes')
+    first_attempt(run)
+    change_ecutwfc(settings)
+    with monkeypatch.context() as patch:
+        patch.setattr(orchestrator_module, 'complete_replacement', _stop)
+        with pytest.raises(KeyboardInterrupt):
+            orch.replace_step(SYSTEM, 'pes')
+    (run.path(AA) / layout.CLAIM_FILE).write_text('')
+    with pytest.raises(ReplacementError, match=f'^{AA}: its claim is empty or cannot be read'):
+        orchestrator(run, PesStep(settings)).replace_step(SYSTEM, 'pes')
+    assert (run.path(AA) / layout.CLAIM_FILE).read_text() == ''
+    [journal] = unfinished(run.dir)
+    assert not journal.old_dir(AA).exists()
 
 
 @pytest.mark.parametrize('refused', [True, False])
