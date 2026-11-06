@@ -1292,23 +1292,33 @@ def _symmetry(rep, path, record, item, arg):
     from triboworkflow.core.structures import read_structure as read
 
     subject = f'{record.calc_id} symmetry (Q17)'
-    first = record.attempts[0] if record.attempts else None
-    output = None if first is None or first.output is None else path / first.output.path
-    if output is None or not output.is_file():
-        rep.findings.add('not observed', subject, 'no output of attempt 1')
+    # The first output that prints the symmetries is the one of the structure the calculation
+    # started from. An attempt killed before pw.x wrote anything (a job requeued) leaves an
+    # empty output, or none, and a later attempt starts from scratch.
+    outputs = [(attempt, path / attempt.output.path) for attempt in record.attempts
+               if attempt.output is not None]
+    outputs = [(attempt, output) for attempt, output in outputs if output.is_file()]
+    if not outputs:
+        rep.findings.add('not observed', subject, 'no output of any attempt')
         return
-    qe = qe_symmetry(output.read_text(encoding='utf-8', errors='replace'))
+    for attempt, output in outputs:
+        qe = qe_symmetry(output.read_text(encoding='utf-8', errors='replace'))
+        if qe is not None:
+            break
+    else:
+        rep.findings.add('PROBLEM', subject, 'no line of the symmetries in '
+                         + ', '.join(str(output) for _, output in outputs))
+        return
     structure = read(path / 'structure_in.extxyz')
     found = {p: spglib_symmetry(structure, p) for p in SPGLIB_PRECISIONS}
     shown = '; '.join(f'symprec {p:g} A: {n[0]} operations, {n[1]} rotations' if n else
                       f'symprec {p:g} A: none' for p, n in found.items())
-    if qe is None:
-        rep.findings.add('PROBLEM', subject, f'no line of the symmetries in {output}')
-        return
     total = qe['nsym'] + qe['ignored']
     reference = found[SPGLIB_PRECISIONS[0]]
     text = (f'pw.x {qe["nsym"]} operations ({qe["fractional"]} with fractional translation, '
             f'{qe["ignored"]} left out, inversion {qe["inversion"]}); spglib {shown}')
+    if attempt is not record.attempts[0]:
+        text += f' (output of attempt {attempt.n}, the earlier ones print none)'
     rep.findings.add('ok' if reference and total == reference[0] else 'note', subject, text)
 
 

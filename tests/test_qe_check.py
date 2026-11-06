@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -265,6 +266,39 @@ def test_chain_to_the_end_and_the_report(machine, tmp_path, monkeypatch, steps):
     assert done.returncode == 1
     assert 'differs from the digest recorded' in verdicts(done.stdout)[
         'pes/bottom attempt 1'][1]
+
+
+def test_symmetry_is_read_from_the_first_attempt_that_prints_it(machine, tmp_path, monkeypatch,
+                                                                steps):
+    """An attempt killed before pw.x wrote anything, as by a requeue, hides no later attempt."""
+    run = write(machine, tmp_path / 'run', 'chain')
+    assert Cluster(run, monkeypatch).drive().success
+    path = layout.calc_dir(run, SYSTEMS['Al'], 'pes/bottom')
+    record = read_record(layout.system_dir(run, SYSTEMS['Al']), 'pes/bottom')
+    (path / 'attempts' / '1').mkdir(parents=True)
+    empty = path / 'attempts' / '1' / 'output.pwo'
+    empty.write_text('')
+    killed = SimpleNamespace(n=1, output=SimpleNamespace(path=empty.relative_to(path)))
+    unwritten = SimpleNamespace(n=1, output=None)
+    done = SimpleNamespace(n=2, output=record.attempts[0].output)
+
+    def verdict(*attempts):
+        rep = SimpleNamespace(findings=qe_check.Findings())
+        qe_check._symmetry(rep, path, SimpleNamespace(calc_id='pes/bottom', attempts=attempts),
+                           {}, '')
+        (found, subject, text), = rep.findings.items
+        assert subject == 'pes/bottom symmetry (Q17)'
+        return found, text
+
+    alone = verdict(SimpleNamespace(n=1, output=done.output))
+    assert alone[0] == 'ok' and 'output of attempt' not in alone[1]
+    for before in (killed, unwritten):
+        found, text = verdict(before, done)
+        assert found == 'ok'
+        assert text == f'{alone[1]} (output of attempt 2, the earlier ones print none)'
+    assert verdict(unwritten) == ('not observed', 'no output of any attempt')
+    assert verdict() == ('not observed', 'no output of any attempt')
+    assert verdict(killed) == ('PROBLEM', f'no line of the symmetries in {empty}')
 
 
 def test_restarts_levels_and_margin(machine, tmp_path, monkeypatch, steps):
