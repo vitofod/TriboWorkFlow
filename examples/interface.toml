@@ -13,12 +13,14 @@
 schema_version = 1
 
 [interface]
-# Steps to run, required: any of match, pes, plotpes, shear, adhesion, ppes,
-# charge. Each runs once the steps it needs are done; between steps that are
-# ready, the order of this list decides.
-steps = ["match", "pes", "plotpes", "shear", "adhesion", "ppes", "charge"]
+# Steps to run, required: any of match, pes, pes_scf, plotpes, shear,
+# adhesion, ppes, charge. Each runs once the steps it needs are done; between
+# steps that are ready, the order of this list decides. pes is the potential
+# energy surface relaxed along z, pes_scf the static one: two steps, run when
+# listed, also both.
+steps = ["match", "pes", "pes_scf", "plotpes", "shear", "adhesion", "ppes", "charge"]
 engine = "qe"                      # Engine of the steps that run calculations.
-# engines = { pes = "qe" }         # Per-step engine: pes, adhesion, ppes, charge.
+# engines = { pes = "qe" }         # Per-step engine: pes, pes_scf, adhesion, ppes, charge.
 set_bm = true                      # Strain weights = bulk moduli of the two materials.
 
 # The two slabs; the interface id is mid1_mid2. The slab on top is the one
@@ -47,6 +49,14 @@ interface_distance = 2.0           # angstrom
 max_length_tol = 0.02
 max_area_ratio_tol = 0.05
 best_match = "area"                # The only criterion: the match of smallest area.
+
+# Static PES (step pes_scf): complete slabs, or slabs reduced to their layers
+# next to the interface. The relaxed PES (step pes) always uses the complete
+# slabs and has no table.
+[interface.pes_scf]
+short = false                      # Default: complete slabs.
+# layers = [3, 2]                  # With short = true: layers kept in the bottom and in the
+                                   # top slab; by default 3 for a (111) slab, 2 for the others.
 
 [namelists.CONTROL]
 nstep = 150                        # Relax; recommended 150, at most 250. Raised by the relaunches.

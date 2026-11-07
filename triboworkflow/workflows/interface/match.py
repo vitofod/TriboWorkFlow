@@ -521,9 +521,10 @@ def clear_entries(document, entries):
 
     Notes
     -----
-    To remove: DEV-36. The historic writes merge the new data into the old
-    ones key by key; the points of ``highsym`` are keyed by their labels,
-    which change with the interface.
+    To remove: DEV-36, and DEV-40 for the entries of the PES steps. The
+    historic writes merge the new data into the old ones key by key; the
+    points of ``highsym`` and of the PES are keyed by their labels, which
+    change with the interface.
     """
     for entry in entries:
         if document.get(entry) is not None:

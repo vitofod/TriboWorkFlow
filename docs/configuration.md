@@ -211,6 +211,9 @@ the order of `ATOMIC_SPECIES` and of the per-species `pw.x` indices
   atoms, and a bulk otherwise.
 - None of the modes chooses the sampling for convergence: the grid or the
   density is the user's choice.
+- The steps `pes` and `pes_scf` of the interface workflow require `kdens`:
+  the cell of the interface is known only after the matching. With another
+  mode they stop with an error on `k_points.mode`.
 
 ## `[qe]`
 
@@ -318,10 +321,10 @@ each run.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `slabs` | list | R | two `[[interface.slabs]]` entries, slab 1 then slab 2: their order gives the interface id (`mid1_mid2`) and the strain weights (`strain_weight_1` goes with slab 1); the slab on top is decided by the matching (see below) |
-| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `plotpes`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. In this version only `match` is available: with any other step the command line stops with `step '<name>' not available in this version` |
+| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both ([interface.md](interface.md)). In this version `match`, `pes` and `pes_scf` are available: with any other step the command line stops with `step '<name>' not available in this version` |
 | `set_bm` | bool | `true` | strain weights from the bulk moduli of the two materials |
 | `engine` | str | `"qe"` | engine of the steps that run calculations |
-| `engines` | table | `{}` | per-step engine for `pes`, `adhesion`, `ppes`, `charge`; only `qe` for now |
+| `engines` | table | `{}` | per-step engine for `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`; only `qe` for now |
 
 `[[interface.slabs]]`: a slab and its identifiers.
 
@@ -353,7 +356,7 @@ here.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `max_area` | float | 160.0 | largest area of the interface cell, in angstrom^2 |
-| `interface_distance` | float | 2.0 | distance between the two slabs, in angstrom |
+| `interface_distance` | float | 2.0 | distance between the two slabs, in angstrom; also in the calculations of the two PES |
 | `max_angle_tol` | float | 0.4 | tolerance on the angles of the lattice match, the same at every attempt |
 | `max_length_tol` | float | 0.02 | tolerance on the lengths of the lattice vectors |
 | `max_area_ratio_tol` | float | 0.05 | tolerance on the ratio of the areas of the two cells |
@@ -388,3 +391,21 @@ error here (DEV-34). The two meanings of `max_angle_tol` are those of
 pymatgen 2024.6.10 (`ZSLGenerator` and `Lattice.find_mapping`, A74).
 `formula` without `name` is refused by TribChem's own check of the inputs
 (A75).
+
+`[interface.pes_scf]`: the slabs of the static PES (step `pes_scf`,
+[interface.md](interface.md)); other keys are errors. There is no
+`[interface.pes]` table: the relaxed PES always uses the complete slabs.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `short` | bool | `false` | `false`: the complete slabs; `true`: each slab reduced to its layers next to the interface |
+| `layers` | 2 int | 3 for a (111) slab, 2 for the others | layers kept in the bottom and in the top slab, each at least 1; only with `short = true`, otherwise an error |
+
+Bottom and top are those of the interface, decided by the matching, not
+slab 1 and slab 2: in the example, `short = true` keeps 3 layers of Cu(111),
+below, and 3 of Al(111), above; `layers = [2, 1]` keeps 2 of Cu and 1 of Al.
+
+To remove: TribChem's command line always passed the layers, so its static
+PES was always on reduced slabs (here the complete slabs are the default,
+D07), and it applied the 3/2 rule to the slabs in the order given, while the
+values went to the bottom and the top slab (DEV-38, A81).

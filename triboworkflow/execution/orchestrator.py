@@ -6,7 +6,10 @@
 The steps of each system follow the graph of the entries they read and write
 (``INTERFACE_GRAPH``): ``match`` → ``pes`` → {``plotpes`` → ``shear``;
 ``adhesion`` → {``ppes``; ``charge``}}, with ``shear`` reading also the
-entries of ``pes`` and ``match``. A pass (``Orchestrator.run_pass``):
+entries of ``pes`` and ``match``, and ``match`` → ``pes_scf``. ``pes`` and
+``pes_scf`` (the potential energy surface relaxed along z and the static one)
+are independent; the steps after them depend on ``pes`` for now. A pass
+(``Orchestrator.run_pass``):
 
 1. runs a cycle of the job manager (``JobManager.cycle``): jobs recovered,
    states asked, missing jobs submitted, only for the steps whose
@@ -107,9 +110,13 @@ logger = logging.getLogger(__name__)
 
 # Steps whose entries each step reads (verified on the entries read and
 # written by the steps of the interface workflow).
+# pes and pes_scf need only match; which of the two PES plotpes, shear and
+# adhesion read is decided with those steps, and until then they depend on pes.
+# To remove: Q38.
 INTERFACE_GRAPH = {
     'match': (),
     'pes': ('match',),
+    'pes_scf': ('match',),
     'plotpes': ('pes',),
     'shear': ('plotpes', 'pes', 'match'),
     'adhesion': ('pes',),

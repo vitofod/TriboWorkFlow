@@ -1,20 +1,25 @@
-# Interface workflow: step `match`
+# Interface workflow: steps `match`, `pes` and `pes_scf`
 
 The interface workflow starts from two slabs, given in `[interface]` of the
 settings ([configuration.md](configuration.md)). Its first step, `match`,
 runs no calculation: it builds the interface cell of the two slabs and the
-high-symmetry points of the two facing surfaces, which the next steps use. In
-this version `match` is the only step available, so a run lists only `match`
-in `[interface].steps`:
+high-symmetry points of the two facing surfaces, which the next steps use.
+The steps `pes` and `pes_scf` compute the potential energy surface of the
+interface from those points, relaxed along z and static. In this version
+these three steps are available, so a run lists only them in
+`[interface].steps`:
 
 ```bash
 triboworkflow analyse match
+triboworkflow prepare pes_scf
 ```
 
-In a pass of the orchestrator the step, having no calculation, is analysed as
-soon as it starts.
+In a pass of the orchestrator the step `match`, having no calculation, is
+analysed as soon as it starts.
 
-## What the step does
+## Step `match`
+
+### What the step does
 
 1. **Inputs.** The two slab files are read as the workflow uses them
    ([structures.md](structures.md)); a slab rotated to the frame of the
@@ -49,7 +54,7 @@ soon as it starts.
 5. **Writing.** The entries below and the files are written together, at the
    end: when any part fails, nothing is written.
 
-## Entries and files
+### Entries and files
 
 | Entry of `system.json` | Content |
 |---|---|
@@ -71,7 +76,7 @@ In `systems/<mid1_mid2>/match/`:
 | `interface.extxyz` | the interface, with vacuum |
 | `interface.json` | the same, as a pymatgen `Structure` dict |
 
-## Message
+### Message
 
 The step reports, in the terminal and in `cli.log`:
 
@@ -89,7 +94,7 @@ and of the angle between them, in degrees; two slabs that are already
 aligned have no strain. What the matching code prints goes to the log at
 debug level only.
 
-## When the step runs again
+### When the step runs again
 
 The step is done when the five entries exist and their provenance is the one
 that the settings and the slab files give now. Changing a slab file, a key
@@ -113,3 +118,126 @@ A73), DEV-34 (`best_match` only `"area"`), DEV-35 (no `comp_params` in the
 document), DEV-36 (entries emptied before being written again). Not ported:
 `override`, `override_inter_db` (A45) and the bulk moduli read from the
 database (`bm_custom`).
+
+## Steps `pes` and `pes_scf`
+
+The potential energy surface (PES) of the interface is its energy as a
+function of the lateral position of the top slab on the bottom one. It is
+sampled at the lateral shifts written by `match` (`highsym.inter_unique`):
+one pw.x calculation per point, with the top slab shifted laterally by the
+point and placed at `interface_distance` (of `[interface.inter_params]`,
+default 2.0 Å) from the bottom one. Two steps compute it; each runs when
+listed in `[interface].steps`, also both, and neither is the default:
+
+| Step | Calculation of each point | Calculations | Entry |
+|---|---|---|---|
+| `pes` | `relax` in which the atoms move only along z, the hydrogen atoms in every direction (`calc_type` `interface_z_relax`) | `pes/<point>` | `pes` |
+| `pes_scf` | `scf` (`calc_type` `slab_from_scratch`), on the complete slabs or on slabs reduced to their layers next to the interface | `pes_scf/<point>` | `pes_scf` |
+
+Both need only `match`: one can be computed without the other, and either
+first. Each has its own commands:
+
+```bash
+triboworkflow prepare pes_scf
+triboworkflow submit pes_scf
+triboworkflow analyse pes_scf
+```
+
+### Calculations
+
+1. **Inputs.** The entries of `match` that the steps read
+   (`structure.init.interface`, `.bot_slab`, `.top_slab`, `highsym`) must
+   be done and current: otherwise the step is blocked with what is missing.
+   The k-point grid comes from its density: `[k_points] mode = "kdens"` is
+   required, since the cell of the interface is known only after the
+   matching; another mode stops the step with an error on `k_points.mode`.
+2. **Reduced slabs** (`pes_scf` only, `short = true` in
+   `[interface.pes_scf]`). The bottom and the top slab keep only their
+   `layers` next to the interface; without `layers`, 3 for a (111) slab and 2
+   for the others, by the Miller indices of the slab below and of the slab
+   above. In the example, Cu(111) below Al(111) gives 3 and 3 layers;
+   `layers = [2, 1]` keeps 2 layers of Cu and 1 of Al. The relaxed PES always
+   uses the complete slabs.
+3. **Points.** For each point the top slab is moved by the first lateral
+   shift of the point and stacked on the bottom one; the constraints and the
+   k-point grid are those of the calculation type, and the pw.x input is
+   written as for every calculation of the workflow
+   ([configuration.md](configuration.md)). The two steps give the same
+   structures and grids on the same slabs; they differ in the calculation and
+   the constraints.
+
+### Analysis
+
+`analyse <step>`, or the orchestrator once every calculation is completed,
+uses the results only when each calculation is complete with the
+fingerprint that the settings give now, and all share one energy model
+(engine, pseudopotentials, cutoffs, k-points, smearing, spin, vdW); otherwise
+it stops with the calculations at fault and writes nothing. Then it writes:
+
+| Entry of `system.json` | Content |
+|---|---|
+| `<step>.data.<point>` | the results of the calculation of the point: `output.nsites`, `output.density` (g/cm^3), `output.energy` and `output.energy_per_atom` (eV, the total energy of pw.x), `output.forces`, `output.stress`, `output.structure` (the final structure) and `input.structure`; `output.task_label`, `output.task_id` and `output.dir_name` hold the calculation (`pes/hollow_1-bridge_1`). The keys that pw.x does not give (`bandgap`, `cbm`, `vbm`, `is_gap_direct`, `pseudo_potential`, and `forces` or `stress` when not printed) are null |
+| `<step>.energy.grid.hs_unique_ev` | `[point, x, y, energy]` of every point, sorted by energy (eV); `x, y` (Å) is the first lateral shift of the point; equal energies keep the order of the points |
+| `<step>.energy.grid.hs_unique_jm2` | the same, with the energies in J/m^2 on the area of the cell of the minimum |
+| `<step>.energy.min_site`, `<step>.energy.max_site` | the points of lowest and highest energy |
+| `structure.opt.<step>.min`, `structure.opt.<step>.max` | the final structures of those two points |
+
+The energies are total energies: only their differences have a meaning, in
+eV and in J/m^2 alike. The empty dicts of the structures (`properties: {}`)
+are not stored; the structures are read back the same.
+
+Before writing, the three entries of the step (`<step>`,
+`structure.opt.<step>.min` and `.max`) are emptied, so that nothing of an
+earlier analysis (e.g. the points of an earlier interface) is left among the
+new data; the other PES and the entries of `match` are not touched. Everything
+is written together, at the end: when any part fails, nothing is written,
+the emptying included. Each of the three entries records its provenance: the
+parameters of the step (calculation type, k-point density,
+`interface_distance`, layers), the calculations with their fingerprints and
+the results used, and the content of the entries of `match` read.
+
+### Message
+
+```text
+<system>: <step>: <n> high-symmetry points, <kind> (<calc_type>)
+<system>: minimum at <point>: <energy> eV; maximum at <point>: <energy> eV
+<system>: corrugation (maximum - minimum): <difference> eV, <difference> J/m^2
+```
+
+`<kind>` is `relaxed along z` for `pes`; `static, on the complete slabs` or
+`static, on the slabs reduced to <bottom> (bottom) and <top> (top) layers`
+for `pes_scf`. The energies have 6 decimals. What the code that builds the
+points prints goes to the log at debug level only.
+
+### When the steps run again
+
+A PES step is done when its three entries exist and their provenance is the
+one that the settings, the calculations and the entries of `match` give now.
+Changing `kdens`, `interface_distance`, a parameter of the calculations
+(e.g. `ecutwfc`) or the interface (a new `match`) makes both run again;
+`short` or `layers` only `pes_scf`; new results of a calculation, run again
+with the same input, only the PES that uses it.
+
+The later steps (`plotpes`, `shear`, `adhesion`) are not available in this
+version: which of the two PES each one reads is decided with them.
+
+Notes
+-----
+To remove: port of TribChem's `FT_StartPES` (with
+`FireTaskInterface.query_interface`), `InterfaceWF.calculate_pes`, the
+`FT_MoveTagResults` of its points and `FT_PotentialEnergySurface`
+(`arrange_data`, `_update_opt_structure`); the interpolation, commented out
+there, is not part of these steps. The two steps are the two values of `-pt`
+of TribChem's command line, which ran one PES per invocation, `pes` by default
+(DEV-37). The golden cases `pes_step_*` compare the calculations and the
+database writes of the steps with those of the Firetasks. Deviations: DEV-35
+(the k-point density from the settings, not from `comp_params` of the
+document), DEV-38 (the layers of the reduced slabs are those of the bottom and
+of the top slab, and the default rule takes the Miller indices of the slab
+below and above, where TribChem's command line took them in the order given,
+A81), DEV-39 (the writes use the ids of the document of `match`, A80), DEV-40
+(the three entries emptied before being written again). TribChem's command
+line always passed the layers, so its static PES was always on reduced slabs;
+here the complete slabs are the default (D07). Not ported: `override`,
+`run_vasp`, `to_file`, `get_main_folder` (A47) and `FT_SaveVASPOutputs` (the
+files of each calculation stay in its directory).

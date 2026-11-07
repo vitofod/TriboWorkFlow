@@ -17,7 +17,8 @@ import pytest
 from triboworkflow.core.settings import (Settings, SettingsError, load_settings,
                                          settings_from_dict, validate)
 from triboworkflow.core.settings.schema import (INTER_PARAMS_DEFAULTS, INTERFACE_STEPS,
-                                                GenerationParams, InterParams, key_name)
+                                                GenerationParams, InterParams, PesScfParams,
+                                                key_name)
 from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
 from triboworkflow.vendored.highput.utils.tasktools import read_default_params
 
@@ -303,7 +304,8 @@ def test_interface_steps_kept_in_the_given_order():
 
 
 @pytest.mark.parametrize('steps, message', [
-    (['match', 'shearstr'], "interface.steps.*'shearstr'.*match, pes, plotpes, shear, adhesion, ppes, charge"),
+    (['match', 'shearstr'],
+     "interface.steps.*'shearstr'.*match, pes, pes_scf, plotpes, shear, adhesion, ppes, charge"),
     (['pes', 'pes'], r'interface\.steps.*repeated.*pes'),
     ([], r'interface\.steps.*at least one'),
 ])
@@ -314,6 +316,27 @@ def test_interface_steps_errors(steps, message):
 
 def test_interface_steps_match_the_graph():
     assert INTERFACE_STEPS == tuple(INTERFACE_GRAPH)
+
+
+@pytest.mark.parametrize('steps', [['match', 'pes'], ['match', 'pes_scf'],
+                                   ['match', 'pes', 'pes_scf']])
+def test_relaxed_and_static_pes_are_two_steps(steps):
+    # Requested one, the other or both; no key chooses between them.
+    assert settings_from_dict(edited(WORKFLOW, {'interface.steps': steps})).interface.steps == steps
+
+
+def test_static_pes_on_complete_slabs_by_default():
+    assert settings_from_dict(WORKFLOW).interface.pes_scf == PesScfParams(short=False, layers=None)
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.pes_scf': DELETE}))
+    assert settings.interface.pes_scf == PesScfParams(short=False, layers=None)
+
+
+def test_static_pes_on_reduced_slabs():
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.pes_scf.short': True}))
+    assert settings.interface.pes_scf == PesScfParams(short=True, layers=None)
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.pes_scf.short': True,
+                                                    'interface.pes_scf.layers': [4, 2]}))
+    assert settings.interface.pes_scf == PesScfParams(short=True, layers=[4, 2])
 
 
 def test_groups_optional():
@@ -505,6 +528,22 @@ ERRORS = [
      'of smallest area'),
     ('best-match-other', W, {'interface.inter_params.best_match': 'strain'},
      'interface.inter_params.best_match', "'strain' is not allowed"),
+    # [interface.pes_scf]: reduced slabs of the static PES; the relaxed PES has no table.
+    ('pes-scf-layers-without-short', W, {'interface.pes_scf.layers': [3, 2]},
+     'interface.pes_scf.layers', 'only with short = true: the complete slabs keep all their layers'),
+    ('pes-scf-layers-one', W, {'interface.pes_scf.short': True, 'interface.pes_scf.layers': [3]},
+     'interface.pes_scf.layers', 'give two values, for the bottom and the top slab; got [3]'),
+    ('pes-scf-layers-zero', W, {'interface.pes_scf.short': True, 'interface.pes_scf.layers': [3, 0]},
+     'interface.pes_scf.layers[1]', 'must be >= 1, got 0'),
+    ('pes-scf-layers-bool', W, {'interface.pes_scf.short': True,
+                                'interface.pes_scf.layers': [3, True]},
+     'interface.pes_scf.layers', 'expected int'),
+    ('pes-scf-short-int', W, {'interface.pes_scf.short': 1}, 'interface.pes_scf.short',
+     'expected bool, got 1'),
+    ('pes-scf-key', W, {'interface.pes_scf.top_layers': 3}, 'interface.pes_scf.top_layers',
+     'allowed keys: short, layers'),
+    ('pes-table', W, {'interface.pes': {'short': True}}, 'interface.pes',
+     'unknown key (allowed keys: slabs, steps, '),
     # [qe]
     ('qe-version', W, {'qe.version': '7.2MaX'}, 'qe.version',
      "'7.2MaX' is not a version of pw.x: give major.minor or major.minor.patch"),

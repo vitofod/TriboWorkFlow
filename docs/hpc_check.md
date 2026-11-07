@@ -3,9 +3,10 @@
 `tests/hpc/qe_check.py` runs small pw.x and pp.x calculations through the
 whole chain of the package on an HPC machine: preparation, groups of jobs,
 the orchestrator in the background, polling, relaunches and restarts,
-parsing, the charge density, the actions of the user. The steps of the
-interface workflow are not in this version: the script gives the command
-line test steps whose calculations are those of a case of the check (module
+parsing, the charge density, the actions of the user. Of the steps of the
+interface workflow only `match`, `pes` and `pes_scf` are in this version: the
+script gives the command line test steps in place of all of them, whose
+calculations are those of a case of the check (module
 docstring of the script). It complements `tests/hpc/hpc_check.py` (fake
 engine: claims, exit codes, locks; `execution.md`, "Checking a new
 machine").

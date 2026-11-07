@@ -5,8 +5,11 @@ historic environment or 'triboworkflow.vendored' in the development one,
 with the arguments that the TribChem Firetasks and workflows pass, and
 returns plain JSON data. The custom_slab cases instead compare a Firetask that
 is not vendored (FT_StoreCustomSlab) with its port in triboworkflow.core.structures,
-and the match_step cases the Firetasks of the matching with the step match
-(triboworkflow.workflows.interface.match).
+the match_step cases the Firetasks of the matching with the step match
+(triboworkflow.workflows.interface.match), and the pes_step cases the
+Firetasks of the PES with the steps pes and pes_scf
+(triboworkflow.workflows.interface.pes), starting from the document that the
+match_step golden calls build.
 The golden values are the results obtained in the
 historic environment, stored in tests/golden/<case>.json:
 tests/historic/test_golden.py checks that they are reproduced there and
@@ -714,6 +717,260 @@ def case_match_step(tc, name):
     return match_step_port(names, inter_params, set_bm)
 
 
+# Steps pes and pes_scf: FT_StartPES, InterfaceWF.calculate_pes, the
+# FT_MoveTagResults of its points and FT_PotentialEnergySurface (historic)
+# against pes_inputs and run_pes_analysis of the steps (port), on the same
+# document of the interface: the one that the golden calls of the step match
+# build, with the comp_params that TribChem's document held (DEV-35: the port
+# takes kdens from the settings, here COMP_PARAMS['kdens']). The results of the
+# points come from task documents made by the case (pes_task_document), the
+# same in both: the energies of synthetic_energies, the structure of each
+# point as input and final structure, and the calc_id <step>/<point> as
+# task_label, task_id and dir_name (atomate gave a tag with a uuid4 and a
+# path). The cases compare the points, structures and k-points of the
+# calculations and the database writes. Interface distance 2.0, as TribChem's
+# command line passes it (A76). The pairs are those whose ids TribChem makes
+# again equal to those of match (A80, DEV-39).
+PES_STEP_CALC_TYPES = {'pes': 'interface_z_relax', 'pes_scf': 'slab_from_scratch'}
+PES_STEP_DISTANCE = 2.0
+# (pair of MATCH_STEPS, step, short): short None for complete slabs, 'rule'
+# for the layers of TribChem's command line (calc_interface.py:151) and of the
+# port without layers, or the layers [bottom, top] given.
+PES_STEPS = {
+    'cu111_al111': ('cu111_al111', 'pes', None),
+    'scf_cu111_al111': ('cu111_al111', 'pes_scf', None),
+    'scf_short_cu111_al111': ('cu111_al111', 'pes_scf', 'rule'),
+    'scf_short_2_1_cu111_al111': ('cu111_al111', 'pes_scf', [2, 1]),
+    'cu111_cu111': ('cu111_cu111', 'pes', None),
+    'scf_cu111_cu111': ('cu111_cu111', 'pes_scf', None),
+    'pt111_ag111': ('pt111_ag111', 'pes', None),
+}
+
+
+def mongo_set(document, data, entry, to_mongodb):
+    """A historic update_db applied to a document as a $set: the dicts merged
+    leaf by leaf with to_mongodb (empty dicts write nothing), otherwise the
+    top-level key of the entry replaced."""
+    path = [entry] if isinstance(entry, str) else list(entry)
+    value = copy.deepcopy(data)
+    for key in reversed(path[1:]):
+        value = {key: value}
+    if not to_mongodb:
+        document[path[0]] = value
+        return
+
+    def leaves(prefix, item):
+        if isinstance(item, dict):
+            for k, v in item.items():
+                yield from leaves(prefix + [k], v)
+        else:
+            yield prefix, item
+
+    for keys, item in leaves(path[:1], value):
+        node = document
+        for key in keys[:-1]:
+            node = node.setdefault(key, {})
+        node[keys[-1]] = item
+
+
+def pes_document(pair):
+    """Document of the interface after match, built from the golden calls of
+    match_step_<pair>, with COMP_PARAMS."""
+    document = None
+    for call in read_golden(f'match_step_{pair}')['calls']:
+        if call['call'] == 'insert_db':
+            document = copy.deepcopy(call['field'])
+        else:
+            mongo_set(document, call['data'], call['entry'], call['to_mongodb'])
+    document['comp_params'] = copy.deepcopy(COMP_PARAMS)
+    return document
+
+
+def pes_energies(document):
+    """{point: energy} of synthetic_energies on the cell of the interface."""
+    cell = document['structure']['init']['interface']['lattice']['matrix']
+    shifts = document['highsym']['inter_unique']
+    return {label: energy for label, _, _, energy in synthetic_energies(shifts, cell)}
+
+
+def pes_task_document(step, point, structure, energy):
+    """Task document of the calculation of a point, as the tasks collection
+    gives it to FT_MoveTagResults: the structure of the point as input and
+    final structure."""
+    from monty.json import jsanitize
+    s = jsanitize(structure.as_dict(), strict=False)
+    n = len(s['sites'])
+    calc_id = f'{step}/{point}'
+    return {'nsites': n,
+            'output': {'structure': copy.deepcopy(s), 'density': float(structure.density),
+                       'energy': energy, 'energy_per_atom': energy / n},
+            'input': {'structure': s},
+            'task_label': calc_id, 'task_id': calc_id, 'dir_name': calc_id}
+
+
+def pes_inputs_data(points, structures, kpoints):
+    return {'points': list(points), 'structures': structures, 'kpoints': kpoints}
+
+
+def update_call(data, collection, entry, fltr, update_op, to_mongodb):
+    return {'call': 'update_db', 'data': copy.deepcopy(data), 'collection': collection,
+            'entry': copy.deepcopy(entry), 'fltr': copy.deepcopy(fltr),
+            'update_op': update_op, 'to_mongodb': to_mongodb}
+
+
+def pes_step_historic(tc, pair, step, short):
+    """FT_StartPES up to InterfaceWF.calculate_pes, then the FT_MoveTagResults
+    and the FT_PotentialEnergySurface of its workflow, on a database emulated
+    with TribChem's prepare_data_to_update ($set of the update dicts)."""
+    run_ft = tc['highput.firetasks.run']
+    core = tc['highput.firetasks.core']
+    query = tc['highput.database.query']
+    dbtools = tc['highput.database.dbtools']
+    interface_wf = tc['highput.workflows.interface'].InterfaceWF
+    document = pes_document(pair)
+    tasks = {}
+    calls = []
+
+    def matching(fltr):
+        if any(document.get(k) != v for k, v in fltr.items()):
+            raise AssertionError(f'filter {fltr} does not match the document')
+
+    def query_db(self, collection, db_file=None, database=None, entry=None, fltr=None,
+                 **kwargs):
+        if collection == 'tasks':
+            field = copy.deepcopy(tasks[fltr['task_label']])
+        elif collection == MATCH_COLLECTION:
+            matching(fltr)
+            field = copy.deepcopy(document)
+        else:
+            raise AssertionError(f'unexpected query of {collection}')
+        return field, dbtools.read_multiple_entry(field, entry)
+
+    def update_db(self, data, collection, entry=None, db_file=None, database=None, fltr=None,
+                  update_op='$set', upsert=False, to_mongodb=True, **kwargs):
+        if collection != MATCH_COLLECTION:
+            raise AssertionError(f'unexpected update of {collection}')
+        matching(fltr)
+        calls.append(update_call(data, collection, entry, fltr, update_op, to_mongodb))
+        updates = query.prepare_data_to_update(copy.deepcopy(data), entry, update_op, to_mongodb)
+        for update in updates if isinstance(updates, list) else [updates]:
+            (op, values), = update.items()
+            if op != '$set':
+                raise AssertionError(f'unexpected update operator {op}')
+            for key, value in values.items():
+                *parents, last = key.split('.')
+                node = document
+                for k in parents:
+                    node = node.setdefault(k, {})
+                node[last] = value
+
+    layers = None
+    if short == 'rule':
+        layers = [3 if m == [1, 1, 1] else 2 for m in document['miller']]
+    elif short is not None:
+        layers = list(short)
+    saved = core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db
+    core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db = query_db, update_db
+    try:
+        start = run_ft.FT_StartPES(
+            mid=document['mid'].split('_'), miller=document['miller'],
+            collection=MATCH_COLLECTION, calc_type=PES_STEP_CALC_TYPES[step], layers=layers,
+            interface_distance=PES_STEP_DISTANCE, db_file='golden')
+        params = start.read_runtask('StartPES', {})
+        params['main_folder'] = 'golden'  # get_main_folder reads the database directly (A47)
+        _, params = start.query_interface(params)
+        wf = start.run_func(interface_wf.calculate_pes, **params)
+        fw_tasks = [t for fw in wf.fws for t in fw.tasks]
+        run_vasp = next(t for t in fw_tasks if type(t).__name__ == 'FT_RunVaspOnTheFly')
+        points = list(params['shifts'])
+        energies = pes_energies(document)
+        for point, structure, tag in zip(points, run_vasp['structure'], run_vasp['tag']):
+            tasks[tag] = pes_task_document(step, point, structure, energies[point])
+        for name in ('FT_MoveTagResults', 'FT_PotentialEnergySurface'):
+            for task in fw_tasks:
+                if type(task).__name__ == name:
+                    task.run_task({})
+    finally:
+        core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db = saved
+    return {'inputs': pes_inputs_data(points, run_vasp['structure'],
+                                      [v.kpoints for v in run_vasp['vis']]),
+            'calls': calls}
+
+
+def pes_step_port(tc, pair, step, short):
+    """pes_inputs of the step from settings and a run with the document of
+    match, then run_pes_analysis on a store that records the database calls
+    and gives the task documents."""
+    import tomllib
+
+    from triboworkflow.core.settings.loader import settings_from_dict
+    from triboworkflow.core.store import SystemWriter
+    from triboworkflow.core.store.legacy import TASKS, LegacyStore
+    from triboworkflow.execution.layout import system_dir
+    from triboworkflow.workflows.interface import pes
+
+    dbtools = tc['highput.database.dbtools']
+    tasks = {}
+
+    class Recording(LegacyStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = []
+
+        def query_db(self, collection, *, entry=None, fltr=None):
+            if collection == TASKS:
+                field = copy.deepcopy(tasks[fltr['task_label']])
+                return field, dbtools.read_multiple_entry(field, entry)
+            return super().query_db(collection, entry=entry, fltr=fltr)
+
+        def update_db(self, data, collection, *, entry=None, fltr=None, update_op='$set',
+                      to_mongodb=True):
+            self.calls.append(update_call(data, collection, entry, fltr, update_op, to_mongodb))
+            super().update_db(data, collection, entry=entry, fltr=fltr, update_op=update_op,
+                              to_mongodb=to_mongodb)
+
+    document = pes_document(pair)
+    data = tomllib.loads((ROOT / 'examples' / 'interface.toml').read_text(encoding='utf-8'))
+    dicts = slab_dicts()
+    slabs = []
+    for i, (name, mid) in enumerate(zip(MATCH_STEPS[pair][:2], document['mid'].split('_')), 1):
+        Path(f'slab_{i}.json').write_text(json.dumps(dicts[name]))
+        slabs.append({'file': f'slab_{i}.json', 'mid': mid, 'miller': [1, 1, 1]})
+    pes_scf = {'short': short is not None}
+    if isinstance(short, list):
+        pes_scf['layers'] = list(short)
+    data['interface'].update({'slabs': slabs, 'set_bm': False, 'steps': ['match', step],
+                              'pes_scf': pes_scf})
+    data['interface']['inter_params']['interface_distance'] = PES_STEP_DISTANCE
+    data['k_points'].update({'mode': 'kdens', 'kdens': float(COMP_PARAMS['kdens'])})
+    settings = settings_from_dict(data)
+
+    system = document['mid']
+    sdir = system_dir(Path('run'), system)
+    with SystemWriter(sdir) as writer:
+        writer.document.create(document)
+        writer.save()
+    inputs = pes.pes_inputs(Path('run'), system, settings, step)
+    energies = pes_energies(document)
+    for point, structure, _ in inputs.points:
+        tasks[f'{step}/{point}'] = pes_task_document(step, point, structure, energies[point])
+    with SystemWriter(sdir) as writer:
+        store = Recording(sdir, writer.document, pes.COLLECTION)
+        pes.run_pes_analysis(inputs, store, [f'{step}/{point}' for point, _, _ in inputs.points])
+    return {'inputs': pes_inputs_data([p for p, _, _ in inputs.points],
+                                      [s for _, s, _ in inputs.points],
+                                      [k for _, _, k in inputs.points]),
+            'calls': store.calls}
+
+
+def case_pes_step(tc, name):
+    """Calculations and database writes of the steps pes and pes_scf."""
+    pair, step, short = PES_STEPS[name]
+    if tc.root == HISTORIC:
+        return pes_step_historic(tc, pair, step, short)
+    return pes_step_port(tc, pair, step, short)
+
+
 # Charge density. The workflow reads three densities on the same grid and in
 # the same cell (interface, bottom slab, top slab), averages them along each
 # axis and integrates |interface - bottom - top| (chgcar_integrator, on
@@ -956,6 +1213,8 @@ for _name in CUSTOM_SLABS:
     CASES[f'custom_slab_{_name}'] = (case_custom_slab, {'name': _name})
 for _name in MATCH_STEPS:
     CASES[f'match_step_{_name}'] = (case_match_step, {'name': _name})
+for _name in PES_STEPS:
+    CASES[f'pes_step_{_name}'] = (case_pes_step, {'name': _name})
 for _cell in CHARGE_CELLS:
     for _case, _func in (('chgcar_average', case_chgcar_average),
                          ('chgcar_displacement', case_chgcar_displacement),

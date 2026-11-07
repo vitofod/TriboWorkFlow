@@ -56,10 +56,16 @@ QE_VERSIONS = ('7.1', '7.2', '7.3')
 # A version of pw.x as it prints it: major.minor or major.minor.patch.
 QE_VERSION_FORMAT = re.compile(r'[0-9]+\.[0-9]+(\.[0-9]+)?')
 # Steps of the interface workflow, in the order of the graph of the
-# orchestrator (execution/orchestrator.py, INTERFACE_GRAPH).
-INTERFACE_STEPS = ('match', 'pes', 'plotpes', 'shear', 'adhesion', 'ppes', 'charge')
+# orchestrator (execution/orchestrator.py, INTERFACE_GRAPH). pes and pes_scf
+# are the potential energy surface relaxed along z and the static one: two
+# steps, each run when requested, neither of them by default.
+INTERFACE_STEPS = ('match', 'pes', 'pes_scf', 'plotpes', 'shear', 'adhesion', 'ppes', 'charge')
 # Interface steps that run calculations; match, plotpes and shear only analyse.
-STEPS_WITH_ENGINE = ('pes', 'adhesion', 'ppes', 'charge')
+STEPS_WITH_ENGINE = ('pes', 'pes_scf', 'adhesion', 'ppes', 'charge')
+# Layers kept in a reduced slab of the static PES when the settings do not
+# give them: 3 for a (111) surface, 2 for the others.
+# To remove: the values of TribChem's command line (calc_interface.py:151).
+SHORT_LAYERS_111, SHORT_LAYERS_OTHER = 3, 2
 # Defaults of [interface.inter_params] that the workflow sets before those of
 # the matching: the largest area of the interface cell (angstrom^2), the
 # distance between the two slabs (angstrom) and the angle tolerance, used
@@ -698,6 +704,54 @@ class InterParams:
 
 
 @dataclass
+class PesScfParams:
+    """``[interface.pes_scf]``: slabs of the static potential energy surface.
+
+    The static PES (step ``pes_scf``) is computed on the complete slabs of
+    the interface or, with ``short``, on slabs reduced to their layers next
+    to the interface. The PES relaxed along z (step ``pes``) has no table of
+    its own and always uses the complete slabs.
+
+    Attributes
+    ----------
+    short : bool
+        Whether the slabs are reduced; ``False`` (complete slabs) by default.
+    layers : list of int or None
+        Layers kept in the bottom and in the top slab of the interface, as
+        stacked by the matching (the slab on top is the one whose formula and
+        Miller indices come first in alphabetical order). Only with ``short =
+        true``; when left out, ``SHORT_LAYERS_111`` for a (111) slab and
+        ``SHORT_LAYERS_OTHER`` for the others.
+
+    Notes
+    -----
+    To remove: TribChem's command line always passed the layers to
+    ``FT_StartPES``, in the order of the slabs given and computed from their
+    Miller indices (``calc_interface.py:151``), and the reduction applied them
+    to the bottom and the top slab (``run.py:1230-1240``). Here the complete
+    slabs are the default (D07) and the rule applies to the slab below and to
+    the one above (DEV-38).
+    """
+
+    short: bool = False
+    layers: list[int] | None = None
+
+    def check(self, path):
+        """Validate the table; errors name ``path``."""
+        if self.layers is None:
+            return
+        if not self.short:
+            raise SettingsError(f'{path}.layers', 'only with short = true: the complete slabs '
+                                'keep all their layers')
+        if len(self.layers) != 2:
+            raise SettingsError(f'{path}.layers', 'give two values, for the bottom and the top '
+                                f'slab; got {self.layers}')
+        for i, layers in enumerate(self.layers):
+            if layers < 1:
+                raise SettingsError(f'{path}.layers[{i}]', f'must be >= 1, got {layers}')
+
+
+@dataclass
 class InterfaceParams:
     """``[interface]``: inputs of the interface workflow.
 
@@ -719,6 +773,8 @@ class InterfaceParams:
     engines : dict
         Engine per step, overriding ``engine``.
     inter_params : InterParams
+    pes_scf : PesScfParams
+        Slabs of the static PES, used by the step ``pes_scf``.
     """
 
     slabs: list[SlabParams]
@@ -727,6 +783,7 @@ class InterfaceParams:
     engine: str = 'qe'
     engines: dict[str, str] = field(default_factory=dict)
     inter_params: InterParams = field(default_factory=InterParams)
+    pes_scf: PesScfParams = field(default_factory=PesScfParams)
 
     def engine_for(self, step):
         """Engine of a step that runs calculations.

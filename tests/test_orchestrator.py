@@ -171,6 +171,13 @@ def test_order_of_the_steps():
     assert order_steps(['shear', 'charge'], INTERFACE_GRAPH) == ['shear', 'charge']
 
 
+def test_relaxed_and_static_pes_are_independent():
+    # Both need only match: the given order decides between them.
+    assert order_steps(['pes_scf', 'pes', 'match'], INTERFACE_GRAPH) == ['match', 'pes_scf', 'pes']
+    assert order_steps(['pes', 'pes_scf'], INTERFACE_GRAPH) == ['pes', 'pes_scf']
+    assert INTERFACE_GRAPH['pes'] == INTERFACE_GRAPH['pes_scf'] == ('match',)
+
+
 @pytest.mark.parametrize('requested, graph, message', [
     (['pes', 'band'], INTERFACE_GRAPH, 'steps not in the graph: band'),
     (['pes', 'pes'], INTERFACE_GRAPH, 'requested more than once'),

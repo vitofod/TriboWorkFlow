@@ -456,8 +456,11 @@ is never assigned by default.
 ## Orchestrator
 
 `execution/orchestrator.py` takes the steps of each system forward along the
-graph of the entries they read: `match` → `pes` → {`plotpes` → `shear`;
-`adhesion` → {`ppes`; `charge`}}, `shear` reading also `pes` and `match`.
+graph of the entries they read: `match` → {`pes` → {`plotpes` → `shear`;
+`adhesion` → {`ppes`; `charge`}}; `pes_scf`}, `shear` reading also `pes` and
+`match`. The two PES, `pes` and `pes_scf`, need only `match`; which of them
+`plotpes`, `shear` and `adhesion` read is decided with those steps, and until
+then they depend on `pes`.
 Each pass:
 
 1. runs a cycle of the job manager;

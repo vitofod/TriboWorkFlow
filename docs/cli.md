@@ -13,13 +13,13 @@ triboworkflow [-v] [-T] <command> [-r RUN] ...
 a command the help is printed and the code is 2. `triboworkflow <command>
 --help` gives the help of a command, with examples.
 
-The steps themselves (`match`, `pes`, `plotpes`, `shear`, `adhesion`,
-`ppes`, `charge`) come from a registry that each step joins once it is
-implemented. In this version only `match` is implemented
-([interface.md](interface.md)): a command on a run whose `[interface].steps`
-lists another step answers `step 'pes' not available in this version`, and
-nothing is prepared or submitted; `check`, `status`, `stop` and the actions on
-jobs and groups work on any run.
+The steps themselves (`match`, `pes`, `pes_scf`, `plotpes`, `shear`,
+`adhesion`, `ppes`, `charge`) come from a registry that each step joins once
+it is implemented. In this version `match`, `pes` and `pes_scf` are
+implemented ([interface.md](interface.md)): a command on a run whose
+`[interface].steps` lists another step answers `step 'plotpes' not available
+in this version`, and nothing is prepared or submitted; `check`, `status`,
+`stop` and the actions on jobs and groups work on any run.
 
 ## The run
 
@@ -47,9 +47,9 @@ CuAl/                       the run
   the run, so a run prepared on a laptop is copied to the cluster as it is
   (e.g. with `rsync -a`).
 - `[interface].steps` lists the steps to run. The graph of the steps decides
-  what comes first (`match` → `pes` → {`plotpes` → `shear`; `adhesion` →
-  {`ppes`; `charge`}}); the order of the list decides only between steps
-  ready at the same time. A step already done and current is not run again;
+  what comes first (`match` → {`pes` → {`plotpes` → `shear`; `adhesion` →
+  {`ppes`; `charge`}}; `pes_scf`}); the order of the list decides only
+  between steps ready at the same time. A step already done and current is not run again;
   an entry it reads that is valid is reused even if its step is not listed.
 - `[execution].groups` (jobs, i.e. workers, per group) is optional: it comes
   from `--groups M`, then from the settings; when both are missing the
@@ -156,6 +156,21 @@ if `orchestrator.json` had it completed. The steps after it are then no
 longer current either, and are done again when requested; a step that reads
 an entry not done again is blocked with what is missing.
 
+### The two PES
+
+```toml
+[interface]
+steps = ["match", "pes", "pes_scf"]
+```
+
+`pes` (relaxed along z) and `pes_scf` (static) are two steps with their own
+calculations and entries; each needs only `match`, so either can be
+prepared, submitted and analysed first, by hand as below or by `start`.
+`prepare pes_scf` writes one calculation per high-symmetry point, in
+`systems/mp-30_mp-134/pes_scf/<point>/`; `analyse pes_scf` writes the entry
+`pes_scf` and the structures of its minimum and maximum
+([interface.md](interface.md)).
+
 ### One step by hand, phase by phase
 
 ```bash
@@ -233,7 +248,7 @@ entries of `adhesion` are reused, and only `ppes` runs.
 
 ```toml
 [interface]
-steps = ["match", "pes", "plotpes", "shear", "adhesion", "ppes", "charge"]
+steps = ["match", "pes", "pes_scf", "plotpes", "shear", "adhesion", "ppes", "charge"]
 ```
 
 ```bash

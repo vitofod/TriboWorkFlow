@@ -5,10 +5,11 @@
 
 Run by hand on the HPC machine, from the login node, in the virtual
 environment where the package is installed; the protocol is in
-``docs/hpc_check.md``. The steps of the interface workflow are not in this
-version, so the command line prepares nothing; this script gives it test
-steps, whose small pw.x calculations go through the whole chain:
-preparation, groups of jobs, polling, relaunches, parsing, charge density.
+``docs/hpc_check.md``. Of the steps of the interface workflow only
+``match``, ``pes`` and ``pes_scf`` are in this version; this script gives
+the command line test steps in place of all of them, whose small pw.x
+calculations go through the whole chain: preparation, groups of jobs,
+polling, relaunches, parsing, charge density.
 
 Commands:
 

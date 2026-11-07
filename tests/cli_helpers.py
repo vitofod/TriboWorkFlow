@@ -8,8 +8,9 @@ of the interface workflow, with the steps and the groups of the test) and a
 jobscript. The steps are fictitious, as in the tests of the orchestrator:
 each one prepares a few calculations and writes one entry of
 ``system.json``; ``fake_steps`` puts them in the registry of the steps,
-which has only ``match`` in this version. No scheduler is called: ``fake_slurm`` replaces the
-scheduler of the commands with the simulated Slurm of ``run_helpers``, and
+which has only ``match``, ``pes`` and ``pes_scf`` in this version. No
+scheduler is called: ``fake_slurm`` replaces the scheduler of the commands
+with the simulated Slurm of ``run_helpers``, and
 ``fake_scheduler_bin`` puts fictitious ``sbatch``, ``sacct`` and ``squeue``
 first in the ``PATH``, which record their calls and run nothing.
 """
