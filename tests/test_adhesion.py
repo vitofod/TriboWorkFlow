@@ -430,9 +430,11 @@ def configure(run_dir, pes_name, kind):
 def finish_adhesion(run_dir, energies=None, prepare=True, **changes):
     """Prepare the four calculations and complete them with synthetic results.
 
-    The final structure of each is its input, as a plain structure, moved by
-    0.01 angstrom along z. With ``prepare`` False the calculations are already
-    prepared.
+    The final structure of each is its input moved by 0.01 angstrom along z,
+    with its site properties as the adapter of pw.x returns them (the slab of
+    each atom of an interface, in ``interface_region``, among them) but the
+    magnetic moments and the constraints. With ``prepare`` False the
+    calculations are already prepared.
 
     Returns
     -------
@@ -449,7 +451,10 @@ def finish_adhesion(run_dir, energies=None, prepare=True, **changes):
         final = structure.copy()
         final.translate_sites(list(range(len(final))), [0, 0, 0.01], frac_coords=False,
                               to_unit_cell=False)
-        final = Structure(final.lattice, final.species, final.frac_coords)
+        properties = {key: value for key, value in structure.site_properties.items()
+                      if key not in ('magmom', 'selective_dynamics', 'if_pos')}
+        final = Structure(final.lattice, final.species, final.frac_coords,
+                          site_properties=properties)
         energy = energies[label]
         results = {'nsites': len(structure), 'input': {'structure': structure.as_dict()},
                    'output': {'structure': final.as_dict(), 'density': float(final.density),

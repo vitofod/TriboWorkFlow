@@ -1312,7 +1312,10 @@ def case_adhesion_step(tc, name):
 # against ppes_inputs and run_ppes_analysis of the step (port), on the document
 # after match, the PES of the case and the adhesion of its kind. The adhesion is
 # not run: its interfaces are those of the document of match moved along z, the
-# same in both (ppes_document). The shifts are the 15 of the command line (A90);
+# same in both (ppes_document); the port also finds in the record of each the
+# input it would have been relaxed from, the interface of match, which it checks
+# the atoms to move against (DEV-44, the original needs no such record). The
+# shifts are the 15 of the command line (A90);
 # the command line never passes a fit (A88), so a case is run without one and
 # the others ask for 'uber', which the port calls "uber" and the original takes
 # as the name of the fit. The results of the calculations come from task
@@ -1409,7 +1412,7 @@ def ppes_step_port(tc, name):
     """ppes_inputs of the step from settings and a run with the document after
     match, the PES and the adhesion, then run_ppes_analysis on a store that
     records the database calls and gives the task documents."""
-    from triboworkflow.core.store import SystemWriter
+    from triboworkflow.core.store import Engine, Record, SystemWriter, write_record
     from triboworkflow.core.store.legacy import TASKS, LegacyStore
     from triboworkflow.execution.layout import system_dir
     from triboworkflow.workflows.interface import ppes
@@ -1447,6 +1450,15 @@ def ppes_step_port(tc, name):
     with SystemWriter(sdir) as writer:
         writer.document.create(document)
         writer.save()
+    # The step checks the slab of each atom against the input of the adhesion that gave the
+    # interface, which stays in the record of that calculation: here the interface of match,
+    # of which the interfaces of the document are the moved copies.
+    for interface_label in ppes.INTERFACE_OF.values():
+        write_record(sdir, Record(
+            system=system, step='adhesion', label=interface_label, calc_type='slab_from_scratch',
+            engine=Engine('qe', 'pw.x'), energy_model={'ecutwfc': 40.0},
+            fingerprint='sha256:' + 'a' * 64,
+            results={'input': {'structure': document['structure']['init']['interface']}}))
     inputs = ppes.ppes_inputs(Path('run'), system, settings)
     for label, shift, structure, _ in inputs.points:
         tasks[f'ppes/{label}'] = pes_task_document('ppes', label, structure, ppes_energy(shift))

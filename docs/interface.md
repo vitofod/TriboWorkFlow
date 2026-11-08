@@ -580,28 +580,38 @@ its density (`[k_points] mode = "kdens"` is required) and the pw.x input is
 written as for every calculation of the workflow. With the 15 default shifts
 ([configuration.md](configuration.md)) a site needs 15 calculations.
 
-The atoms to move are chosen from the final structure of the adhesion by their
-position, not by the slab they belong to: those whose fractional z, wrapped
-into the cell, is below one half. They are the slab on top only while **each
-slab lies in one half of the cell**: the one on top below the middle, with the
-contact plane of the interface at the origin, and the bottom one above it, as
-the structures of `match` have them when the slabs are thin compared with the
-cell and as a relaxation leaves them. **Nothing checks it**, and outside that
-case the slab is deformed, not moved as a whole:
+The atoms to move are those of the slab on top, told by the slab each atom
+belongs to and not by its position in the cell: the site property
+`interface_region` (`bot_slab` or `top_slab`) that `match` gives to every atom of
+an interface and that the pw.x adapter returns with the final structure. Each
+shift moves the whole slab on top by the same distance along z, whatever the
+thickness of the two slabs, the origin of the cell and whether the coordinates
+are wrapped; the cell and the atoms of the bottom slab stay where they are. The
+slabs are not told by their elements, which may be the same in both.
 
-- a slab on top thicker than half the cell keeps its upper atoms in place
-  (a Cu(111)/Al(111) interface with slabs of different thickness moved 82 of
-  the 105 atoms of the slab on top);
-- a bottom slab thicker than half the cell has its lower atoms moved with the
-  slab on top;
-- a final structure whose origin was moved by half a cell moves the bottom
-  slab instead.
+The slab of each atom is checked before any calculation is prepared. The
+interface of the document must carry it, and must come from the input of the
+calculation of the adhesion that gave it. The document does not keep that input
+but the record of the calculation does (`adhesion/interface_min` or
+`adhesion/interface_max`): the interface must have the same number of atoms,
+the same species in the same order and the same slab for each atom (the
+positions are not compared, since the calculation moved the atoms). Otherwise
+nothing is prepared and the step says why; in a run it is `failed`, with the
+message among its errors, and no job is submitted:
 
-The energies and the fit of such an interface are those of a geometry that is
-not the PPES. Check the fractional z of the two slabs of the interface (the
-site property `interface_region`, `bot_slab` or `top_slab`, tells which atom
-belongs to which) before relying on the curve; the selection by the slab each
-atom belongs to is planned.
+| Case | Message of the error |
+|---|---|
+| the interface carries no `interface_region` | `structure.opt.<type>.interface_min: the atoms carry no 'interface_region' (the slab each belongs to); run adhesion again` |
+| a value other than `bot_slab` or `top_slab`, or no atom in one of the two slabs | `…: atom 2 is of the slab 'middle_slab', not 'bot_slab' or 'top_slab'`, `…: no atom belongs to the slab 'top_slab'` |
+| the record of the adhesion is missing, or has no input structure, or the input carries no `interface_region` | `<system>: the record adhesion/interface_min is missing: …; run adhesion again` |
+| the number of atoms, their species in order or the slab of an atom differ between the interface and the input | `…: the interface has 62 atoms and the input of adhesion/interface_min has 63; …`, `…: atom 3 is of the slab 'top_slab' in the interface and of the slab 'bot_slab' in …` |
+
+Results computed with another selection of the atoms are not reused: the
+structures of the calculations change where the selection does, and so do their
+fingerprints, so a step whose results were computed before is no longer done and
+`prepare ppes --replace` computes it again. Where the selection by position
+picked the slab on top (the slabs thin compared with the cell, the contact plane
+at the origin) the structures, and the results, are the same.
 
 ### Analysis
 
@@ -700,9 +710,14 @@ default ones, with the jump over 2.5 (A90). The type of the PPES was an option
 independent of the adhesion in TribChem; here it is the one of
 `[interface.adhesion]`, and the PPES of a site was skipped there once the other
 site was done (A59), where here "done" is the entries of the site with their
-provenance (D57). The choice of the atoms to move by the fractional z is the
-original one, with the limits above (A91); the atoms of the interface already
-carry the slab they belong to (`interface_region`), which the selection does not
-use yet. Not ported: `override`, `run_vasp`, `get_main_folder`
+provenance (D57). TribChem chose the atoms to move by their fractional z, once
+wrapped into the cell, below one half: the slab on top only while each slab lies
+in one half of the cell, otherwise a slab thicker than half the cell was
+deformed (a Cu(111)/Al(111) interface with slabs of different thickness moved 82
+of the 105 atoms of the slab on top) and, with the origin moved by half a cell,
+the bottom slab was moved (A91). Here the atoms are chosen by the slab each
+belongs to and checked against the input of the adhesion (DEV-44); the rest of
+the operations on the structures, the translation of the atoms and the input set
+among them, are the original ones. Not ported: `override`, `run_vasp`, `get_main_folder`
 (A47), `FT_SaveVASPOutputs`, the other values of `ppes_type` and the figure and
 the csv of the PPES.

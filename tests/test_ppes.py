@@ -7,7 +7,10 @@ The example run is matched, its PES are analysed on synthetic energies and its
 adhesion is analysed for each of the three variants of ``[interface.adhesion]``
 (``test_adhesion``); the tests check what the step reads from that document and
 the calculations it makes: one static calculation of the interface relaxed by
-the adhesion for each shift of the slab on top.
+the adhesion for each shift of the slab on top. The atoms moved are those of the
+slab on top, told by the slab each carries (``interface_region``) and checked
+against the input of the adhesion in its record, whatever the thickness of the
+slabs and the origin of the cell.
 
 Notes
 -----
@@ -43,9 +46,9 @@ from triboworkflow.cli.main import main
 from triboworkflow.cli.run import build_orchestrator, load_run
 from triboworkflow.core.settings import SettingsError
 from triboworkflow.core.settings.schema import PPES_SHIFTS
-from triboworkflow.core.store import (PrerequisiteError, Status, StoreError, SystemDocument,
-                                      SystemWriter, check_prerequisites, read_record,
-                                      read_system, record_path, write_record)
+from triboworkflow.core.store import (Engine, PrerequisiteError, Record, Status, StoreError,
+                                      SystemDocument, SystemWriter, check_prerequisites,
+                                      read_record, read_system, record_path, write_record)
 from triboworkflow.core.store.legacy import LegacyStore
 from triboworkflow.core.structures.readers import read_extxyz_text
 from triboworkflow.engines.qe.results import parse_output
@@ -76,7 +79,11 @@ def top_species(run_dir):
 def test_step_and_constants():
     assert ppes.PpesStep.name == ppes.STEP == 'ppes'
     assert ppes.CALC_TYPE == 'slab_from_scratch' and ppes.PPES_TYPE == 'energy'
-    assert ppes.INTER_TYPE == 'middle'
+    # The atoms to move are those of the slab on top, which the structures of match carry in a
+    # site property: no part of the cell is chosen by a position any more.
+    assert (ppes.SLAB_PROPERTY, ppes.TOP_SLAB, ppes.BOTTOM_SLAB) == (
+        'interface_region', 'top_slab', 'bot_slab')
+    assert not hasattr(ppes, 'INTER_TYPE')
     assert ppes.INTERFACE_OF == {'min_site': 'interface_min', 'max_site': 'interface_max'}
     assert len(SHIFT_LABELS) == 15 and len(set(SHIFT_LABELS)) == 15
 
@@ -132,24 +139,36 @@ def test_the_site_and_the_shifts_come_from_the_settings(analysed_copy):
     assert inputs.parameters['fit'] == 'uber' and inputs.parameters['shifts'] == [0.5, -1.0, 2.0]
 
 
-def test_the_entry_read_is_not_changed_by_the_vendored_code(analysed):
+def slabs_of(structure):
+    """Whether each atom is of the slab on top, from the slab it carries (``interface_region``)."""
+    return np.array(structure.site_properties['interface_region']) == 'top_slab'
+
+
+def test_the_entry_read_is_not_changed_by_the_preparation(analysed):
     run_dir, _, _, kind = analysed
     before = interface_of(run_dir, kind)
     inputs = inputs_of(run_dir)
     assert interface_of(run_dir, kind) == before
     assert inputs.read['interface'] == before
-    # The vendored code prints which sites it moves; the step keeps it for the log.
-    assert 'site to shift' in inputs.printed
+    # The atoms moved are the ones of the slab on top, by their index in the interface.
+    top = slabs_of(structure_of(before))
+    assert inputs.top == list(np.flatnonzero(top))
 
 
-def test_only_the_slab_on_top_moves(analysed):
-    run_dir, _, _, kind = analysed
-    original = structure_of(interface_of(run_dir, kind))
-    top = np.array([site.specie.symbol in top_species(run_dir) for site in original])
+@pytest.mark.parametrize('site', ['min_site', 'max_site'])
+def test_only_the_slab_on_top_moves(analysed_copy, site):
+    run_dir, _, _, kind = analysed_copy
+    if site == 'max_site':
+        edit_config(run_dir, 'site = "min_site"', 'site = "max_site"')
+    original = structure_of(interface_of(run_dir, kind, site))
+    top = slabs_of(original)
     assert top.any() and not top.all()
+    # The slab each atom carries is that of its element here (the slabs differ).
+    assert (top == np.array([s.specie.symbol in top_species(run_dir) for s in original])).all()
     for label, shift, moved, _ in inputs_of(run_dir).points:
+        assert label.startswith(site)
         assert np.allclose(moved.lattice.matrix, original.lattice.matrix)
-        assert [site.specie for site in moved] == [site.specie for site in original]
+        assert [site_.specie for site_ in moved] == [site_.specie for site_ in original]
         displacement = np.asarray(moved.cart_coords) - np.asarray(original.cart_coords)
         assert np.allclose(displacement[top], [0.0, 0.0, shift], atol=1e-9), label
         assert np.allclose(displacement[~top], 0.0, atol=1e-9), label
@@ -220,6 +239,24 @@ def test_the_site_changes_the_calculations(analysed_copy):
     assert set(other) == {calc_id.replace('min_site', 'max_site') for calc_id in plan}
     # The two interfaces differ, so the calculations of the same shift differ too.
     assert not set(other.values()) & set(plan.values())
+
+
+def test_other_atoms_to_move_give_other_calculations(analysed_copy):
+    """The calculations follow the atoms moved: results of another selection are not reused.
+
+    The slabs of the interface exchanged, with the same positions: every shift but zero moves
+    other atoms, and the fingerprint of its calculation changes with them.
+    """
+    run_dir, _, _, kind = analysed_copy
+    plan = ppes.PpesStep().plan(run_dir, SYSTEM)
+    interface = structure_of(interface_of(run_dir, kind))
+    swapped = with_slabs(interface, ['bot_slab' if slab == 'top_slab' else 'top_slab'
+                                     for slab in interface.site_properties['interface_region']])
+    put_interface(run_dir, swapped, kind=kind)
+    other = ppes.PpesStep().plan(run_dir, SYSTEM)
+    assert list(other) == list(plan)
+    assert {calc_id for calc_id in plan if other[calc_id] != plan[calc_id]} >= {
+        calc_id for calc_id in plan if not calc_id.endswith('_0.0')}
 
 
 # --- what the step reads is current along the whole chain (P1) ---------------------------------
@@ -337,17 +374,44 @@ def relaxed_through_the_adapter(run_dir, kind, label='interface_min'):
     return structure_in, parsed.results['output']['structure']
 
 
-def put_interface(run_dir, structure, kind='regular', site='min_site'):
-    """Replace the interface that the step starts from."""
+def put_input(run_dir, structure, site='min_site'):
+    """Write in the record of the adhesion the input that the interface of a site was relaxed from.
+
+    The record is made when the run has none (the adhesion of ``surfaces`` is not run), with the
+    input as the adapter of pw.x leaves it among the results.
+    """
+    sdir = system_dir(run_dir, SYSTEM)
+    label = ppes.INTERFACE_OF[site]
+    try:
+        record = read_record(sdir, f'adhesion/{label}')
+    except FileNotFoundError:
+        record = Record(system=SYSTEM, step='adhesion', label=label, calc_type='slab_from_scratch',
+                        engine=Engine('qe', 'pw.x'), energy_model={'ecutwfc': 40.0},
+                        fingerprint='sha256:' + 'a' * 64)
+    results = {**(record.results or {}), 'input': {'structure': structure.as_dict()}}
+    write_record(sdir, dataclasses.replace(record, results=jsanitize(results, strict=False)))
+
+
+def put_interface(run_dir, structure, kind='regular', site='min_site', given=None):
+    """Replace the interface that the step starts from, and the input it was relaxed from.
+
+    ``given`` is that input; the interface itself when not given (a relaxation that moves
+    nothing).
+    """
     with SystemWriter(system_dir(run_dir, SYSTEM)) as writer:
         writer.document.set(ppes.interface_entry(kind, site), structure.as_dict())
         writer.save()
+    put_input(run_dir, structure if given is None else given, site)
 
 
 def moved_atoms(run_dir, final):
-    """Whether each atom of ``final`` is moved by the shift (True) or stays (False), per shift."""
+    """Whether each atom of ``final`` is moved by the shift (True) or stays (False), per shift.
+
+    Whatever the atoms moved, the cell is the one of ``final`` and the atoms move along z only.
+    """
     moved = {}
     for label, shift, structure, _ in inputs_of(run_dir).points:
+        assert np.allclose(structure.lattice.matrix, final.lattice.matrix), label
         displacement = np.asarray(structure.cart_coords) - np.asarray(final.cart_coords)
         assert np.allclose(displacement[:, :2], 0.0, atol=1e-9), label
         moved[shift] = np.isclose(displacement[:, 2], shift, atol=1e-9)
@@ -355,25 +419,51 @@ def moved_atoms(run_dir, final):
     return moved
 
 
-def test_the_slab_on_top_moves_after_the_adapter(surfaces_copy):
+@pytest.fixture(scope='module')
+def adapter_pair(surfaces):
+    """The input of a relaxation of the interface at the lowest site, and what the adapter returns.
+
+    Returns
+    -------
+    structure_in, final : pymatgen.core.structure.Structure
+        Copy them before changing them.
+    """
+    structure_in, output = relaxed_through_the_adapter(surfaces, 'regular')
+    return structure_in, structure_of(output)
+
+
+def test_the_adapter_keeps_the_slab_of_each_atom(surfaces, adapter_pair):
+    """The interface comes back with the slab of every atom, in the order of its input."""
+    structure_in, final = adapter_pair
+    slabs = structure_in.site_properties['interface_region']
+    assert set(slabs) == {'bot_slab', 'top_slab'}
+    assert final.site_properties['interface_region'] == slabs
+    assert [site.specie for site in final] == [site.specie for site in structure_in]
+    # The two slabs of the example have different elements: the slabs are told by them too.
+    top = slabs_of(final)
+    assert (top == np.array([site.specie.symbol in top_species(surfaces) for site in final])).all()
+
+
+def test_the_slab_on_top_moves_after_the_adapter(surfaces_copy, adapter_pair):
     """The interface that the adapter returns for a relaxation keeps the slab on top the one moved.
 
     The interface has its contact plane at z = 0 and the vacuum around the middle of the cell:
     the slab on top is in the lower half of the cell, the bottom one in the upper half (at
     negative z once shifted by a cell). The relaxation moves the atoms a little and wraps none.
+    Each shift moves the atoms of the slab on top by that distance along z, and nothing else.
     """
     run_dir = surfaces_copy
-    structure_in, output = relaxed_through_the_adapter(run_dir, 'regular')
-    final = structure_of(output)
-    top = np.array([site.specie.symbol in top_species(run_dir) for site in final])
+    structure_in, final = adapter_pair
+    final = final.copy()
+    top = slabs_of(final)
     assert top.any() and not top.all()
-    # Fractional z as the vendored function wraps it, then as the adapter returns it.
+    # The usual case, in which a selection by position would give the same atoms.
     assert (np.asarray(final.frac_coords)[top, 2] < 0.5).all()
     assert (np.asarray(final.frac_coords)[~top, 2] > 0.5).all()
     # The adapter did move the atoms from those of its input (by 0.02 angstrom along z).
     assert np.allclose(np.asarray(final.cart_coords) - np.asarray(structure_in.cart_coords),
                        [0.0, 0.0, 0.02], atol=1e-6)
-    put_interface(run_dir, final)
+    put_interface(run_dir, final, given=structure_in)
     for shift, moved in moved_atoms(run_dir, final).items():
         # Only the atoms of the slab on top (a shift of zero moves none).
         if shift != 0.0:
@@ -386,7 +476,7 @@ def test_the_flags_of_a_relaxation_do_not_fix_a_static_calculation(surfaces_copy
     structure_in, output = relaxed_through_the_adapter(run_dir, 'regular', 'interface_max')
     final = structure_of(output)
     assert {tuple(f) for f in final.site_properties['if_pos']} == {(0, 0, 1)}
-    put_interface(run_dir, final, site='max_site')
+    put_interface(run_dir, final, site='max_site', given=structure_in)
     edit_config(run_dir, 'site = "min_site"', 'site = "max_site"')
     inputs = inputs_of(run_dir)
     assert len(inputs.points) == 15
@@ -397,29 +487,27 @@ def test_the_flags_of_a_relaxation_do_not_fix_a_static_calculation(surfaces_copy
         assert set(map(str, position_flags(calc.input_text))) == {'None'}, calc.calc_id
 
 
-def test_the_slab_on_top_is_chosen_from_the_origin_of_the_cell(surfaces_copy):
-    """An interface with the origin moved by half a cell has the other slab moved (A91).
+@pytest.mark.parametrize('wrapped', [False, True], ids=['unwrapped', 'wrapped'])
+@pytest.mark.parametrize('turn', [0.5, 0.3, -0.7], ids=['half', 'third', 'below'])
+def test_the_slab_on_top_does_not_depend_on_the_origin_of_the_cell(surfaces_copy, adapter_pair,
+                                                                   turn, wrapped):
+    """An interface with its origin elsewhere moves its slab on top, wrapped or not (A91).
 
-    The vendored function moves the atoms whose fractional z, wrapped into the cell, is below
-    one half, whatever slab they belong to: they are the slab on top only when each slab lies in
-    one half of the cell, the one on top with the contact plane of the interface at the origin.
-    The adapter writes and reads the positions as they are (no origin is chosen), so here the
-    structure has to be translated before reaching the step to get the wrong slab; the next two
-    tests show the slabs that are thicker than half the cell, which need no translation. All
-    three document the selection of the original code and are to be replaced by the selection
-    by the slab each atom belongs to.
+    The adapter writes and reads the positions as they are, so the structure is translated here
+    before it reaches the step: by a fraction of the cell along z, with the coordinates left
+    where the translation puts them or wrapped back into the cell. The atoms to move are those
+    of the slab on top whatever the origin: no position in the cell tells them.
     """
     run_dir = surfaces_copy
-    _, output = relaxed_through_the_adapter(run_dir, 'regular')
-    final = structure_of(output)
-    top = np.array([site.specie.symbol in top_species(run_dir) for site in final])
+    structure_in, final = adapter_pair
     translated = final.copy()
-    translated.translate_sites(list(range(len(translated))), [0.0, 0.0, final.lattice.c / 2],
-                               frac_coords=False, to_unit_cell=False)
-    put_interface(run_dir, translated)
+    translated.translate_sites(list(range(len(translated))), [0.0, 0.0, turn * final.lattice.c],
+                               frac_coords=False, to_unit_cell=wrapped)
+    put_interface(run_dir, translated, given=structure_in)
+    top = slabs_of(translated)
     for shift, moved in moved_atoms(run_dir, translated).items():
         if shift != 0.0:
-            assert moved[~top].all() and not moved[top].any(), shift
+            assert moved[top].all() and not moved[~top].any(), shift
 
 
 def thicker_slab(final, slab, extra=7.5, height=26.0):
@@ -457,35 +545,178 @@ def thicker_slab(final, slab, extra=7.5, height=26.0):
                      site_properties={'interface_region': regions})
 
 
-def test_a_top_slab_thicker_than_half_the_cell_is_deformed(surfaces_copy):
-    """The atoms of the slab on top above the middle of the cell stay where they are (A91)."""
+@pytest.mark.parametrize('slab', ['top_slab', 'bot_slab'])
+def test_the_whole_slab_on_top_moves_whatever_the_thickness_of_the_slabs(surfaces_copy,
+                                                                         adapter_pair, slab):
+    """A slab thicker than half the cell does not change which atoms move (A91).
+
+    With the top slab thicker than half the cell, its upper atoms are above the middle of the
+    cell; with the bottom one thicker, its lower atoms are below it. The atoms moved are the
+    whole slab on top and nothing of the slab below, so no atom of its element moves.
+    """
     run_dir = surfaces_copy
-    final = structure_of(relaxed_through_the_adapter(run_dir, 'regular')[1])
-    thick = thicker_slab(final, 'top_slab')
-    top = np.array(thick.site_properties['interface_region']) == 'top_slab'
+    structure_in, final = adapter_pair
+    thick = thicker_slab(final, slab)
+    top = slabs_of(thick)
     z = np.asarray(thick.frac_coords)[:, 2]
-    assert z[top].min() < 0.5 < z[top].max() and (z[~top] > 0.5).all()
+    made, other = (top, ~top) if slab == 'top_slab' else (~top, top)
+    assert z[made].min() < 0.5 < z[made].max()
+    assert (z[other] > 0.5).all() if slab == 'top_slab' else (z[other] < 0.5).all()
     put_interface(run_dir, thick)
     for shift, moved in moved_atoms(run_dir, thick).items():
         if shift != 0.0:
-            # Only the atoms below the middle move, and they are part of the slab on top.
-            assert (moved == (z < 0.5)).all(), shift
-            assert 0 < moved[top].sum() < top.sum() and not moved[~top].any(), shift
+            assert moved[top].all() and not moved[~top].any(), shift
+            assert {thick[i].specie.symbol for i in np.flatnonzero(moved)} == top_species(run_dir)
 
 
-def test_a_bottom_slab_thicker_than_half_the_cell_moves_with_the_top_one(surfaces_copy):
-    """The atoms of the bottom slab below the middle of the cell are moved (A91)."""
+@pytest.mark.parametrize('slab, turn', [(None, 0.5), ('top_slab', 0.0), ('bot_slab', 0.0)],
+                         ids=['half-cell origin', 'thick top', 'thick bottom'])
+def test_slabs_of_the_same_material_are_told_apart(surfaces_copy, adapter_pair, slab, turn):
+    """Two slabs of one element are told apart by the slab each atom carries, not by its element."""
     run_dir = surfaces_copy
-    final = structure_of(relaxed_through_the_adapter(run_dir, 'regular')[1])
-    thick = thicker_slab(final, 'bot_slab')
-    top = np.array(thick.site_properties['interface_region']) == 'top_slab'
-    z = np.asarray(thick.frac_coords)[:, 2]
-    assert (z[top] < 0.5).all() and z[~top].min() < 0.5 < z[~top].max()
-    put_interface(run_dir, thick)
-    for shift, moved in moved_atoms(run_dir, thick).items():
+    base = adapter_pair[1]
+    same = Structure(base.lattice, ['Cu'] * len(base), base.frac_coords,
+                     site_properties={'interface_region': base.site_properties['interface_region']})
+    if slab is not None:
+        same = thicker_slab(same, slab)
+    same.translate_sites(list(range(len(same))), [0.0, 0.0, turn * same.lattice.c],
+                         frac_coords=False, to_unit_cell=False)
+    assert {site.specie.symbol for site in same} == {'Cu'}
+    put_interface(run_dir, same)
+    top = slabs_of(same)
+    assert top.any() and not top.all()
+    for shift, moved in moved_atoms(run_dir, same).items():
         if shift != 0.0:
-            assert (moved == (z < 0.5)).all(), shift
-            assert moved[top].all() and 0 < moved[~top].sum() < (~top).sum(), shift
+            assert moved[top].all() and not moved[~top].any(), shift
+
+
+# --- the slab of each atom must be there and be the one of the input (D58) -------------------
+
+def with_slabs(structure, slabs):
+    """A copy of the structure with another slab for each atom."""
+    other = structure.copy()
+    other.add_site_property('interface_region', list(slabs))
+    return other
+
+
+def without_slabs(structure):
+    """A copy of the structure without the slab of its atoms."""
+    other = structure.copy()
+    other.remove_site_property('interface_region')
+    return other
+
+
+def test_without_the_slab_of_the_atoms_the_step_stops(surfaces_copy, adapter_pair):
+    structure_in, final = adapter_pair
+    put_interface(surfaces_copy, without_slabs(final), given=structure_in)
+    with pytest.raises(PrerequisiteError, match=r'structure\.opt\.regular\.interface_min.*'
+                                                r'interface_region.*run adhesion again'):
+        inputs_of(surfaces_copy)
+
+
+def test_without_the_slab_of_the_atoms_of_the_input_the_step_stops(surfaces_copy, adapter_pair):
+    structure_in, final = adapter_pair
+    put_interface(surfaces_copy, final, given=without_slabs(structure_in))
+    with pytest.raises(PrerequisiteError, match=r'input of adhesion/interface_min.*'
+                                                r'interface_region'):
+        inputs_of(surfaces_copy)
+
+
+def test_a_slab_that_is_neither_top_nor_bottom_stops_the_step(surfaces_copy, adapter_pair):
+    structure_in, final = adapter_pair
+    slabs = list(final.site_properties['interface_region'])
+    slabs[2] = 'middle_slab'
+    put_interface(surfaces_copy, with_slabs(final, slabs), given=structure_in)
+    with pytest.raises(StoreError, match=r"atom 2.*'middle_slab'.*'bot_slab' or "
+                                         r"'top_slab'") as error:
+        inputs_of(surfaces_copy)
+    assert not isinstance(error.value, PrerequisiteError)
+
+
+@pytest.mark.parametrize('only', ['bot_slab', 'top_slab'])
+def test_an_interface_with_one_slab_only_stops_the_step(surfaces_copy, adapter_pair, only):
+    structure_in, final = adapter_pair
+    slabs = [only] * len(final)
+    put_interface(surfaces_copy, with_slabs(final, slabs), given=with_slabs(structure_in, slabs))
+    other = 'top_slab' if only == 'bot_slab' else 'bot_slab'
+    with pytest.raises(StoreError, match=f"no atom.*'{other}'") as error:
+        inputs_of(surfaces_copy)
+    assert not isinstance(error.value, PrerequisiteError)
+
+
+def test_without_the_record_of_the_adhesion_the_step_stops(surfaces_copy, adapter_pair):
+    structure_in, final = adapter_pair
+    put_interface(surfaces_copy, final, given=structure_in)
+    record_path(system_dir(surfaces_copy, SYSTEM), 'adhesion/interface_min').unlink()
+    with pytest.raises(PrerequisiteError, match=r'record adhesion/interface_min.*missing.*'
+                                                r'run adhesion again'):
+        inputs_of(surfaces_copy)
+
+
+def test_a_record_without_the_input_stops_the_step(surfaces_copy, adapter_pair):
+    structure_in, final = adapter_pair
+    put_interface(surfaces_copy, final, given=structure_in)
+    sdir = system_dir(surfaces_copy, SYSTEM)
+    record = read_record(sdir, 'adhesion/interface_min')
+    write_record(sdir, dataclasses.replace(record, results={'output': {'energy': -1.0}}))
+    with pytest.raises(PrerequisiteError, match=r'record adhesion/interface_min.*no input '
+                                                r'structure'):
+        inputs_of(surfaces_copy)
+
+
+def different_species(structure_in, final):
+    """The first atom of the interface with the element of the first atom of the other slab."""
+    species = [site.specie.symbol for site in final]
+    other = next(i for i, symbol in enumerate(species) if symbol != species[0])
+    species[0] = species[other]
+    return structure_in, Structure(final.lattice, species, final.frac_coords,
+                                   site_properties=final.site_properties)
+
+
+def in_reverse_order(structure_in, final):
+    """The interface with its atoms in the opposite order."""
+    return structure_in, Structure(
+        final.lattice, [site.specie for site in final][::-1], np.asarray(final.frac_coords)[::-1],
+        site_properties={key: list(values)[::-1] for key, values in final.site_properties.items()})
+
+
+def without_the_last_atom(structure_in, final):
+    """The interface without its last atom."""
+    fewer = final.copy()
+    fewer.remove_sites([len(fewer) - 1])
+    return structure_in, fewer
+
+
+def with_the_slab_of_two_atoms_swapped(structure_in, final):
+    """The interface in which an atom of each slab carries the slab of the other."""
+    slabs = list(final.site_properties['interface_region'])
+    i, j = slabs.index('bot_slab'), slabs.index('top_slab')
+    slabs[i], slabs[j] = slabs[j], slabs[i]
+    return structure_in, with_slabs(final, slabs)
+
+
+@pytest.mark.parametrize('change, message', [
+    (without_the_last_atom, r'has \d+ atoms and the input of adhesion/interface_min has \d+'),
+    (different_species, r'species.*differ.*input of adhesion/interface_min'),
+    (in_reverse_order, r'species.*differ.*input of adhesion/interface_min'),
+    (with_the_slab_of_two_atoms_swapped, r"atom \d+ is of the slab '\w+' in the interface and of "
+                                         r"the slab '\w+' in the input of adhesion/interface_min")])
+def test_an_interface_that_does_not_match_its_input_stops_the_step(surfaces_copy, adapter_pair,
+                                                                   change, message):
+    """Atoms, species in order and slab of each atom of the interface are those of its input."""
+    given, interface = change(*adapter_pair)
+    put_interface(surfaces_copy, interface, given=given)
+    with pytest.raises(StoreError, match=message) as error:
+        inputs_of(surfaces_copy)
+    assert not isinstance(error.value, PrerequisiteError)
+
+
+def test_the_atoms_are_the_same_in_the_input_and_in_the_interface(surfaces_copy, adapter_pair):
+    """What the adapter returns is accepted: same atoms, species and slabs as its input."""
+    structure_in, final = adapter_pair
+    put_interface(surfaces_copy, final, given=structure_in)
+    inputs = inputs_of(surfaces_copy)
+    assert inputs.top == list(np.flatnonzero(slabs_of(final)))
 
 
 # --- the calculations completed ------------------------------------------------------------------
@@ -1195,6 +1426,81 @@ def test_changing_only_the_fit_runs_the_analysis_alone(tmp_path, fake_slurm):
     assert orch.manager.jobs == jobs and files_of(run_dir) == files
     assert 'uber' in ppes_doc(run_dir)['energy']['min_site']
     assert ppes.PpesStep().done(run_dir, SYSTEM)
+
+
+def drop_the_input_of_the_adhesion(run_dir, label='interface_min'):
+    """Leave the record of a calculation of the adhesion without the input it was relaxed from."""
+    sdir = system_dir(run_dir, SYSTEM)
+    record = read_record(sdir, f'adhesion/{label}')
+    results = {key: value for key, value in record.results.items() if key != 'input'}
+    write_record(sdir, dataclasses.replace(record, results=results))
+
+
+def test_nothing_is_prepared_without_the_input_of_the_adhesion(adhered_copy):
+    drop_the_input_of_the_adhesion(adhered_copy)
+    with pytest.raises(PrerequisiteError, match='has no input structure'):
+        ppes.PpesStep().prepare(adhered_copy, SYSTEM)
+    assert not (system_dir(adhered_copy, SYSTEM) / 'ppes').exists()
+
+
+def test_calculations_of_another_selection_are_never_overwritten(adhered_copy):
+    """Calculations prepared with other atoms moved are neither reused nor silently overwritten.
+
+    The slabs of the interface are exchanged, as if the calculations on disk had been prepared
+    when the atoms to move were the others: they are no longer those of the settings, and
+    preparing the step again stops, names them and points to ``prepare ppes --replace``.
+    """
+    step = ppes.PpesStep()
+    step.prepare(adhered_copy, SYSTEM)
+    old = step.plan(adhered_copy, SYSTEM)
+    interface = structure_of(interface_of(adhered_copy, 'regular'))
+    swapped = with_slabs(interface, ['bot_slab' if slab == 'top_slab' else 'top_slab'
+                                     for slab in interface.site_properties['interface_region']])
+    put_interface(adhered_copy, swapped)
+    new = step.plan(adhered_copy, SYSTEM)
+    changed = sorted(calc_id for calc_id in new if new[calc_id] != old[calc_id])
+    assert set(changed) >= {calc_id for calc_id in new if not calc_id.endswith('_0.0')}
+    with pytest.raises(ValueError) as error:
+        step.prepare(adhered_copy, SYSTEM)
+    message = str(error.value)
+    assert f'{len(changed)} calculations of {SYSTEM} differ from the settings' in message
+    assert all(f'{calc_id}: fingerprint differs' in message for calc_id in changed)
+    assert '"triboworkflow prepare ppes --replace"' in message
+    # Nothing was overwritten: the records on disk are still those of the first selection.
+    sdir = system_dir(adhered_copy, SYSTEM)
+    assert {calc_id: read_record(sdir, calc_id).fingerprint for calc_id in old} == old
+
+
+def input_with_one_atom_less(run_dir, label='interface_min'):
+    """Leave the record of a calculation of the adhesion with an input of another atom count."""
+    sdir = system_dir(run_dir, SYSTEM)
+    record = read_record(sdir, f'adhesion/{label}')
+    given = structure_of(record.results['input']['structure'])
+    given.remove_sites([len(given) - 1])
+    results = {**record.results, 'input': {'structure': jsanitize(given.as_dict(), strict=False)}}
+    write_record(sdir, dataclasses.replace(record, results=results))
+
+
+@pytest.mark.parametrize('spoil, message', [
+    (drop_the_input_of_the_adhesion, 'has no input structure'),
+    (input_with_one_atom_less, r'the interface has \d+ atoms and the input of '
+                               r'adhesion/interface_min has \d+')])
+def test_the_orchestrator_stops_the_step_when_its_atoms_cannot_be_checked(tmp_path, fake_slurm,
+                                                                         spoil, message):
+    """A step done whose atoms to move can no longer be checked is not kept as done.
+
+    It fails with the reason and prepares nothing: no job is submitted and no file is written.
+    """
+    run_dir, orch = orchestrated_chain(tmp_path, fake_slurm)
+    jobs = dict(orch.manager.jobs)
+    spoil(run_dir)
+    files = files_of(run_dir)
+    orch.run_pass()
+    entry = orch.entry(SYSTEM, 'ppes')
+    assert entry['status'] == 'failed', entry
+    assert re.search(message, entry['error']), entry
+    assert orch.manager.jobs == jobs and files_of(run_dir) == files
+    assert statuses_of(orch)['adhesion'] == 'completed'
 
 
 def cli(run_dir, *argv):

@@ -17,23 +17,26 @@ default shifts (``PPES_SHIFTS``) are 15 values from -0.75 to 3 angstrom with a
 step of 0.25 that jumps from 2.25 to 2.75: there is no 2.5 (A90); the fit
 (``fit = "uber"``, off by default) uses the shifts that are zero or positive.
 
-The atoms to move are chosen from the final structure of the adhesion
-(``'middle'`` of ``generate_ppes_inputs``) by their position, not by the slab
-they belong to: the sites whose fractional z, once wrapped into the cell, is
-below one half. They are the slab on top only while each slab lies in one half
-of the cell, the one on top below the middle (the contact plane of the
-interface at the origin) and the bottom one above it, as the structures of
-``match`` have them when the slabs are thin compared with the cell and as a
-relaxation leaves them (the positions are not wrapped). Otherwise the slab is
-deformed and not moved as a whole: a slab on top thicker than half the cell
-keeps its upper atoms in place, a bottom slab thicker than half the cell has its
-lower atoms moved, and with the origin moved by half a cell the bottom slab is
-moved instead (``Notes``). The inputs (``ppes_inputs``)
-come from the document of the system, which ``check_prerequisites`` requires
-current together with the whole chain of steps behind it
-(``chain.check_upstream``). The k-point grid of each calculation is that of the
-vendored workflow code (``VaspInputSet``), with the grid from ``[k_points]
-.kdens`` (``mode = "kdens"``); the pw.x input is written from it
+The atoms to move are those of the slab on top, each told by the slab it belongs
+to and not by its position in the cell: the site property ``interface_region``
+(``bot_slab`` or ``top_slab``) that ``match`` gives to every atom of an
+interface and that the pw.x adapter returns with the final structure. Slabs of
+any thickness, an interface whose origin is anywhere and coordinates wrapped or
+not therefore move the slab on top as a whole, by the same shift in z, and the
+cell and the atoms of the bottom slab stay where they are. The slabs are never
+guessed from the elements, which may be the same in both. The map is checked
+before any calculation is prepared (``slab_on_top``): the interface of the
+document must carry it, and its atoms, their species in order and their slabs
+must be those of the input of the calculation of the adhesion that gave it,
+which stays in the record ``adhesion/interface_min`` or
+``adhesion/interface_max``. If the map or the record is missing,
+``ppes_inputs`` raises ``PrerequisiteError``; if the map is not valid or the two
+disagree, ``StoreError``; nothing is prepared in either case (D58). The inputs
+(``ppes_inputs``) come from the document of the system, which
+``check_prerequisites`` requires current together with the whole chain of steps
+behind it (``chain.check_upstream``). The k-point grid of each calculation is
+that of the vendored workflow code (``VaspInputSet``), with the grid from
+``[k_points].kdens`` (``mode = "kdens"``); the pw.x input is written from it
 (``preparation.workflow_calculation``).
 
 The analysis (``PpesStep.analyse``) uses the records of the calculations only
@@ -67,7 +70,8 @@ To remove: port of TribChem's ``FT_StartPPES`` (``highput/firetasks/run.py
 :1738-1835``, with ``FireTaskInterface.query_interface``, ``core.py:493-556``),
 of ``InterfaceWF.calculate_ppes`` (``highput/workflows/interface.py:357-468``)
 and of ``generate_ppes_inputs`` (``highput/utils/manipulate_struct.py:609-670``,
-vendored and called unchanged, with its debugging ``print``). TribChem's
+vendored and no longer called: its loop over the shifts is repeated in
+``ppes_inputs`` with the atoms of the slab on top, DEV-44). TribChem's
 ``set_ppes`` (``core/cli/calc_interface_cli.py:232-248``) fixes ``calc_type`` to
 ``slab_from_scratch`` and ``ppes_type`` to ``energy``. ``comp_params`` is
 ``{'kdens': [k_points].kdens}`` (DEV-35); the ids are those of the document
@@ -78,13 +82,20 @@ written by ``match`` (A80). Not ported: ``override``, ``run_vasp``,
 of ``GeneralTribchemWF._select_entry('ppes')`` (``highput/workflows/wfcore.py
 :114-128``), then ``FT_FitPPES`` (``highput/firetasks/pes.py:265-375``) with
 ``ppes_type`` ``energy``; ``FT_FitPPES`` runs the fit only ``if p['fit']``,
-which TribChem's command line never gave (A88). The choice of the slab by the
-fractional z, with the print "ELISA site to shift" for each atom moved, is the
-original one and nothing checks which atoms it picks: a slab thicker than half
+which TribChem's command line never gave (A88). The original chooses the atoms
+to move by their fractional z, once wrapped into the cell, below one half
+(``'middle'`` of ``generate_ppes_inputs``, with the print "ELISA site to shift"
+for each atom moved) and nothing checks which atoms it picks: it is the slab on
+top only while each slab lies in one half of the cell, a slab thicker than half
 the cell is deformed, and an interface whose origin is moved by half a cell gets
-the bottom slab moved (A91, ``test_ppes``). The atoms of the interface carry the
-slab they belong to (the site property ``interface_region`` of ``match``), which
-the selection does not use.
+the bottom slab moved (A91). The step chooses by the slab each atom belongs to
+instead (DEV-44, D58) and repeats the original operations for each shift
+(the clean-up of the site properties, the translation of the atoms in cartesian
+coordinates without wrapping them, the vendored ``VaspInputSet``): where the
+original selection was right the structures are the same as the original ones
+and so are their fingerprints, where it was not the calculations change and the
+results computed with the wrong atoms are no longer reused (they are replaced
+with ``prepare ppes --replace``).
 """
 
 import contextlib
@@ -107,12 +118,14 @@ from triboworkflow.execution.layout import system_dir
 from triboworkflow.execution.orchestrator import Step
 from triboworkflow.execution.preparation import workflow_calculation
 from triboworkflow.vendored.highput.database.dbtools import read_one_entry
-from triboworkflow.vendored.highput.utils.manipulate_struct import generate_ppes_inputs
+from triboworkflow.vendored.highput.utils.manipulate_struct import clean_up_site_properties
 from triboworkflow.vendored.highput.utils.tasktools import read_default_params, select_struct_func
+from triboworkflow.vendored.highput.utils.vasp_tools import VaspInputSet
 from triboworkflow.vendored.physics.base.solidstate import get_cell_info
 from triboworkflow.vendored.physics.base.units import Converter
 from triboworkflow.vendored.physics.tribology.ppes import fit_ppes
 
+from .adhesion import STEP as ADHESION
 from .adhesion import AdhesionStep
 from .chain import check_upstream, upstream_done
 from .match import COLLECTION, DEFAULTS, FILTER_KEYS, clear_entries, match_parameters, set_filter
@@ -125,8 +138,11 @@ STEP = 'ppes'
 # To remove: set_ppes of TribChem's command line (calc_interface_cli.py:232-248).
 CALC_TYPE = 'slab_from_scratch'
 PPES_TYPE = 'energy'
-# Part of the slab on top: the sites with a fractional z below this are moved.
-INTER_TYPE = 'middle'
+# The slab each atom of an interface belongs to: a site property of the structures of match,
+# kept by the adapter of pw.x in the final structure of a calculation.
+SLAB_PROPERTY = 'interface_region'
+TOP_SLAB = 'top_slab'
+BOTTOM_SLAB = 'bot_slab'
 # Entry of the interface of each site, in structure.opt.<kind>.
 INTERFACE_OF = {'min_site': 'interface_min', 'max_site': 'interface_max'}
 
@@ -154,6 +170,9 @@ class PpesInputs:
         structure of the adhesion at the site.
     parameters : dict
         Parameters of the step, recorded in the provenance.
+    top : list of int
+        Indices, in the interface, of the atoms of the slab on top: the ones
+        each shift moves.
     points : list of tuple
         ``(label, shift, structure, kpoints)`` of each calculation, in the
         order of ``shifts``: the structure moved and the k-points of
@@ -170,6 +189,7 @@ class PpesInputs:
     ids: dict
     read: dict
     parameters: dict
+    top: list = field(default_factory=list)
     points: list = field(default_factory=list)
     printed: str = ''
 
@@ -200,6 +220,107 @@ def shift_label(site, shift):
     return f'{site}_{shift}'
 
 
+def interface_slabs(structure, where):
+    """The slab each atom of an interface belongs to.
+
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+        With the site property ``interface_region``.
+    where : str
+        What the structure is, for the messages (e.g. the entry of the document).
+
+    Returns
+    -------
+    list of str
+        ``bot_slab`` or ``top_slab`` for each atom, in the order of the atoms.
+
+    Raises
+    ------
+    PrerequisiteError
+        If the atoms carry no slab.
+    StoreError
+        If a slab is neither ``bot_slab`` nor ``top_slab``, or no atom
+        belongs to one of the two.
+    """
+    slabs = structure.site_properties.get(SLAB_PROPERTY)
+    if slabs is None:
+        raise PrerequisiteError(f'{where}: the atoms carry no {SLAB_PROPERTY!r} (the slab each '
+                                'belongs to); run adhesion again')
+    for i, slab in enumerate(slabs):
+        if slab not in (BOTTOM_SLAB, TOP_SLAB):
+            raise StoreError(f'{where}: atom {i} is of the slab {slab!r}, not {BOTTOM_SLAB!r} or '
+                             f'{TOP_SLAB!r}')
+    for name in (BOTTOM_SLAB, TOP_SLAB):
+        if name not in slabs:
+            raise StoreError(f'{where}: no atom belongs to the slab {name!r}')
+    return list(slabs)
+
+
+def slab_on_top(system, sdir, interface, kind, site):
+    """Indices of the atoms of the slab on top of the interface of a site, checked.
+
+    The slab of each atom is the one the interface carries. It is checked against
+    the input of the calculation of the adhesion that gave the interface, which
+    the document does not keep but the record of that calculation does: the
+    interface must have the same number of atoms, the same species in the same
+    order and the same slab for each atom. The positions are not compared, since
+    the calculation moved the atoms.
+
+    Parameters
+    ----------
+    system : str
+    sdir : path-like
+        Directory of the system.
+    interface : pymatgen.core.structure.Structure
+        The interface of the document at the site.
+    kind : str
+        ``regular`` or ``short``.
+    site : str
+        ``min_site`` or ``max_site``.
+
+    Returns
+    -------
+    list of int
+        Indices of the atoms of the slab on top, in increasing order.
+
+    Raises
+    ------
+    PrerequisiteError
+        If the interface or the input carries no slab for its atoms, or the
+        record of the calculation or the input in it is missing.
+    StoreError
+        If a slab is not valid, or the interface and the input differ.
+    """
+    entry = '.'.join(interface_entry(kind, site))
+    calc_id = f'{ADHESION}/{INTERFACE_OF[site]}'
+    where = f'the input of {calc_id}'
+    slabs = interface_slabs(interface, entry)
+    try:
+        record = read_record(sdir, calc_id)
+    except FileNotFoundError:
+        raise PrerequisiteError(f'{system}: the record {calc_id} is missing: the input that {entry}'
+                                ' was relaxed from cannot be checked; run adhesion again') from None
+    given = ((record.results or {}).get('input') or {}).get('structure')
+    if not given:
+        raise PrerequisiteError(f'{system}: the record {calc_id} has no input structure: the '
+                                f'atoms of {entry} cannot be checked; run adhesion again')
+    given = select_struct_func(given['@class']).from_dict(copy.deepcopy(given))
+    given_slabs = interface_slabs(given, where)
+    differ = 'the interface does not come from that input; run adhesion again'
+    if len(interface) != len(given):
+        raise StoreError(f'{entry}: the interface has {len(interface)} atoms and {where} has '
+                         f'{len(given)}; {differ}')
+    if [atom.species_string for atom in interface] != [atom.species_string for atom in given]:
+        raise StoreError(f'{entry}: the species of the atoms of the interface, in order, differ '
+                         f'from those of {where}; {differ}')
+    for i, (slab, slab_given) in enumerate(zip(slabs, given_slabs)):
+        if slab != slab_given:
+            raise StoreError(f'{entry}: atom {i} is of the slab {slab!r} in the interface and of '
+                             f'the slab {slab_given!r} in {where}; {differ}')
+    return [i for i, slab in enumerate(slabs) if slab == TOP_SLAB]
+
+
 def ppes_inputs(run_dir, system, settings):
     """Everything the step reads, and the structure and k-points of each calculation.
 
@@ -223,19 +344,24 @@ def ppes_inputs(run_dir, system, settings):
         matching.
     PrerequisiteError
         If the document of the system or the interface of the adhesion at the
-        site is missing.
+        site is missing, or the slab of its atoms cannot be told: the
+        interface or the input it was relaxed from carries none, or the record
+        of the adhesion that holds the input is missing (``slab_on_top``).
     StoreError
-        If the document is of another interface.
+        If the document is of another interface, or the slabs of the atoms
+        are not valid or are not those of the input (``slab_on_top``).
 
     Notes
     -----
     To remove: ``FT_StartPPES.query_interface`` (``run.py:1803-1822`` with
     ``core.py:493-556``) up to ``generate_ppes_inputs`` (``interface.py
-    :429-431``). The document is found with ``mid`` and ``miller``, as there;
-    ``comp_params`` comes from the settings instead of the document (DEV-35).
-    The vendored code changes in place the structures that it is given, and
-    prints which sites it moves: the entry read is copied first, so that
-    ``read`` (the provenance) is what the document holds.
+    :429-431``), whose loop over the shifts (``manipulate_struct.py:655-675``)
+    is repeated here with the indices of the slab on top (DEV-44). The
+    document is found with ``mid`` and ``miller``, as there; ``comp_params``
+    comes from the settings instead of the document (DEV-35). The vendored
+    code changes in place the structures that it is given, and prints: the
+    entry read is copied first, so that ``read`` (the provenance) is what the
+    document holds.
     """
     ppes = settings.interface.ppes
     kind, site = settings.interface.adhesion.type, ppes.site
@@ -259,22 +385,28 @@ def ppes_inputs(run_dir, system, settings):
                                 'first')
     read = {'interface': interface}
 
-    # The vendored code prints which sites it moves, and warns about the POTCAR
-    # functional of the VASP input set, which pw.x does not use.
+    # The vendored code prints, and warns about the POTCAR functional of the VASP input
+    # set, which pw.x does not use.
     printed = io.StringIO()
     comp_params = {'kdens': settings.k_points.kdens}
     shifts = list(ppes.shifts)
     with contextlib.redirect_stdout(printed), warnings.catch_warnings():
         warnings.filterwarnings('ignore', 'Overriding the POTCAR functional', BadInputSetWarning)
         structure = select_struct_func(interface['@class']).from_dict(copy.deepcopy(interface))
-        structures, vis, _ = generate_ppes_inputs(structure, shifts, comp_params, INTER_TYPE, None,
-                                                  CALC_TYPE)
-    points = [(shift_label(site, shift), shift, moved, v.kpoints)
-              for shift, moved, v in zip(shifts, structures, vis)]
+        top = slab_on_top(system, sdir, structure, kind, site)
+        points = []
+        for shift in shifts:
+            # Each shift starts from the interface read, with the slab on top translated in
+            # cartesian coordinates and no atom wrapped back into the cell.
+            moved = clean_up_site_properties(structure.copy())
+            moved.translate_sites(indices=top, vector=[0, 0, shift], frac_coords=False,
+                                  to_unit_cell=False)
+            vis = VaspInputSet(moved, comp_params, CALC_TYPE).get_vasp_settings()
+            points.append((shift_label(site, shift), shift, moved, vis.kpoints))
     parameters = {'type': kind, 'site': site, 'shifts': shifts, 'fit': ppes.fit,
                   'calc_type': CALC_TYPE, 'ppes_type': PPES_TYPE, 'comp_params': comp_params}
     return PpesInputs(type=kind, site=site, shifts=shifts, fit=ppes.fit, settings=settings,
-                      ids=ids, read=read, parameters=parameters, points=points,
+                      ids=ids, read=read, parameters=parameters, top=top, points=points,
                       printed=printed.getvalue())
 
 
