@@ -457,10 +457,12 @@ is never assigned by default.
 
 `execution/orchestrator.py` takes the steps of each system forward along the
 graph of the entries they read: `match` → {`pes` → {`plotpes` → `shear`;
-`adhesion` → {`ppes`; `charge`}}; `pes_scf`}, `shear` reading also `pes` and
-`match`. The two PES, `pes` and `pes_scf`, need only `match`; which of them
-`plotpes`, `shear` and `adhesion` read is decided with those steps, and until
-then they depend on `pes`.
+`adhesion` → {`ppes`; `charge`}}; `pes_scf` → `plotpes_scf`}, `plotpes` and
+`plotpes_scf` reading also `match`, `shear` reading also `pes` and `match`.
+The two PES, `pes` and `pes_scf`, need only `match`; `plotpes` interpolates
+`pes` and `plotpes_scf` interpolates `pes_scf`. Which of the two PES `shear`
+and `adhesion` read is decided with those steps, and until then they depend
+on `pes`.
 Each pass:
 
 1. runs a cycle of the job manager;
@@ -475,7 +477,13 @@ Each pass:
    checking its entries (already done and current: **completed** without
    running) and the entries it reads (`check_prerequisites`: missing or
    stale, **blocked** with what is missing, nothing computed again), then
-   prepares its calculations. Right after the preparation, and before a
+   prepares its calculations. A step analysed only by hand
+   (`Step.manual_analysis`: `plotpes`, `plotpes_scf`) is checked the same
+   way once ready, and never prepared nor analysed in a pass: when it is not
+   completed or blocked it is **manual**, with the command that analyses it
+   (`to analyse by hand: run "triboworkflow analyse plotpes" where there is
+   enough memory; …`), and a step that depends on it is **blocked**
+   (`depends on plotpes manual`) until it is completed. Right after the preparation, and before a
    **running** step is followed, the calculations prepared are compared with
    those the settings give now (`Step.plan`: `calc_id` and fingerprint): one
    missing, one no longer given or a fingerprint that differs makes the step
@@ -502,6 +510,23 @@ for its calculations goes back to running when they are relaunched by hand
 until `retry`. After a restart, or a pass interrupted at any point, the next
 pass recovers the jobs, reconciles the attempts and only then submits,
 without duplicates.
+
+A **manual** step ends the passes as a failure does: the orchestrator exits
+when every step is completed, failed, blocked or manual, so it never waits
+for the user while holding the run, and the workflow has not succeeded. The
+user then runs `analyse <step>` where there is enough memory, with the
+orchestrator ended or stopped (it holds `run.lock`); the command holds the
+lock for the whole analysis, saves the step as **running** with no
+calculations before it starts, and **completed** at its end. The next
+`start` finds it completed from its entries, without analysing it again, and
+goes on with the steps that depend on it. An analysis stopped before its end
+(a signal, the walltime of a job) writes nothing: the step stays running with
+no calculations, a pass leaves it manual again without analysing it, and the
+next `analyse` starts it from the beginning. The interpolation of the PES is
+left to the user because its memory grows with the square of its points
+([interface.md](interface.md)); this version does not run it automatically,
+and a job of its own on a compute node, followed by the orchestrator, is for
+a later version.
 
 The three phases of a step can also be run one at a time, with the same
 state: `prepare_step` (as the start in a pass, without the scheduler),

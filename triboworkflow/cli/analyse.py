@@ -15,12 +15,20 @@ Only the files of the run are read, never the scheduler: every calculation
 of the step must be done according to its claim, its record and the groups
 of jobs, with the fingerprint the settings give now; otherwise nothing is
 written and the error says, for each calculation, what is missing. A step of
-analysis only (match, plotpes, shear) is done here whole. It works on any
-machine.
+analysis only (match, plotpes, plotpes_scf, shear) is done here whole. It
+works on any machine.
+
+plotpes and plotpes_scf are analysed only here, never by the orchestrator in
+the background, which leaves them manual once ready: the interpolation of a
+large PES needs much memory, so run it where there is enough, with the
+orchestrator stopped or ended (it holds the run). The step is saved as
+running while it is analysed; an analysis stopped before its end writes
+nothing, and the next one starts it again from the beginning.
 
 Example:
  $ triboworkflow analyse match
  $ triboworkflow analyse pes
+ $ triboworkflow analyse plotpes
     """
 
     locks_run = True

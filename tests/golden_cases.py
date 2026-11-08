@@ -6,10 +6,15 @@ with the arguments that the TribChem Firetasks and workflows pass, and
 returns plain JSON data. The custom_slab cases instead compare a Firetask that
 is not vendored (FT_StoreCustomSlab) with its port in triboworkflow.core.structures,
 the match_step cases the Firetasks of the matching with the step match
-(triboworkflow.workflows.interface.match), and the pes_step cases the
+(triboworkflow.workflows.interface.match), the pes_step cases the
 Firetasks of the PES with the steps pes and pes_scf
 (triboworkflow.workflows.interface.pes), starting from the document that the
-match_step golden calls build.
+match_step golden calls build, and the plotpes_step cases the Firetasks of
+the interpolation with the steps plotpes and plotpes_scf
+(triboworkflow.workflows.interface.plotpes), starting from the document that
+the match_step and pes_step golden calls build; the key image that TribChem
+writes (the PNG of the figure encoded again) is compared by its pixels with
+the figure of the port, which writes no image (DEV-42).
 The golden values are the results obtained in the
 historic environment, stored in tests/golden/<case>.json:
 tests/historic/test_golden.py checks that they are reproduced there and
@@ -897,13 +902,34 @@ def pes_step_historic(tc, pair, step, short):
             'calls': calls}
 
 
+def port_settings(pair, mids, steps, short):
+    """Settings of a run of the port on the slabs of a pair of MATCH_STEPS,
+    written as JSON files in the current folder, with the parameters of the
+    PES of the golden cases (distance, k-points of COMP_PARAMS, short slabs)."""
+    import tomllib
+
+    from triboworkflow.core.settings.loader import settings_from_dict
+
+    data = tomllib.loads((ROOT / 'examples' / 'interface.toml').read_text(encoding='utf-8'))
+    dicts = slab_dicts()
+    slabs = []
+    for i, (name, mid) in enumerate(zip(MATCH_STEPS[pair][:2], mids), 1):
+        Path(f'slab_{i}.json').write_text(json.dumps(dicts[name]))
+        slabs.append({'file': f'slab_{i}.json', 'mid': mid, 'miller': [1, 1, 1]})
+    pes_scf = {'short': short is not None}
+    if isinstance(short, list):
+        pes_scf['layers'] = list(short)
+    data['interface'].update({'slabs': slabs, 'set_bm': False, 'steps': list(steps),
+                              'pes_scf': pes_scf})
+    data['interface']['inter_params']['interface_distance'] = PES_STEP_DISTANCE
+    data['k_points'].update({'mode': 'kdens', 'kdens': float(COMP_PARAMS['kdens'])})
+    return settings_from_dict(data)
+
+
 def pes_step_port(tc, pair, step, short):
     """pes_inputs of the step from settings and a run with the document of
     match, then run_pes_analysis on a store that records the database calls
     and gives the task documents."""
-    import tomllib
-
-    from triboworkflow.core.settings.loader import settings_from_dict
     from triboworkflow.core.store import SystemWriter
     from triboworkflow.core.store.legacy import TASKS, LegacyStore
     from triboworkflow.execution.layout import system_dir
@@ -930,20 +956,7 @@ def pes_step_port(tc, pair, step, short):
                               to_mongodb=to_mongodb)
 
     document = pes_document(pair)
-    data = tomllib.loads((ROOT / 'examples' / 'interface.toml').read_text(encoding='utf-8'))
-    dicts = slab_dicts()
-    slabs = []
-    for i, (name, mid) in enumerate(zip(MATCH_STEPS[pair][:2], document['mid'].split('_')), 1):
-        Path(f'slab_{i}.json').write_text(json.dumps(dicts[name]))
-        slabs.append({'file': f'slab_{i}.json', 'mid': mid, 'miller': [1, 1, 1]})
-    pes_scf = {'short': short is not None}
-    if isinstance(short, list):
-        pes_scf['layers'] = list(short)
-    data['interface'].update({'slabs': slabs, 'set_bm': False, 'steps': ['match', step],
-                              'pes_scf': pes_scf})
-    data['interface']['inter_params']['interface_distance'] = PES_STEP_DISTANCE
-    data['k_points'].update({'mode': 'kdens', 'kdens': float(COMP_PARAMS['kdens'])})
-    settings = settings_from_dict(data)
+    settings = port_settings(pair, document['mid'].split('_'), ['match', step], short)
 
     system = document['mid']
     sdir = system_dir(Path('run'), system)
@@ -969,6 +982,142 @@ def case_pes_step(tc, name):
     if tc.root == HISTORIC:
         return pes_step_historic(tc, pair, step, short)
     return pes_step_port(tc, pair, step, short)
+
+
+# Interpolation of the PES: the cases of PES_STEPS whose PES is interpolated,
+# with the step that interpolates it. Not on Cu/Al: its 756 points left after
+# the duplicates, replicated 12 x 12, need a dense matrix of about 88 GiB.
+PLOTPES_STEPS = ('cu111_cu111', 'scf_cu111_cu111', 'pt111_ag111')
+PLOTPES_OF = {'pes': 'plotpes', 'pes_scf': 'plotpes_scf'}
+
+
+def plotpes_document(name):
+    """Document of the interface after match and the PES of the case
+    pes_step_<name>, built from the golden calls of both. A call with a list
+    of entries and as many values sets each value in its entry, as
+    write_multiple_entry (dbtools.py:235-301) splits it."""
+    document = pes_document(PES_STEPS[name][0])
+    for call in read_golden(f'pes_step_{name}')['calls']:
+        if call['update_op'] != '$set':
+            raise AssertionError(f'unexpected update operator {call["update_op"]}')
+        entry, data = call['entry'], call['data']
+        if (isinstance(entry, list) and all(isinstance(n, list) for n in entry)
+                and isinstance(data, list) and len(data) == len(entry)):
+            for value, path in zip(data, entry):
+                mongo_set(document, value, path, call['to_mongodb'])
+        else:
+            mongo_set(document, data, entry, call['to_mongodb'])
+    return document
+
+
+def png_pixels(data):
+    """Mode, size and SHA-256 of the pixels of a PNG given as bytes: the same
+    for the same image, whatever its encoding."""
+    from PIL import Image
+    with Image.open(io.BytesIO(data)) as image:
+        image.load()
+        return {'mode': image.mode, 'size': list(image.size),
+                'sha256': vendoring.sha256(image.tobytes())}
+
+
+def plotpes_step_historic(tc, name):
+    """FT_StartInterpolation as TribChem's command line builds it, then the
+    FT_PESInterpolation of its detour (arrange_data and compute_pes, as its
+    run_task) on the document emulated as for the PES. The key image written,
+    the PNG of the figure encoded again with PIL, is replaced by its pixels."""
+    run_ft = tc['highput.firetasks.run']
+    core = tc['highput.firetasks.core']
+    dbtools = tc['highput.database.dbtools']
+    step = PES_STEPS[name][1]
+    document = plotpes_document(name)
+    calls = []
+
+    def matching(fltr):
+        if any(document.get(k) != v for k, v in fltr.items()):
+            raise AssertionError(f'filter {fltr} does not match the document')
+
+    def query_db(self, collection, db_file=None, database=None, entry=None, fltr=None,
+                 **kwargs):
+        if collection != MATCH_COLLECTION:
+            raise AssertionError(f'unexpected query of {collection}')
+        matching(fltr)
+        field = copy.deepcopy(document)
+        return field, dbtools.read_multiple_entry(field, entry)
+
+    def update_db(self, data, collection, entry=None, db_file=None, database=None, fltr=None,
+                  update_op='$set', upsert=False, to_mongodb=True, **kwargs):
+        if collection != MATCH_COLLECTION:
+            raise AssertionError(f'unexpected update of {collection}')
+        matching(fltr)
+        calls.append(update_call(data, collection, entry, fltr, update_op, to_mongodb))
+
+    saved = core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db
+    core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db = query_db, update_db
+    try:
+        # calc_interface_cli.py:191-197 (set_pes), calc_interface.py:184-190
+        start = run_ft.FT_StartInterpolation(
+            mid=document['mid'].split('_'), miller=document['miller'],
+            collection=MATCH_COLLECTION, calc_type=PES_STEP_CALC_TYPES[step], check_entry=step,
+            db_file='golden')
+        detours = start.run_task({}).detours
+        (wf,) = detours if isinstance(detours, (list, tuple)) else [detours]
+        (task,) = [t for fw in wf.fws for t in fw.tasks]
+        params = task.read_runtask('PESInterpolation', {})
+        hs_all, values, cell = task.arrange_data(params)
+        task.compute_pes(hs_all, values, cell, params)
+    finally:
+        core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db = saved
+    (call,) = calls
+    image = call['data'][params['pes_type']].pop('image')
+    return {'inputs': {'inter_all': hs_all, 'values': values, 'cell': cell},
+            'figure': sorted(p.name for p in Path('.').glob('*.png')),
+            'image': png_pixels(image), 'calls': calls}
+
+
+def plotpes_step_port(tc, name):
+    """plotpes_inputs of the step from settings and a run with the document
+    after the PES, then interpolate and write_interpolation on a store that
+    records the database calls; the pixels of the figure written."""
+    from triboworkflow.core.store import SystemWriter
+    from triboworkflow.core.store.legacy import LegacyStore
+    from triboworkflow.execution.layout import system_dir
+    from triboworkflow.workflows.interface import plotpes
+
+    class Recording(LegacyStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = []
+
+        def update_db(self, data, collection, *, entry=None, fltr=None, update_op='$set',
+                      to_mongodb=True):
+            self.calls.append(update_call(data, collection, entry, fltr, update_op, to_mongodb))
+            super().update_db(data, collection, entry=entry, fltr=fltr, update_op=update_op,
+                              to_mongodb=to_mongodb)
+
+    pair, step, short = PES_STEPS[name]
+    document = plotpes_document(name)
+    settings = port_settings(pair, document['mid'].split('_'),
+                             ['match', step, PLOTPES_OF[step]], short)
+    sdir = system_dir(Path('run'), document['mid'])
+    with SystemWriter(sdir) as writer:
+        writer.document.create(document)
+        inputs = plotpes.plotpes_inputs(sdir, writer.document, settings, PLOTPES_OF[step])
+        figure = plotpes.figure_path(sdir, inputs.name, inputs.title)
+        figure.parent.mkdir(parents=True)
+        interpolation = plotpes.interpolate(inputs, figure)
+        store = Recording(sdir, writer.document, plotpes.COLLECTION)
+        plotpes.write_interpolation(store, inputs, interpolation)
+    return {'inputs': {'inter_all': inputs.all_shifts, 'values': inputs.values,
+                       'cell': inputs.cell},
+            'figure': [figure.name], 'image': png_pixels(figure.read_bytes()),
+            'calls': store.calls}
+
+
+def case_plotpes_step(tc, name):
+    """Inputs, database writes and figure of the steps plotpes and plotpes_scf."""
+    if tc.root == HISTORIC:
+        return plotpes_step_historic(tc, name)
+    return plotpes_step_port(tc, name)
 
 
 # Charge density. The workflow reads three densities on the same grid and in
@@ -1215,6 +1364,8 @@ for _name in MATCH_STEPS:
     CASES[f'match_step_{_name}'] = (case_match_step, {'name': _name})
 for _name in PES_STEPS:
     CASES[f'pes_step_{_name}'] = (case_pes_step, {'name': _name})
+for _name in PLOTPES_STEPS:
+    CASES[f'plotpes_step_{_name}'] = (case_plotpes_step, {'name': _name})
 for _cell in CHARGE_CELLS:
     for _case, _func in (('chgcar_average', case_chgcar_average),
                          ('chgcar_displacement', case_chgcar_displacement),

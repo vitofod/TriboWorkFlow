@@ -58,9 +58,12 @@ QE_VERSION_FORMAT = re.compile(r'[0-9]+\.[0-9]+(\.[0-9]+)?')
 # Steps of the interface workflow, in the order of the graph of the
 # orchestrator (execution/orchestrator.py, INTERFACE_GRAPH). pes and pes_scf
 # are the potential energy surface relaxed along z and the static one: two
-# steps, each run when requested, neither of them by default.
-INTERFACE_STEPS = ('match', 'pes', 'pes_scf', 'plotpes', 'shear', 'adhesion', 'ppes', 'charge')
-# Interface steps that run calculations; match, plotpes and shear only analyse.
+# steps, each run when requested, neither of them by default. plotpes and
+# plotpes_scf interpolate the one and the other, in the same way.
+INTERFACE_STEPS = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf', 'shear', 'adhesion',
+                   'ppes', 'charge')
+# Interface steps that run calculations; match, plotpes, plotpes_scf and shear
+# only analyse.
 STEPS_WITH_ENGINE = ('pes', 'pes_scf', 'adhesion', 'ppes', 'charge')
 # Layers kept in a reduced slab of the static PES when the settings do not
 # give them: 3 for a (111) surface, 2 for the others.

@@ -9,19 +9,21 @@
 itself here once it is implemented; until then the command line answers that
 the step is not available, and nothing is prepared or submitted.
 
-In this version ``match``, ``pes`` and ``pes_scf`` are available: a run lists
-only these in ``[interface].steps``; with any other step the command line
-stops with ``step '<name>' not available in this version`` before doing
-anything.
+In this version ``match``, ``pes``, ``pes_scf``, ``plotpes`` and
+``plotpes_scf`` are available: a run lists only these in
+``[interface].steps``; with any other step the command line stops with
+``step '<name>' not available in this version`` before doing anything.
 """
 
 from triboworkflow.execution.orchestrator import Step
 
 from .match import MatchStep
 from .pes import RelaxedPesStep, StaticPesStep
+from .plotpes import RelaxedPlotPesStep, StaticPlotPesStep
 
 STEPS: dict[str, type[Step]] = {'match': MatchStep, 'pes': RelaxedPesStep,
-                                'pes_scf': StaticPesStep}
+                                'pes_scf': StaticPesStep, 'plotpes': RelaxedPlotPesStep,
+                                'plotpes_scf': StaticPlotPesStep}
 
 
 class StepNotAvailable(LookupError):

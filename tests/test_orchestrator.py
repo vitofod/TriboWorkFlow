@@ -178,6 +178,17 @@ def test_relaxed_and_static_pes_are_independent():
     assert INTERFACE_GRAPH['pes'] == INTERFACE_GRAPH['pes_scf'] == ('match',)
 
 
+def test_each_pes_has_its_interpolation():
+    # plotpes interpolates pes, plotpes_scf interpolates pes_scf; both read
+    # the high-symmetry points of match. shear stays on the relaxed PES.
+    assert INTERFACE_GRAPH['plotpes'] == ('pes', 'match')
+    assert INTERFACE_GRAPH['plotpes_scf'] == ('pes_scf', 'match')
+    assert INTERFACE_GRAPH['shear'] == ('plotpes', 'pes', 'match')
+    # Each interpolation right after its own PES, the given order deciding.
+    assert order_steps(['plotpes_scf', 'plotpes', 'pes', 'pes_scf', 'match'], INTERFACE_GRAPH) == \
+        ['match', 'pes', 'plotpes', 'pes_scf', 'plotpes_scf']
+
+
 @pytest.mark.parametrize('requested, graph, message', [
     (['pes', 'band'], INTERFACE_GRAPH, 'steps not in the graph: band'),
     (['pes', 'pes'], INTERFACE_GRAPH, 'requested more than once'),
@@ -353,6 +364,157 @@ def test_error_of_a_step_until_retry(run, method, monkeypatch):
         report = orch.run_pass()
         work(run)
     assert statuses(report)['pes'] == 'completed'
+
+
+# --- steps analysed by hand ------------------------------------------------------------------
+
+class ManualStep(FakeStep):
+    """A step without calculations whose analysis runs only by hand."""
+
+    manual_analysis = True
+
+
+BY_HAND = ('match', 'pes', 'plotpes', 'shear')
+MANUAL = orchestrator_module.MANUAL_REASON.format(step='plotpes')
+
+
+def manual_run(run, requested=BY_HAND, versions=None, manager=None):
+    """Orchestrator whose plotpes is analysed only by hand."""
+    versions = {} if versions is None else versions
+    steps = {name: (ManualStep if name == 'plotpes' else FakeStep)(run, name, versions)
+             for name in requested}
+    return orchestrator(run, steps=steps, manager=manager)
+
+
+def manual_restarted(run, requested=BY_HAND):
+    """A new orchestrator and job manager, as each command of the CLI builds them."""
+    run.manager = JobManager(run.dir, run.slurm, 3600, now=run.clock)
+    return manual_run(run, requested, manager=run.manager)
+
+
+def until_pes(orch, run):
+    """Passes until pes is completed; the report of the last one."""
+    for _ in range(2):
+        report = orch.run_pass()
+        work(run)
+    return report
+
+
+def test_a_step_analysed_by_hand_is_left_to_the_user(run, caplog):
+    orch = manual_run(run)
+    for _ in range(3):
+        report = orch.run_pass()
+        work(run)
+    # Never prepared nor analysed in a pass; its descendants wait for it.
+    assert statuses(report) == {'match': 'completed', 'pes': 'completed', 'plotpes': 'manual',
+                                'shear': 'blocked'}
+    assert orch.steps['plotpes'].calls == [] and prepared(orch)['shear'] == 0
+    assert orch.entry(SYSTEM, 'plotpes')['reason'] == MANUAL
+    assert MANUAL.startswith('to analyse by hand: run "triboworkflow analyse plotpes"')
+    assert orch.entry(SYSTEM, 'shear')['reason'] == 'depends on plotpes manual'
+    assert report.finished and not report.success
+    assert orch.summary(report).startswith('steps 2 completed, 1 blocked, 1 manual;')
+    ready = [r for r in caplog.records if r.getMessage() == f'{SYSTEM}/plotpes ready, {MANUAL}']
+    assert len(ready) == 1  # logged once, not at every pass
+
+
+def test_the_orchestrator_ends_with_a_step_left_to_the_user(run):
+    orch = manual_run(run)
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        work(run)
+
+    report = orch.run(sleep=sleep)
+    assert report.finished and statuses(report)['plotpes'] == 'manual'
+    assert sleeps == [EXECUTION.polling_interval]
+
+
+def test_after_the_analysis_by_hand_the_passes_go_on(run):
+    until_pes(manual_run(run), run)
+    by_hand = manual_restarted(run)
+    assert by_hand.analyse_step(SYSTEM, 'plotpes').status == 'completed'
+    assert by_hand.steps['plotpes'].calls == ['prepare', 'analyse']
+    orch = manual_restarted(run)
+    report = orch.run_pass()
+    assert statuses(report) == dict.fromkeys(BY_HAND, 'completed') and report.success
+    # Recognised from its entry: neither it nor pes is analysed again.
+    assert orch.steps['plotpes'].calls == [] and orch.steps['pes'].calls == []
+
+
+class Stopped(BaseException):
+    """The process stopped during the analysis (a signal, the walltime)."""
+
+
+def stopped_analysis(run, monkeypatch):
+    """match and pes completed, then an analysis of plotpes by hand stopped before its end."""
+    until_pes(manual_run(run), run)
+    by_hand = manual_restarted(run)
+
+    def stop(*args):
+        raise Stopped
+
+    monkeypatch.setattr(by_hand.steps['plotpes'], 'analyse', stop)
+    with pytest.raises(Stopped):
+        by_hand.analyse_step(SYSTEM, 'plotpes')
+    state = json.loads((run.dir / 'orchestrator.json').read_text())['systems'][SYSTEM]
+    assert (state['plotpes']['status'], state['plotpes']['calculations']) == ('running', [])
+    assert not read_system(run.sdir).get(['plotpes'])
+
+
+def test_an_analysis_by_hand_stopped_is_left_to_the_user_again(run, monkeypatch, caplog):
+    stopped_analysis(run, monkeypatch)
+    # adhesion, ready, is not held back by the analysis stopped.
+    orch = manual_restarted(run, ('match', 'pes', 'adhesion', 'plotpes'))
+    report = orch.run_pass()
+    assert statuses(report) == {'match': 'completed', 'pes': 'completed', 'adhesion': 'running',
+                                'plotpes': 'manual'}
+    assert orch.steps['plotpes'].calls == [] and report.finished is False
+    assert (f'{SYSTEM}/plotpes: its analysis by hand stopped before its end; it starts again '
+            'from the beginning') in caplog.text
+    by_hand = manual_restarted(run, ('match', 'pes', 'adhesion', 'plotpes'))
+    assert by_hand.analyse_step(SYSTEM, 'plotpes').status == 'completed'
+    assert by_hand.steps['plotpes'].calls == ['prepare', 'analyse']
+
+
+def test_an_analysis_by_hand_stopped_is_completed_by_the_next_one(run, monkeypatch):
+    stopped_analysis(run, monkeypatch)
+    by_hand = manual_restarted(run)
+    assert by_hand.analyse_step(SYSTEM, 'plotpes').status == 'completed'
+    assert by_hand.steps['plotpes'].calls == ['analyse']
+    assert read_system(run.sdir).get(['plotpes']) == {'done': True}
+
+
+def test_prepare_and_submit_of_a_step_analysed_by_hand(run):
+    for name in ('match', 'pes'):
+        write_entry(run.dir, SYSTEM, name)
+    orch = manual_run(run, ['plotpes'])
+    assert orch.prepare_step(SYSTEM, 'plotpes').status == 'manual'
+    assert orch.steps['plotpes'].calls == []
+    with pytest.raises(OrchestratorError, match='no calculations to submit: it is analysed by '
+                                                'hand, with "analyse plotpes"'):
+        orch.submit_step(SYSTEM, 'plotpes')
+    assert orch.entry(SYSTEM, 'plotpes')['status'] == 'manual'
+
+
+def test_a_step_analysed_by_hand_without_its_prerequisites_is_blocked(run):
+    orch = manual_run(run, ['plotpes'])
+    report = orch.run_pass()
+    assert statuses(report) == {'plotpes': 'blocked'} and orch.steps['plotpes'].calls == []
+    assert orch.entry(SYSTEM, 'plotpes')['reason'].startswith('entries missing or not current: ')
+
+
+def test_a_step_analysed_by_hand_done_or_no_longer_current(run):
+    for name in ('match', 'pes', 'plotpes'):
+        write_entry(run.dir, SYSTEM, name)
+    orch = manual_run(run, ['plotpes'])
+    report = orch.run_pass()
+    assert statuses(report) == {'plotpes': 'completed'} and report.success
+    assert orch.entry(SYSTEM, 'plotpes')['reason'] == 'entries already done and current'
+    write_entry(run.dir, SYSTEM, 'plotpes', version=2)  # written with other settings
+    report = orch.run_pass()
+    assert statuses(report) == {'plotpes': 'manual'} and orch.steps['plotpes'].calls == []
 
 
 # --- relaunches ----------------------------------------------------------------------------

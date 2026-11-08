@@ -122,7 +122,7 @@ def status_of(name):
     return store.Status('ended', 'converged', 'converged' if name == 'pes' else 'n/a', 'ok')
 
 
-def finish(run_dir, name, energies=None, prepare=True, **changes):
+def finish(run_dir, name, energies=None, prepare=True, system=SYSTEM, **changes):
     """Prepare the calculations of a PES step and complete them with synthetic results.
 
     The energies are ``energies[point]``; by default they decrease along the
@@ -135,10 +135,10 @@ def finish(run_dir, name, energies=None, prepare=True, **changes):
     list of str
         ``calc_id`` of the calculations, in the order of the points.
     """
-    inputs = pes.pes_inputs(run_dir, SYSTEM, load_run(run_dir), name)
+    inputs = pes.pes_inputs(run_dir, system, load_run(run_dir), name)
     if prepare:
-        STEPS[name]().prepare(run_dir, SYSTEM)
-    sdir = layout.system_dir(run_dir, SYSTEM)
+        STEPS[name]().prepare(run_dir, system)
+    sdir = layout.system_dir(run_dir, system)
     points = [point for point, _, _ in inputs.points]
     if energies is None:
         energies = {point: -1000.0 - 0.01 * i for i, point in enumerate(points)}
@@ -391,7 +391,7 @@ def test_the_two_pes_in_one_document(analysed):
     assert doc['pes']['data'] != doc['pes_scf']['data']
     for name, step in STEPS.items():
         assert step().done(run_dir, SYSTEM)
-        provenance = read_system(layout.system_dir(run_dir, SYSTEM)).provenance([name])
+        provenance = read_system(layout.system_dir(run_dir, SYSTEM)).provenance([name, 'data'])
         assert provenance.step == name
         assert set(provenance.calculations) == set(analysed[1][name])
     # The entries of match keep their provenance.
@@ -468,7 +468,7 @@ def leave_old_data(run_dir, name):
 
 def provenances(run_dir, name):
     document_ = read_system(layout.system_dir(run_dir, SYSTEM))
-    return [document_.provenance(entry) for entry in pes.pes_entries(name)]
+    return [document_.provenance(entry) for entry in pes.pes_leaves(name)]
 
 
 @pytest.mark.parametrize('name', ['pes', 'pes_scf'])
@@ -513,6 +513,69 @@ def test_failure_after_the_emptying_saves_nothing(analysed_copy, name, monkeypat
     assert not SystemWriter(layout.system_dir(run_dir, SYSTEM)).lock_path.exists()
     assert STEPS[other_pes(name)]().done(run_dir, SYSTEM)
     assert not STEPS[name]().done(run_dir, SYSTEM)
+
+
+# Entries that the interpolation of a PES writes into its entry ``energy``.
+INTERPOLATION = (('grid', 'hs_all_ev'), ('grid', 'hs_all_jm2'), ('pes_ev',), ('pes_jm2',))
+
+
+def write_interpolation(run_dir, name):
+    """Write the entries of an interpolation of the PES ``name``, with a provenance."""
+    provenance = store.Provenance.build(f'plot{name}', parameters={'density': 50})
+    with SystemWriter(layout.system_dir(run_dir, SYSTEM)) as writer:
+        writer.document.set([name, pes.PES_TYPE], {'grid': {'hs_all_ev': [[0.0, 0.0, 0.0]],
+                                                            'hs_all_jm2': [[0.0, 0.0, 0.0]]},
+                                                   'pes_ev': [[0.0]], 'pes_jm2': [[0.0]]})
+        for leaf in INTERPOLATION:
+            writer.document.set_provenance([name, pes.PES_TYPE, *leaf], provenance)
+        writer.save()
+    return provenance
+
+
+@pytest.mark.parametrize('name', ['pes', 'pes_scf'])
+def test_provenance_on_the_entries_written(analysed, name):
+    run_dir, _ = analysed
+    document_ = read_system(layout.system_dir(run_dir, SYSTEM))
+    leaves = pes.pes_leaves(name)
+    assert all(document_.get(leaf) is not None for leaf in leaves)
+    first, *others = provenances(run_dir, name)
+    assert first is not None and all(other == first for other in others)
+    # Not on the whole entry, which the interpolation writes into.
+    assert document_.provenance([name]) is None
+    assert document_.provenance([name, pes.PES_TYPE]) is None
+
+
+@pytest.mark.parametrize('name', ['pes', 'pes_scf'])
+def test_interpolation_leaves_the_pes_current(analysed_copy, name):
+    """The entries of an interpolation written into the entry of the PES
+    leave the PES done: with the provenance on the whole entry, this write
+    dropped it and the PES was no longer current."""
+    run_dir, _ = analysed_copy
+    before = provenances(run_dir, name)
+    other = provenances(run_dir, other_pes(name))
+    write_interpolation(run_dir, name)
+    assert provenances(run_dir, name) == before
+    assert provenances(run_dir, other_pes(name)) == other
+    assert all(step().done(run_dir, SYSTEM) for step in STEPS.values())
+
+
+@pytest.mark.parametrize('name', ['pes', 'pes_scf'])
+def test_analysis_again_removes_the_interpolation(analysed_copy, name):
+    run_dir, calc_ids = analysed_copy
+    clean = document(run_dir)
+    write_interpolation(run_dir, name)
+    write_interpolation(run_dir, other_pes(name))
+    STEPS[name]().analyse(run_dir, SYSTEM, calc_ids[name])
+    # The entry of the PES analysed again holds nothing of the interpolation,
+    # nor its provenance; the interpolation of the other PES stays.
+    doc = document(run_dir)
+    assert doc[name] == clean[name]
+    sdir = layout.system_dir(run_dir, SYSTEM)
+    for leaf in INTERPOLATION:
+        assert read_system(sdir).provenance([name, pes.PES_TYPE, *leaf]) is None
+        assert read_system(sdir).provenance([other_pes(name), pes.PES_TYPE, *leaf]) is not None
+    assert 'pes_ev' in doc[other_pes(name)][pes.PES_TYPE]
+    assert all(step().done(run_dir, SYSTEM) for step in STEPS.values())
 
 
 def test_message_of_the_analysis(run_copy, caplog):

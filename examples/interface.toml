@@ -13,12 +13,14 @@
 schema_version = 1
 
 [interface]
-# Steps to run, required: any of match, pes, pes_scf, plotpes, shear,
-# adhesion, ppes, charge. Each runs once the steps it needs are done; between
-# steps that are ready, the order of this list decides. pes is the potential
-# energy surface relaxed along z, pes_scf the static one: two steps, run when
-# listed, also both.
-steps = ["match", "pes", "pes_scf", "plotpes", "shear", "adhesion", "ppes", "charge"]
+# Steps to run, required: any of match, pes, pes_scf, plotpes, plotpes_scf,
+# shear, adhesion, ppes, charge. Each runs once the steps it needs are done;
+# between steps that are ready, the order of this list decides. pes is the
+# potential energy surface relaxed along z, pes_scf the static one: two steps,
+# run when listed, also both. plotpes interpolates pes and plotpes_scf
+# interpolates pes_scf; in this version they are analysed only by hand
+# ("triboworkflow analyse plotpes"), where there is enough memory.
+steps = ["match", "pes", "pes_scf", "plotpes", "plotpes_scf", "shear", "adhesion", "ppes", "charge"]
 engine = "qe"                      # Engine of the steps that run calculations.
 # engines = { pes = "qe" }         # Per-step engine: pes, pes_scf, adhesion, ppes, charge.
 set_bm = true                      # Strain weights = bulk moduli of the two materials.

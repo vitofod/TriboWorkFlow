@@ -6,9 +6,11 @@
 The steps of each system follow the graph of the entries they read and write
 (``INTERFACE_GRAPH``): ``match`` → ``pes`` → {``plotpes`` → ``shear``;
 ``adhesion`` → {``ppes``; ``charge``}}, with ``shear`` reading also the
-entries of ``pes`` and ``match``, and ``match`` → ``pes_scf``. ``pes`` and
-``pes_scf`` (the potential energy surface relaxed along z and the static one)
-are independent; the steps after them depend on ``pes`` for now. A pass
+entries of ``pes`` and ``match``, and ``match`` → ``pes_scf`` →
+``plotpes_scf``. ``pes`` and ``pes_scf`` (the potential energy surface relaxed
+along z and the static one) are independent; ``plotpes`` and ``plotpes_scf``
+interpolate the one and the other and read also the entries of ``match``; the
+other steps after them depend on ``pes`` for now. A pass
 (``Orchestrator.run_pass``):
 
 1. runs a cycle of the job manager (``JobManager.cycle``): jobs recovered,
@@ -24,6 +26,12 @@ are independent; the steps after them depend on ``pes`` for now. A pass
      is evaluated again in the same pass;
    - a step whose requested dependency failed or is blocked is ``blocked``;
      one whose dependency is not completed yet is ``waiting``;
+   - a ready step analysed only by hand (``Step.manual_analysis``) is never
+     prepared nor analysed in a pass: a step whose entries are already done
+     and current is ``completed``, one whose prerequisites are missing or
+     stale is ``blocked``, any other is ``manual``, with the command that
+     analyses it (``analyse_step``), and its descendants are blocked until
+     it is completed;
    - a ready step starts only when no other step of the system is running,
      so the steps of a system run one at a time; systems are independent;
    - starting: a step whose entries are already done and current
@@ -52,7 +60,12 @@ A failure blocks only the descendants of the step: the other branches go on,
 and a branch that succeeds does not make the workflow succeed while other
 requested steps failed or are blocked. A step failed for its calculations
 goes back to running when the user relaunches them; one failed for an error
-of its own (``prepare`` or ``analyse``) stays failed until ``retry``.
+of its own (``prepare`` or ``analyse``) stays failed until ``retry``. A step
+left to the user (``manual``) ends the passes as a failure does, without
+making the workflow succeed: once the user has analysed it, it is completed,
+and the next passes go on with its descendants. An analysis by hand stopped
+before its end leaves the step running with no calculations: a pass leaves
+it to the user again, and the next analysis starts it from the beginning.
 
 The state on disk is in two levels: the steps of each system in
 ``orchestrator.json`` (status, reason, calculations prepared, error), the jobs
@@ -110,14 +123,17 @@ logger = logging.getLogger(__name__)
 
 # Steps whose entries each step reads (verified on the entries read and
 # written by the steps of the interface workflow).
-# pes and pes_scf need only match; which of the two PES plotpes, shear and
-# adhesion read is decided with those steps, and until then they depend on pes.
-# To remove: Q38.
+# pes and pes_scf need only match. plotpes interpolates pes and plotpes_scf
+# interpolates pes_scf, each reading also the high-symmetry points of match.
+# Which of the two PES shear and adhesion read is decided with those steps,
+# and until then they depend on pes.
+# To remove: Q38 (shear, adhesion).
 INTERFACE_GRAPH = {
     'match': (),
     'pes': ('match',),
     'pes_scf': ('match',),
-    'plotpes': ('pes',),
+    'plotpes': ('pes', 'match'),
+    'plotpes_scf': ('pes_scf', 'match'),
     'shear': ('plotpes', 'pes', 'match'),
     'adhesion': ('pes',),
     'ppes': ('adhesion',),
@@ -126,7 +142,11 @@ INTERFACE_GRAPH = {
 
 STATE_FILE = 'orchestrator.json'
 STATE_VERSION = 1
-STEP_STATES = ('waiting', 'running', 'completed', 'failed', 'blocked')
+# A step is manual when it is ready and its analysis is left to the user.
+STEP_STATES = ('waiting', 'running', 'completed', 'failed', 'blocked', 'manual')
+# Reason of a manual step. To remove: D54 (the analysis in a job of its own).
+MANUAL_REASON = ('to analyse by hand: run "triboworkflow analyse {step}" where there is enough '
+                 'memory; this version does not analyse it automatically')
 
 # Outcomes of the calculations of a running step after a pass: completed;
 # waiting for their group, their run or their held job; launched in this
@@ -152,9 +172,15 @@ class Step:
     ----------
     name : str
         Name of the step, a key of the graph.
+    manual_analysis : bool
+        True for a step without calculations whose analysis runs only by
+        hand (``Orchestrator.analyse_step``, command ``analyse``), on
+        resources the user chooses: a pass never prepares nor analyses it,
+        and leaves it ``manual``. False by default.
     """
 
     name = None
+    manual_analysis = False
 
     def done(self, run_dir, system):
         """Whether the entries of the step are written and current (``is_done``).
@@ -217,7 +243,7 @@ class StepReport:
     status : str
         One of ``STEP_STATES``.
     reason : str or None
-        Why a step is waiting, blocked or failed.
+        Why a step is waiting, blocked, failed or manual.
     calcs : dict
         Number of calculations of the step by outcome (``CALC_OUTCOMES``).
     attention : list of dict
@@ -257,8 +283,8 @@ class Report:
 
     @property
     def finished(self):
-        """True when no step is waiting or running."""
-        return all(s.status in ('completed', 'failed', 'blocked') for s in self.steps)
+        """True when no step is waiting or running; a manual step waits for the user."""
+        return all(s.status in ('completed', 'failed', 'blocked', 'manual') for s in self.steps)
 
     @property
     def success(self):
@@ -527,7 +553,7 @@ class Orchestrator:
             return []
         requested = [dep for dep in self.graph[name] if dep in self.steps]
         stopped = [dep for dep in requested
-                   if self.entry(system, dep)['status'] in ('failed', 'blocked')]
+                   if self.entry(system, dep)['status'] in ('failed', 'blocked', 'manual')]
         if stopped:
             states = ', '.join(f'{dep} {self.entry(system, dep)["status"]}' for dep in stopped)
             self._set(entry, 'blocked', f'depends on {states}')
@@ -536,8 +562,14 @@ class Orchestrator:
         if pending:
             self._set(entry, 'waiting', f'waits for {", ".join(pending)}')
             return []
+        if self.steps[name].manual_analysis:
+            self._leave_to_user(system, name, entry)
+            return []
         if entry['calculations'] is None:
+            # A step analysed by hand never runs in a pass: found running, it
+            # is an analysis stopped before its end, left to the user again.
             busy = [other for other in self.order if other != name
+                    and not self.steps[other].manual_analysis
                     and self.entry(system, other)['status'] == 'running']
             if busy:
                 self._set(entry, 'waiting', f'ready; {", ".join(busy)} runs first')
@@ -570,6 +602,37 @@ class Orchestrator:
         current = self._prepared_current(system, name, entry)
         self._save()
         return current
+
+    def _leave_to_user(self, system, name, entry):
+        """Leave a ready step analysed only by hand to the user; nothing is prepared nor analysed.
+
+        As at a start, a step whose entries are already done and current is
+        ``completed``, one whose prerequisites are missing or stale is
+        ``blocked``, and an error of the step fails it; any other is
+        ``manual``, with the command that analyses it (``MANUAL_REASON``). A
+        step found running is an analysis by hand stopped before its end:
+        nothing of it is done and current, and it is left to the user again.
+        """
+        step = self.steps[name]
+        sdir = system_dir(self.run_dir, system)
+        try:
+            if step.done(self.run_dir, system):
+                self._set(entry, 'completed', 'entries already done and current')
+                return
+            check_prerequisites(read_system(sdir), step.expected(self.run_dir, system), sdir)
+        except PrerequisiteError as error:
+            self._set(entry, 'blocked', str(error), calculations=None)
+            return
+        except Exception as error:  # an error of the step: the other steps go on
+            self._fail(entry, 'checking', error)
+            return
+        if entry['status'] == 'running':
+            logger.warning('%s/%s: its analysis by hand stopped before its end; it starts again '
+                           'from the beginning', system, name)
+        if entry['status'] != 'manual':
+            logger.warning('%s/%s ready, %s', system, name, MANUAL_REASON.format(step=name))
+        self._set(entry, 'manual', MANUAL_REASON.format(step=name), calculations=None, calcs={},
+                  attention=[])
 
     def _fail(self, entry, doing, error):
         logger.error('Step failed while %s: %s', doing, error)
@@ -727,7 +790,9 @@ class Orchestrator:
         A completed step still current, a step already prepared and a step
         failed for an error of its own are left as they are; for a step
         already prepared and running, the calculations that differ from the
-        settings now are logged (``check_calculations``).
+        settings now are logged (``check_calculations``). A step analysed only
+        by hand has nothing to prepare: it is left to the user as in a pass
+        (``_leave_to_user``).
 
         Returns
         -------
@@ -740,10 +805,13 @@ class Orchestrator:
         """
         self._check_replacements()
         entry = self.entry(system, name)
-        if (not self._still_completed(system, name, entry) and entry['error'] is None
-                and entry['calculations'] is None):
+        if self._still_completed(system, name, entry) or entry['error'] is not None:
+            pass
+        elif self.steps[name].manual_analysis:
+            self._leave_to_user(system, name, entry)
+        elif entry['calculations'] is None:
             self._start(system, name, entry)
-        elif entry['status'] == 'running' and entry['error'] is None:
+        elif entry['status'] == 'running':
             self._report_differences(system, name)
         self._save()
         return self.step_report(system, name)
@@ -839,12 +907,16 @@ class Orchestrator:
         Raises
         ------
         OrchestratorError
-            If the step is not running (not prepared, completed or failed).
+            If the step is not running (not prepared, completed or failed),
+            or it is analysed only by hand.
         NotOnHPCError
             If the commands of the scheduler are not found.
         """
         self._check_replacements()
         entry = self.entry(system, name)
+        if self.steps[name].manual_analysis:
+            raise OrchestratorError(f'{system}/{name} has no calculations to submit: it is '
+                                    f'analysed by hand, with "analyse {name}"')
         if entry['status'] != 'running':
             raise OrchestratorError(f'{system}/{name} is {entry["status"]}: only a prepared step '
                                     f'is submitted; run "prepare {name}" first')
@@ -862,7 +934,12 @@ class Orchestrator:
         """Analyse a step from the files of its calculations, without the scheduler.
 
         A step without calculations is started (``Step.done``, prerequisites,
-        ``prepare``) and analysed. A step with calculations must be prepared;
+        ``prepare``), saved as running, and analysed. A step analysed only by
+        hand (``Step.manual_analysis``) is analysed only here: from ``manual``
+        or any state before it, or from running when an analysis by hand
+        stopped before its end, started again from the beginning; the passes
+        then find it completed from its entries, without analysing it again.
+        A step with calculations must be prepared;
         each calculation must be done according to its files alone
         (``_not_done``), otherwise nothing changes and the error says, for each
         one, what is missing.

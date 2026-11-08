@@ -16,8 +16,9 @@ class CLICommand(CLICommandBase):
 The entries the step reads must be done and current: a missing or stale one
 blocks the step, with what is missing, and nothing is computed. A step whose
 entries are already done and current is completed without running. A step
-of analysis only (match, plotpes, shear) has nothing to prepare: run
-"analyse" for it. Nothing is submitted: it works on any machine.
+of analysis only (match, plotpes, plotpes_scf, shear) has nothing to
+prepare: run "analyse" for it; plotpes and plotpes_scf are left manual, with
+that command. Nothing is submitted: it works on any machine.
 
 A calculation already prepared is never overwritten. One that differs from
 the settings stops the preparation, with the list and why; one that differs

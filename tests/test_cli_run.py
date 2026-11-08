@@ -77,20 +77,30 @@ def test_terminal_without_answer_is_an_error():
 
 
 def test_step_not_in_the_registry(tmp_path):
-    with pytest.raises(StepNotAvailable, match="step 'plotpes' not available in this version"):
-        get_step('plotpes')
-    with pytest.raises(StepNotAvailable, match="step 'plotpes' not available"):
-        build_orchestrator(write_run(tmp_path, steps=('match', 'pes', 'plotpes')))
+    with pytest.raises(StepNotAvailable, match="step 'shear' not available in this version"):
+        get_step('shear')
+    with pytest.raises(StepNotAvailable, match="step 'shear' not available"):
+        build_orchestrator(write_run(tmp_path, steps=('match', 'pes', 'plotpes', 'shear')))
 
 
 def test_steps_in_the_registry(tmp_path):
     from triboworkflow.workflows.interface.match import MatchStep
     from triboworkflow.workflows.interface.pes import RelaxedPesStep, StaticPesStep
-    assert {name: type(get_step(name)) for name in ('match', 'pes', 'pes_scf')} == {
-        'match': MatchStep, 'pes': RelaxedPesStep, 'pes_scf': StaticPesStep}
+    from triboworkflow.workflows.interface.plotpes import RelaxedPlotPesStep, StaticPlotPesStep
+    names = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf')
+    assert {name: type(get_step(name)) for name in names} == {
+        'match': MatchStep, 'pes': RelaxedPesStep, 'pes_scf': StaticPesStep,
+        'plotpes': RelaxedPlotPesStep, 'plotpes_scf': StaticPlotPesStep}
+    # Only the interpolations are left to the user.
+    assert [name for name in names if get_step(name).manual_analysis] == ['plotpes',
+                                                                          'plotpes_scf']
     assert build_orchestrator(write_run(tmp_path, steps=('match',))).order == ['match']
     run_dir = write_run(tmp_path, steps=('pes_scf', 'pes', 'match'), name='pes')
     assert build_orchestrator(run_dir).order == ['match', 'pes_scf', 'pes']
+    run_dir = write_run(tmp_path, steps=('plotpes_scf', 'plotpes', 'pes', 'pes_scf', 'match'),
+                        name='plotpes')
+    assert build_orchestrator(run_dir).order == ['match', 'pes', 'plotpes', 'pes_scf',
+                                                 'plotpes_scf']
 
 
 def test_daemon_factory_takes_the_groups_of_start(tmp_path, fake_steps):

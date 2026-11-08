@@ -296,7 +296,11 @@ def print_failed_submissions(manager, before):
 
 
 def print_step(report):
-    """Print where a step stands; return the exit code (1 if blocked or failed)."""
+    """Print where a step stands; return the exit code.
+
+    1 if the step is blocked or failed, 0 otherwise: a manual step is not an
+    error, its reason names the command that analyses it.
+    """
     text = f'{report.system}/{report.step}: {report.status}'
     if report.reason:
         text += f' ({report.reason})'

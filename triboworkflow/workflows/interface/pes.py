@@ -51,10 +51,14 @@ and the final structures of the two points in ``structure.opt.<name>.min``
 and ``.max``. Before these writes the three entries, when present, are
 emptied: the writes merge the new data into the old ones key by key, and the
 points of an earlier interface would stay in ``data``. The entries of the
-other PES and those of ``match`` are not touched. The three entries get the
-provenance of the step: the parameters, the calculations with their results
-and the entries of ``match`` read. Nothing is saved when a part fails, the
-emptying included.
+other PES and those of ``match`` are not touched. Each entry written
+(``pes_leaves``: ``data``, the two grids, ``min_site``, ``max_site`` and the
+two structures) gets the provenance of the step: the parameters, the
+calculations with their results and the entries of ``match`` read. The
+provenance stays on these entries, not on the whole ``<name>``, so that the
+interpolation of the PES, written into ``<name>.energy`` by ``plotpes`` and
+``plotpes_scf``, leaves them current; emptying ``<name>`` again removes the
+interpolation too. Nothing is saved when a part fails, the emptying included.
 
 Notes
 -----
@@ -385,13 +389,35 @@ def pes_entry(calc_type):
 
 
 def pes_entries(name):
-    """The entries that a PES step writes: ``<name>`` and the structures of its minimum and maximum.
+    """The entries that a PES step empties before writing: ``<name>`` and its two structures.
 
     Returns
     -------
     list of tuple of str
+        ``<name>`` and the structures of its minimum and maximum.
     """
     return [(name,), ('structure', 'opt', name, 'min'), ('structure', 'opt', name, 'max')]
+
+
+def pes_leaves(name):
+    """The entries that a PES step writes, each with the provenance of the step.
+
+    Returns
+    -------
+    list of tuple of str
+        ``<name>.data``, ``<name>.energy.grid.hs_unique_ev`` and
+        ``.hs_unique_jm2``, ``<name>.energy.min_site`` and ``.max_site``, and
+        the structures of the minimum and of the maximum.
+
+    Notes
+    -----
+    The interpolation of the PES writes other entries of ``<name>.energy``:
+    a provenance on the whole ``<name>`` would be dropped by those writes.
+    """
+    energy = (name, PES_TYPE)
+    return [(name, 'data'), energy + ('grid', 'hs_unique_ev'), energy + ('grid', 'hs_unique_jm2'),
+            energy + ('min_site',), energy + ('max_site',),
+            ('structure', 'opt', name, 'min'), ('structure', 'opt', name, 'max')]
 
 
 def transfer_entries(calc_type, point):
@@ -625,10 +651,10 @@ class PesStep(Step):
     name = None
 
     def done(self, run_dir, system):
-        """Whether the three entries of the step are written and current (``provenance``)."""
+        """Whether its entries (``pes_leaves``) are written and current (``provenance``)."""
         sdir = system_dir(run_dir, system)
         document = read_system(sdir)
-        entries = pes_entries(self.name)
+        entries = pes_leaves(self.name)
         # Before any analysis the inputs are not read: match may not have run.
         if not all(document.get(entry) for entry in entries):
             return False
@@ -670,7 +696,7 @@ class PesStep(Step):
             clear_entries(writer.document, pes_entries(self.name))
             values = run_pes_analysis(inputs, LegacyStore(sdir, writer.document, COLLECTION),
                                       list(plan))
-            for entry in pes_entries(self.name):
+            for entry in pes_leaves(self.name):
                 writer.document.set_provenance(entry, provenance)
             writer.save()
         for line in describe(inputs, values):

@@ -1,12 +1,13 @@
-# Interface workflow: steps `match`, `pes` and `pes_scf`
+# Interface workflow: steps `match`, `pes`, `pes_scf`, `plotpes` and `plotpes_scf`
 
 The interface workflow starts from two slabs, given in `[interface]` of the
 settings ([configuration.md](configuration.md)). Its first step, `match`,
 runs no calculation: it builds the interface cell of the two slabs and the
 high-symmetry points of the two facing surfaces, which the next steps use.
 The steps `pes` and `pes_scf` compute the potential energy surface of the
-interface from those points, relaxed along z and static. In this version
-these three steps are available, so a run lists only them in
+interface from those points, relaxed along z and static; `plotpes` and
+`plotpes_scf` interpolate the one and the other over the whole plane. In
+this version these five steps are available, so a run lists only them in
 `[interface].steps`:
 
 ```bash
@@ -15,7 +16,8 @@ triboworkflow prepare pes_scf
 ```
 
 In a pass of the orchestrator the step `match`, having no calculation, is
-analysed as soon as it starts.
+analysed as soon as it starts. `plotpes` and `plotpes_scf` have no
+calculation either, but are analysed only by hand (*Where they run*).
 
 ## Step `match`
 
@@ -188,13 +190,15 @@ are not stored; the structures are read back the same.
 
 Before writing, the three entries of the step (`<step>`,
 `structure.opt.<step>.min` and `.max`) are emptied, so that nothing of an
-earlier analysis (e.g. the points of an earlier interface) is left among the
-new data; the other PES and the entries of `match` are not touched. Everything
-is written together, at the end: when any part fails, nothing is written,
-the emptying included. Each of the three entries records its provenance: the
-parameters of the step (calculation type, k-point density,
-`interface_distance`, layers), the calculations with their fingerprints and
-the results used, and the content of the entries of `match` read.
+earlier analysis (e.g. the points of an earlier interface, or their
+interpolation) is left among the new data; the other PES and the entries of
+`match` are not touched. Everything is written together, at the end: when any
+part fails, nothing is written, the emptying included. Each of the seven
+entries of the table (`<step>.data` as one) records its provenance: the parameters of the
+step (calculation type, k-point density, `interface_distance`, layers), the
+calculations with their fingerprints and the results used, and the content
+of the entries of `match` read. The interpolation, written by `plotpes` or
+`plotpes_scf` next to them in `<step>.energy`, leaves them current.
 
 ### Message
 
@@ -211,15 +215,16 @@ points prints goes to the log at debug level only.
 
 ### When the steps run again
 
-A PES step is done when its three entries exist and their provenance is the
+A PES step is done when its seven entries exist and their provenance is the
 one that the settings, the calculations and the entries of `match` give now.
 Changing `kdens`, `interface_distance`, a parameter of the calculations
 (e.g. `ecutwfc`) or the interface (a new `match`) makes both run again;
 `short` or `layers` only `pes_scf`; new results of a calculation, run again
-with the same input, only the PES that uses it.
+with the same input, only the PES that uses it. A PES analysed again removes
+its interpolation, which is then done again.
 
-The later steps (`plotpes`, `shear`, `adhesion`) are not available in this
-version: which of the two PES each one reads is decided with them.
+The later steps (`shear`, `adhesion`) are not available in this version:
+which of the two PES each one reads is decided with them.
 
 Notes
 -----
@@ -241,3 +246,132 @@ line always passed the layers, so its static PES was always on reduced slabs;
 here the complete slabs are the default (D07). Not ported: `override`,
 `run_vasp`, `to_file`, `get_main_folder` (A47) and `FT_SaveVASPOutputs` (the
 files of each calculation stay in its directory).
+
+## Steps `plotpes` and `plotpes_scf`
+
+Each step interpolates one PES over the whole plane of the interface, from
+the energies of its high-symmetry points; neither runs a calculation:
+
+| Step | PES interpolated | Entries read | Figure |
+|---|---|---|---|
+| `plotpes` | `pes`, relaxed along z | `highsym` (of `match`), `pes.data` | `plotpes/pes_<name>.png` |
+| `plotpes_scf` | `pes_scf`, static | `highsym` (of `match`), `pes_scf.data` | `plotpes_scf/pes_<name>.png` |
+
+Each runs when listed in `[interface].steps`, also both, and neither is the
+default. `<name>` is the name of the interface in the document
+(`Cu111-Al111`).
+
+### What the steps do
+
+1. **Inputs.** The entries read must be done and current: otherwise the step
+   is blocked with what is missing. The points are `highsym.inter_unique`,
+   each with its first lateral shift `x, y`, and its energy
+   `<pes>.data.<point>.output.energy` (eV); they are sorted by energy
+   (`[point, x, y, energy]`, equal energies in the order of the points), and
+   converted to J/m^2 on the area of the cell of the final structure of the
+   point of lowest energy, whose cell is the one of the interpolation.
+2. **Interpolation.** Every replica of each point in the cell
+   (`highsym.inter_all`) takes the energy of its point; the duplicates are
+   removed, the points brought into the cell and the minimum set to zero.
+   The points are replicated 6 times on each side of the cell (12 x 12
+   copies) and interpolated with radial basis functions (thin-plate spline,
+   smoothing 1e-3), then evaluated on a grid of 50 points per Å^2. This is
+   done twice, as in TribChem: with the energies in eV, then in J/m^2, the
+   second time drawing the figure (2 x 2 cells, 300 x 300 points, 300 dpi).
+3. **Writing.** The entries and the figure are written together, at the end:
+   when any part fails, or the entries read change during the
+   interpolation, nothing is written and the figure is not left.
+
+### Entries and files
+
+| Entry of `system.json` | Content |
+|---|---|
+| `<pes>.energy.grid.hs_all_ev` | `[point, x, y, energy]` of every replica of each point in the cell (eV) |
+| `<pes>.energy.grid.hs_all_jm2` | the same, in J/m^2 |
+| `<pes>.energy.pes_ev` | `[x, y, energy]` of the points interpolated: in the cell, without duplicates, the minimum at zero (eV) |
+| `<pes>.energy.pes_jm2` | the same, in J/m^2 |
+
+Each of the four entries records its provenance: the calculation type and
+`pes_type` of the PES, and the content of the entries read (replicas,
+sorted energies, cell). They are written next to the entries of the PES
+step, which stay current. The figure of the PES in J/m^2 is a file of the
+folder of the system, not an entry: TribChem also stored it in the document
+(`image`), the same image encoded again; the two steps write in two folders,
+so their figures never overwrite each other.
+
+### Where they run
+
+The interpolation solves a dense linear system on all the points
+replicated, whose memory grows with the square of their number (*Cost*). In
+this version it never runs in the orchestrator, which lives on the login
+node, nor in any other automation: once ready, the step is left **manual**,
+with the command that analyses it, and the steps that depend on it wait.
+Run it by hand where there is enough memory, with the orchestrator ended or
+stopped ([cli.md](cli.md), *The interpolation of the PES*):
+
+```bash
+triboworkflow analyse plotpes
+triboworkflow analyse plotpes_scf
+```
+
+The command holds the lock of the run for the whole interpolation. An
+interpolation stopped before its end writes nothing, and the next `analyse`
+starts it from the beginning; an interpolation completed is recognised from
+its entries, their provenance and its figure, without interpolating again.
+A job of its own on a compute node, followed by the orchestrator, is for a
+later version; the interpolation stays the same.
+
+### Cost
+
+Measured with `tests/plotpes_cost.py` on the interfaces of the tests, with
+synthetic energies, on a laptop with the linear algebra on one thread. The
+centres are the points replicated 12 x 12; the matrix is their dense matrix
+(8 bytes per element), close to the peak memory measured:
+
+| Interface | Points (unique, in the cell) | Centres | Matrix | Interpolation in eV | In J/m^2 with the figure | Construction | Figure |
+|---|---|---|---|---|---|---|---|
+| Cu(111)/Cu(111) | 4, 8 | 1 152 | 0.01 GiB | 0.22 s | 1.35 s | 0.22 s | 1.08 s |
+| Pt(111)/Ag(111) | 6, 12 | 1 728 | 0.02 GiB | 0.40 s | 1.78 s | 0.38 s | 1.40 s |
+| Cu(111)/Al(111), `max_area` 20 | 6, 144 | 20 736 | 3.2 GiB (peak 3.5 GiB) | 122 s | 132 s | 115 s | 14 s |
+| Cu(111)/Al(111) of the example | 6, 756 | 108 864 | 88.3 GiB | not measured | | | |
+
+On the small interfaces the figure takes most of the time: its 90 000
+points are evaluated on all the centres. On the large ones the construction
+does (the dense linear system), and it grows faster than the matrix. The
+second call repeats the whole interpolation of the first, then draws the
+figure.
+
+### Message
+
+```text
+<step>: interpolation in eV: <seconds> s
+<step>: interpolation in J/m^2 and figure: <seconds> s
+<system>: <step>: PES <pes> (<calc_type>) interpolated: <n> high-symmetry points, <m> in the cell, <k> after removing the duplicates
+<system>: interpolation in eV <seconds> s, in J/m^2 with the figure <seconds> s
+<system>: figure written in <step>/pes_<name>.png
+```
+
+What the interpolation code prints goes to the log at debug level only.
+
+### When the steps run again
+
+An interpolation step is done when its four entries exist, their provenance
+is the one the entries read give now, and its figure exists. Analysing its
+PES again (new calculations, other settings, a new `match`) removes the
+interpolation, which is then done again; a figure removed makes the step run
+again.
+
+Notes
+-----
+To remove: port of TribChem's `FT_StartInterpolation` (with
+`FireTaskInterface.query_interface`), `InterfaceWF.pes_interpolation` and
+`FT_PESInterpolation` (`arrange_data`, `compute_pes`). The two steps are the
+two values of `-pt` of TribChem's command line, which interpolated one PES
+per invocation, `pes` by default (DEV-41). The golden cases `plotpes_step_*`
+compare the entries read and written and the pixels of the figure with
+those of the Firetasks, for both PES. Deviations: DEV-42 (the figure stays a
+file, `image` is not written), DEV-39 (the writes use the ids of the
+document of `match`); the analysis only by hand until the job of its own
+(D54). The figure is closed once saved (A84); the interpolation is computed
+twice, as there (A07). Not ported: `override`, `check_entry` (the provenance
+decides), `to_file` (A83), `db_file`, `database`.

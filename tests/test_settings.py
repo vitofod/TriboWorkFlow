@@ -305,7 +305,8 @@ def test_interface_steps_kept_in_the_given_order():
 
 @pytest.mark.parametrize('steps, message', [
     (['match', 'shearstr'],
-     "interface.steps.*'shearstr'.*match, pes, pes_scf, plotpes, shear, adhesion, ppes, charge"),
+     "interface.steps.*'shearstr'.*"
+     "match, pes, pes_scf, plotpes, plotpes_scf, shear, adhesion, ppes, charge"),
     (['pes', 'pes'], r'interface\.steps.*repeated.*pes'),
     ([], r'interface\.steps.*at least one'),
 ])
