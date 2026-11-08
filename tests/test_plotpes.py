@@ -15,6 +15,7 @@ compare the steps with TribChem's ``FT_PESInterpolation``.
 """
 
 import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -31,6 +32,7 @@ from test_pes import edit_config, finish, pes_run
 from triboworkflow.cli.analysis_job import run_analysis
 from triboworkflow.cli.main import main
 from triboworkflow.cli.run import build_orchestrator, load_run
+from triboworkflow.core import store
 from triboworkflow.core.store import PrerequisiteError, StoreError, SystemWriter, read_system
 from triboworkflow.execution import layout
 from triboworkflow.execution.jobs import ANALYSIS_FILE, Analysis, write_analysis
@@ -330,6 +332,26 @@ def test_done_follows_the_entries_read(interpolated_copy):
     # highsym keeps a provenance of match, but the points read changed.
     assert not plotpes.RelaxedPlotPesStep().done(interpolated_copy, CUCU)
     assert not plotpes.StaticPlotPesStep().done(interpolated_copy, CUCU)
+
+
+def test_done_follows_the_results_of_its_pes(interpolated_copy):
+    # A calculation of the relaxed PES was completed again with another energy and the PES
+    # was not analysed: only the interpolation of that PES is no longer current.
+    calc_id = pes.RelaxedPesStep().calculations(interpolated_copy, CUCU)[0].calc_id
+    record = store.read_record(sdir(interpolated_copy), calc_id)
+    results = {**record.results, 'output': {**record.results['output'], 'energy': -999.0}}
+    store.write_record(sdir(interpolated_copy), dataclasses.replace(record, results=results))
+    assert not pes.RelaxedPesStep().done(interpolated_copy, CUCU)
+    assert not plotpes.RelaxedPlotPesStep().done(interpolated_copy, CUCU)
+    assert plotpes.StaticPlotPesStep().done(interpolated_copy, CUCU)
+
+
+def test_done_follows_match(interpolated_copy):
+    assert all(step().done(interpolated_copy, CUCU) for step in STEPS.values())
+    # The slabs are to be matched again with another area, and match was not run again.
+    edit_config(interpolated_copy, 'max_area = 160.0', 'max_area = 150.0')
+    assert not MatchStep().done(interpolated_copy, CUCU)
+    assert not any(step().done(interpolated_copy, CUCU) for step in STEPS.values())
 
 
 def test_pes_analysed_again_removes_its_interpolation(interpolated_copy):

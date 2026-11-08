@@ -17,8 +17,9 @@ import pytest
 from triboworkflow.core.settings import (Settings, SettingsError, load_settings,
                                          settings_from_dict, validate)
 from triboworkflow.core.settings.schema import (INTER_PARAMS_DEFAULTS, INTERFACE_STEPS,
-                                                AdhesionParams, AnalysisParams, GenerationParams,
-                                                InterParams, PesScfParams, key_name)
+                                                PPES_SHIFTS, AdhesionParams, AnalysisParams,
+                                                GenerationParams, InterParams, PesScfParams,
+                                                PpesParams, key_name)
 from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
 from triboworkflow.vendored.highput.utils.tasktools import read_default_params
 
@@ -372,6 +373,42 @@ def test_adhesion_combinations_allowed(edits, expected):
     assert settings_from_dict(edited(WORKFLOW, edits)).interface.adhesion == expected
 
 
+def test_ppes_defaults_are_the_command_line_of_the_original_workflow():
+    # The minimum site, the 15 shifts of the command line (they skip 2.5) and no fit.
+    default = PpesParams(site='min_site', shifts=list(PPES_SHIFTS), fit='none')
+    assert PPES_SHIFTS == (-0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0,
+                           2.25, 2.75, 3.0)
+    assert 2.5 not in PPES_SHIFTS
+    assert settings_from_dict(WORKFLOW).interface.ppes == default
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.ppes': DELETE}))
+    assert settings.interface.ppes == default
+    # The defaults of a table are not shared between the runs.
+    assert PpesParams().shifts == default.shifts
+    assert PpesParams().shifts is not PpesParams().shifts
+
+
+@pytest.mark.parametrize('edits, expected', [
+    ({'interface.ppes.site': 'max_site'},
+     PpesParams(site='max_site', shifts=list(PPES_SHIFTS), fit='none')),
+    ({'interface.ppes.fit': 'uber'}, PpesParams(site='min_site', shifts=list(PPES_SHIFTS), fit='uber')),
+    # Integers are read as floats, in the order given.
+    ({'interface.ppes.shifts': [3, 0, -1, 0.5]}, PpesParams(shifts=[3.0, 0.0, -1.0, 0.5])),
+    ({'interface.ppes.shifts': [1.0]}, PpesParams(shifts=[1.0])),
+])
+def test_ppes_choices_allowed(edits, expected):
+    ppes = settings_from_dict(edited(WORKFLOW, edits)).interface.ppes
+    assert ppes == expected
+    assert all(type(shift) is float for shift in ppes.shifts)
+
+
+def test_ppes_does_not_change_the_other_tables():
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.ppes.fit': 'uber'}))
+    reference = settings_from_dict(WORKFLOW)
+    assert settings.interface.adhesion == reference.interface.adhesion
+    assert settings.interface.pes_scf == reference.interface.pes_scf
+    assert settings.interface.engine_for('ppes') == 'qe'
+
+
 def test_groups_optional():
     assert settings_from_dict(edited(WORKFLOW, {'execution.groups': DELETE})).execution.groups is None
 
@@ -602,6 +639,34 @@ ERRORS = [
     ('adhesion-short-on-complete-slabs', W, {'interface.adhesion.pes': 'pes_scf',
                                              'interface.adhesion.type': 'short'},
      'interface.adhesion.type', 'set short = true in [interface.pes_scf]'),
+    # [interface.ppes]: one site, the shifts without repetitions, the fits that work.
+    ('ppes-site', W, {'interface.ppes.site': 'both'}, 'interface.ppes.site',
+     "'both' is not allowed; allowed values: 'min_site', 'max_site'"),
+    ('ppes-fit-name', W, {'interface.ppes.fit': 'UBER'}, 'interface.ppes.fit',
+     "'UBER' is not allowed; allowed values: 'none', 'uber'"),
+    ('ppes-fit-uber0', W, {'interface.ppes.fit': 'uber0'}, 'interface.ppes.fit',
+     "'uber0' is not available because the fit function fails with it"),
+    ('ppes-fit-false', W, {'interface.ppes.fit': False}, 'interface.ppes.fit',
+     'expected str, got False'),
+    ('ppes-fit-number', W, {'interface.ppes.fit': 1}, 'interface.ppes.fit', 'expected str, got 1'),
+    ('ppes-shifts-empty', W, {'interface.ppes.shifts': []}, 'interface.ppes.shifts',
+     'give at least one shift'),
+    ('ppes-shifts-repeated', W, {'interface.ppes.shifts': [0.0, 0.5, 0.0]},
+     'interface.ppes.shifts[2]', 'repeated shift 0.0'),
+    ('ppes-shifts-repeated-as-integer', W, {'interface.ppes.shifts': [1, 1.0]},
+     'interface.ppes.shifts[1]', 'repeated shift 1.0'),
+    ('ppes-shifts-negative-zero', W, {'interface.ppes.shifts': [0.0, -0.0]},
+     'interface.ppes.shifts[1]', 'repeated shift -0.0'),
+    ('ppes-shifts-nan', W, {'interface.ppes.shifts': [0.0, float('nan')]},
+     'interface.ppes.shifts[1]', 'must be a finite number, got nan'),
+    ('ppes-shifts-inf', W, {'interface.ppes.shifts': [float('inf')]},
+     'interface.ppes.shifts[0]', 'must be a finite number, got inf'),
+    ('ppes-shifts-text', W, {'interface.ppes.shifts': ['0.5']}, 'interface.ppes.shifts',
+     'expected a list of float'),
+    ('ppes-shifts-not-a-list', W, {'interface.ppes.shifts': 0.5}, 'interface.ppes.shifts',
+     'expected a list of float, got 0.5'),
+    ('ppes-key', W, {'interface.ppes.type': 'short'}, 'interface.ppes.type',
+     'allowed keys: site, shifts, fit'),
     # [qe]
     ('qe-version', W, {'qe.version': '7.2MaX'}, 'qe.version',
      "'7.2MaX' is not a version of pw.x: give major.minor or major.minor.patch"),

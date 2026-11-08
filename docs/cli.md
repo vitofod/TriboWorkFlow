@@ -16,7 +16,7 @@ a command the help is printed and the code is 2. `triboworkflow <command>
 The steps themselves (`match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`,
 `shear`, `adhesion`, `ppes`, `charge`) come from a registry that each step
 joins once it is implemented. In this version `match`, `pes`, `pes_scf`,
-`plotpes`, `plotpes_scf` and `adhesion` are implemented
+`plotpes`, `plotpes_scf`, `adhesion` and `ppes` are implemented
 ([interface.md](interface.md)), `plotpes` and `plotpes_scf` analysed in a job
 of their own or by hand, never by the orchestrator (*The interpolation of the
 PES*): a

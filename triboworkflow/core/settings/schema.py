@@ -38,6 +38,7 @@ list indices included.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path, PurePosixPath
@@ -85,6 +86,16 @@ BEST_MATCH = ('area',)
 # kinds of adhesion, as in [interface.adhesion].
 ADHESION_PES = ('pes', 'pes_scf')
 ADHESION_TYPES = ('regular', 'short')
+# Sites of the surface that the step ppes can start from, the fits it can run
+# ('none' runs none) and the shifts of the top slab it computes by default
+# (angstrom), as in [interface.ppes].
+# To remove: the shifts are the default of TribChem's command line (-sh,
+# entrypoints/parsers/utils.py:741-745), 15 values from -0.75 to 3 that skip
+# 2.5 (A90); defaults.json has another list of 10. The command line never
+# passed a fit, so none was run (A88).
+PPES_SITES = ('min_site', 'max_site')
+PPES_FITS = ('none', 'uber')
+PPES_SHIFTS = (-0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.75, 3.0)
 
 # &CONTROL keys of a single calculation: in the workflow the code sets them
 # for every calculation (own prefix and outdir, calculation from calc_type).
@@ -830,6 +841,67 @@ class AdhesionParams:
 
 
 @dataclass
+class PpesParams:
+    """``[interface.ppes]``: the site, the shifts and the fit of the PPES.
+
+    The step ``ppes`` computes the energy of the interface relaxed by the step
+    ``adhesion`` while the top slab moves along z, rigidly, away from or
+    towards the bottom one: one calculation without relaxation for each shift.
+    The kind of interface (``regular`` or ``short``) is the one of
+    ``[interface.adhesion]``. One site holds for the whole run: to compute the
+    other, change ``site`` and run again; the results of the two sites live
+    side by side.
+
+    Attributes
+    ----------
+    site : str
+        ``min_site`` (default) or ``max_site``: the interface relaxed at the
+        minimum or at the maximum of the surface.
+    shifts : list of float
+        Shifts of the top slab from the relaxed interface, in angstrom,
+        without repetitions; negative values bring the slabs closer. By
+        default 15 values from -0.75 to 3 that skip 2.5 (``PPES_SHIFTS``).
+    fit : str
+        ``none`` (default) writes the energies only; ``uber`` also fits the
+        universal binding energy relation (UBER) to the energies of the
+        shifts that are zero or positive and writes ``g``, the depth of the
+        curve in eV per cell, ``l``, its length in angstrom, and their
+        standard deviations in the same units. The fit uses only the shifts
+        that are zero or positive and needs three of them: with fewer it fails,
+        and the analysis with it (nothing is saved); with exactly three the
+        deviations are infinite, because the covariance cannot be estimated.
+
+    Notes
+    -----
+    To remove: TribChem's command line never passed ``fit`` to
+    ``FT_StartPPES``, whose default is null, so no fit was run (A88); a
+    shift of the command line is a float (``cli_common.py:61-79``). ``uber0``
+    fails in ``fit_ppes`` (A06) and any other name too (A89): they are
+    refused here, before the calculations, and not after them.
+    """
+
+    site: str = 'min_site'
+    shifts: list[float] = field(default_factory=lambda: list(PPES_SHIFTS))
+    fit: str = 'none'
+
+    def check(self, path):
+        """Validate the table; errors name ``path``."""
+        _choice(f'{path}.site', self.site, PPES_SITES)
+        hint = ''
+        if self.fit == 'uber0':
+            hint = "; 'uber0' is not available because the fit function fails with it"
+        _choice(f'{path}.fit', self.fit, PPES_FITS, hint)
+        if not self.shifts:
+            raise SettingsError(f'{path}.shifts', 'give at least one shift')
+        for i, shift in enumerate(self.shifts):
+            if not math.isfinite(shift):
+                raise SettingsError(f'{path}.shifts[{i}]', f'must be a finite number, got {shift}')
+            if shift in self.shifts[:i]:
+                raise SettingsError(f'{path}.shifts[{i}]', f'repeated shift {shift}: the results '
+                                    'of each shift are kept under its own key')
+
+
+@dataclass
 class InterfaceParams:
     """``[interface]``: inputs of the interface workflow.
 
@@ -855,6 +927,8 @@ class InterfaceParams:
         Slabs of the static PES, used by the step ``pes_scf``.
     adhesion : AdhesionParams
         Surface and slabs of the step ``adhesion``.
+    ppes : PpesParams
+        Site, shifts and fit of the step ``ppes``.
     """
 
     slabs: list[SlabParams]
@@ -865,6 +939,7 @@ class InterfaceParams:
     inter_params: InterParams = field(default_factory=InterParams)
     pes_scf: PesScfParams = field(default_factory=PesScfParams)
     adhesion: AdhesionParams = field(default_factory=AdhesionParams)
+    ppes: PpesParams = field(default_factory=PpesParams)
 
     def engine_for(self, step):
         """Engine of a step that runs calculations.

@@ -114,6 +114,7 @@ from triboworkflow.vendored.highput.utils.vasp_tools import VaspInputSet
 from triboworkflow.vendored.physics.base.solidstate import get_cell_info
 from triboworkflow.vendored.physics.base.units import Converter
 
+from .chain import upstream_done
 from .match import (COLLECTION, DEFAULTS, FILTER_KEYS, clear_entries, match_parameters,
                     match_provenance, set_filter)
 
@@ -651,12 +652,18 @@ class PesStep(Step):
     name = None
 
     def done(self, run_dir, system):
-        """Whether its entries (``pes_leaves``) are written and current (``provenance``)."""
+        """Whether its entries (``pes_leaves``) are written and current (``provenance``).
+
+        ``match``, which it reads, has to be done too: the provenance holds the
+        content of the entries read, not whether they are still current.
+        """
         sdir = system_dir(run_dir, system)
         document = read_system(sdir)
         entries = pes_leaves(self.name)
         # Before any analysis the inputs are not read: match may not have run.
         if not all(document.get(entry) for entry in entries):
+            return False
+        if not upstream_done(self, run_dir, system):
             return False
         expected = self.provenance(run_dir, system)
         return all(is_done(document, entry, expected, sdir) for entry in entries)

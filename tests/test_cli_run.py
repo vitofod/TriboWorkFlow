@@ -7,7 +7,7 @@ A run is the folder of its ``config.toml``; the system is the interface of
 its two slabs; the number of jobs per group comes from the command line,
 then from the settings, then from a question in a terminal, else an error;
 the steps come from the registry, with only ``match``, ``pes``, ``pes_scf``, the
-two interpolations and ``adhesion`` in this version.
+two interpolations, ``adhesion`` and ``ppes`` in this version.
 """
 
 import io
@@ -89,10 +89,12 @@ def test_steps_in_the_registry(tmp_path):
     from triboworkflow.workflows.interface.match import MatchStep
     from triboworkflow.workflows.interface.pes import RelaxedPesStep, StaticPesStep
     from triboworkflow.workflows.interface.plotpes import RelaxedPlotPesStep, StaticPlotPesStep
-    names = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf', 'adhesion')
+    from triboworkflow.workflows.interface.ppes import PpesStep
+    names = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf', 'adhesion', 'ppes')
     assert {name: type(get_step(name)) for name in names} == {
         'match': MatchStep, 'pes': RelaxedPesStep, 'pes_scf': StaticPesStep,
-        'plotpes': RelaxedPlotPesStep, 'plotpes_scf': StaticPlotPesStep, 'adhesion': AdhesionStep}
+        'plotpes': RelaxedPlotPesStep, 'plotpes_scf': StaticPlotPesStep, 'adhesion': AdhesionStep,
+        'ppes': PpesStep}
     # Only the interpolations are left to the user.
     assert [name for name in names if get_step(name).manual_analysis] == ['plotpes',
                                                                           'plotpes_scf']

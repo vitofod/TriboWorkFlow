@@ -339,7 +339,7 @@ one ([execution.md](execution.md), *Analyses in a job of their own*).
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `slabs` | list | R | two `[[interface.slabs]]` entries, slab 1 then slab 2: their order gives the interface id (`mid1_mid2`) and the strain weights (`strain_weight_1` goes with slab 1); the slab on top is decided by the matching (see below) |
-| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both; `plotpes` interpolates `pes` and `plotpes_scf` interpolates `pes_scf`, each run only when listed, also both ([interface.md](interface.md)); `adhesion` reads the PES chosen in `[interface.adhesion]`. In this version `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf` and `adhesion` are available, `plotpes` and `plotpes_scf` analysed in a job of their own with `[execution.analysis]`, or by hand (`analyse plotpes`): with any other step the command line stops with `step '<name>' not available in this version` |
+| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both; `plotpes` interpolates `pes` and `plotpes_scf` interpolates `pes_scf`, each run only when listed, also both ([interface.md](interface.md)); `adhesion` reads the PES chosen in `[interface.adhesion]`; `ppes` reads the interface that `adhesion` relaxed, of the kind of `[interface.adhesion]` and at the site of `[interface.ppes]`. In this version `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `adhesion` and `ppes` are available, `plotpes` and `plotpes_scf` analysed in a job of their own with `[execution.analysis]`, or by hand (`analyse plotpes`): with any other step the command line stops with `step '<name>' not available in this version` |
 | `set_bm` | bool | `true` | strain weights from the bulk moduli of the two materials |
 | `engine` | str | `"qe"` | engine of the steps that run calculations |
 | `engines` | table | `{}` | per-step engine for `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`; only `qe` for now |
@@ -448,3 +448,38 @@ To remove: TribChem's `FT_StartAdhesion` read the PES (`pes_type`, default
 `pes`) and the kind (`adhesion_type`, default `regular`) as two options; its
 command line allowed (`pes`, `regular`) and (`pes_scf`, `short`), and the
 code refused (`pes`, `short`) (D56).
+
+`[interface.ppes]`: the site, the shifts and the fit of the perpendicular
+PES (step `ppes`, [interface.md](interface.md)); other keys are errors. One
+site for the whole run. There is no `type`: the kind of interface, `regular`
+or `short`, is the `type` of `[interface.adhesion]`, since the step starts from
+the interface that `adhesion` of that kind relaxed.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `site` | str | `"min_site"` | `"min_site"` or `"max_site"`: the interface relaxed at the site of lowest or of highest energy of the surface chosen in `[interface.adhesion]`. To compute the other site, change `site` and run again: the results of the two sites stay side by side |
+| `shifts` | list of float | the 15 values below | shifts of the slab on top from the relaxed interface, in angstrom, a negative one bringing the slabs closer; at least one, finite, without repetitions; one pw.x calculation (`scf`, no movement of the atoms) for each |
+| `fit` | str | `"none"` | `"none"`: only the energies are written; `"uber"`: also the fit of the universal binding energy relation. Any other name, `"uber0"` included, is an error |
+
+The default shifts are -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1, 1.25, 1.5,
+1.75, 2, 2.25, 2.75 and 3 Å: **there is no 2.5**, the list jumps from 2.25 to
+2.75 and each site needs 15 calculations. To cover the whole range, or to get
+more points at large distance, list the shifts in the table.
+
+The fit uses only the shifts that are zero or positive, and needs at least
+three of them: with fewer the fit fails and the analysis stops without
+writing anything; with exactly three it runs but its standard deviations are
+infinite, because the covariance cannot be estimated (the step warns); from
+four on they are finite. It gives `g`, the depth of the curve, in eV per
+cell (the fit receives the energies in eV, not in J/m^2), `l`, its length, in
+Å, and the standard deviations `sigma_g` and `sigma_l` in the same units.
+Changing only `fit` computes nothing again: the calculations are the same, and
+the step only analyses them anew.
+
+To remove: TribChem's command line passed a list of shifts, `-sh`, whose
+default is this one (the jump over 2.5 is in the list, and the documentation
+that says a step of 0.25 Å from -0.75 to 3 Å does not match it, A90), and never
+passed `fit`, so `FT_StartPPES` ran no fit (A88): here too `"none"` is the
+default, and `"uber"` has to be asked for. In `fit_ppes` only `"uber"` works:
+`"uber0"` raises an error (A06) and any other name too (A89), so they are
+refused when the settings are read, not after the calculations.

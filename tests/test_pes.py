@@ -441,6 +441,20 @@ def test_done_follows_the_results(analysed_copy):
     assert pes.StaticPesStep().done(run_dir, SYSTEM)
 
 
+def test_done_follows_match(analysed_copy):
+    """A PES analysed from a match that the settings no longer give is not done.
+
+    The entries of the PES keep the provenance of their own analysis and the
+    entries of match that it read are unchanged, so only the provenance of
+    match itself tells that they are not current.
+    """
+    run_dir, _ = analysed_copy
+    assert all(step().done(run_dir, SYSTEM) for step in STEPS.values())
+    edit_config(run_dir, 'max_area = 160.0', 'max_area = 150.0')
+    assert not MatchStep().done(run_dir, SYSTEM)
+    assert not any(step().done(run_dir, SYSTEM) for step in STEPS.values())
+
+
 def test_analysis_again_gives_the_same_document(analysed_copy):
     run_dir, calc_ids = analysed_copy
     before = document(run_dir)

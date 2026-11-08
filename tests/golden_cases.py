@@ -905,11 +905,11 @@ def pes_step_historic(tc, pair, step, short):
             'calls': calls}
 
 
-def port_settings(pair, mids, steps, short, adhesion=None):
+def port_settings(pair, mids, steps, short, adhesion=None, ppes=None):
     """Settings of a run of the port on the slabs of a pair of MATCH_STEPS,
     written as JSON files in the current folder, with the parameters of the
     PES of the golden cases (distance, k-points of COMP_PARAMS, short slabs)
-    and, when given, [interface.adhesion]."""
+    and, when given, [interface.adhesion] and [interface.ppes]."""
     import tomllib
 
     from triboworkflow.core.settings.loader import settings_from_dict
@@ -928,6 +928,8 @@ def port_settings(pair, mids, steps, short, adhesion=None):
     data['interface']['inter_params']['interface_distance'] = PES_STEP_DISTANCE
     if adhesion is not None:
         data['interface']['adhesion'] = dict(adhesion)
+    if ppes is not None:
+        data['interface']['ppes'] = dict(ppes)
     data['k_points'].update({'mode': 'kdens', 'kdens': float(COMP_PARAMS['kdens'])})
     return settings_from_dict(data)
 
@@ -1304,6 +1306,167 @@ def case_adhesion_step(tc, name):
     return adhesion_step_port(tc, name)
 
 
+# Step ppes: FT_StartPPES up to InterfaceWF.calculate_ppes as TribChem's command
+# line builds it (calc_interface.py:211-215), the FT_MoveTagResults of the
+# calculations of its shifts and the FT_FitPPES of its workflow (historic)
+# against ppes_inputs and run_ppes_analysis of the step (port), on the document
+# after match, the PES of the case and the adhesion of its kind. The adhesion is
+# not run: its interfaces are those of the document of match moved along z, the
+# same in both (ppes_document). The shifts are the 15 of the command line (A90);
+# the command line never passes a fit (A88), so a case is run without one and
+# the others ask for 'uber', which the port calls "uber" and the original takes
+# as the name of the fit. The results of the calculations come from task
+# documents made by the case (pes_task_document), the same in both: the energy
+# of ppes_energy(shift), the structure of each calculation as input and final
+# structure, and the calc_id ppes/<site>_<shift> as task_label, task_id and
+# dir_name. The cases compare the structures, calc_types and k-points of the
+# calculations and the database writes, the energies and the fit included.
+PPES_STEP_SHIFTS = [-0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25,
+                    2.75, 3.0]
+# (PES case of PES_STEPS, site, fit): the kind is the one paired with the PES case.
+PPES_STEPS = {
+    'cu111_al111': ('cu111_al111', 'min_site', None),
+    'cu111_al111_max_uber': ('cu111_al111', 'max_site', 'uber'),
+    'scf_short_cu111_al111_uber': ('scf_short_cu111_al111', 'min_site', 'uber'),
+}
+
+
+def ppes_energy(shift):
+    """Energy (eV) of the interface at a shift: an UBER curve with its minimum at zero
+    (depth 0.4 eV, length 0.8 angstrom) and a small ripple, like the energies of the tests."""
+    return (-1000.4 + 0.4 * (1 - (1 + shift / 0.8) * math.exp(-shift / 0.8))
+            + 1e-4 * math.sin(40 * shift))
+
+
+def ppes_document(name):
+    """Document of the interface after match, the PES of the case and an adhesion
+    of its kind: the interfaces at the lowest and at the highest site are the
+    interface of match moved by 0.01 and 0.02 angstrom along z."""
+    from monty.json import jsanitize
+    from pymatgen.core.structure import Structure
+    pes_case = PPES_STEPS[name][0]
+    kind = adhesion_kind(PES_STEPS[pes_case][2])
+    document = plotpes_document(pes_case)
+    base = Structure.from_dict(document['structure']['init']['interface'])
+    for label, dz in (('interface_min', 0.01), ('interface_max', 0.02)):
+        moved = base.copy()
+        moved.translate_sites(list(range(len(moved))), [0.0, 0.0, dz], frac_coords=False,
+                              to_unit_cell=False)
+        mongo_set(document, jsanitize(moved.as_dict(), strict=False),
+                  ['structure', 'opt', kind, label], True)
+    return document
+
+
+def ppes_inputs_data(labels, shifts, structures, kpoints):
+    return {'labels': list(labels), 'shifts': list(shifts), 'structures': structures,
+            'kpoints': kpoints}
+
+
+def ppes_step_historic(tc, name):
+    """FT_StartPPES up to InterfaceWF.calculate_ppes, then the FT_MoveTagResults
+    of the calculations of its shifts and the FT_FitPPES of its workflow, on a
+    database emulated with TribChem's prepare_data_to_update."""
+    run_ft = tc['highput.firetasks.run']
+    core = tc['highput.firetasks.core']
+    interface_wf = tc['highput.workflows.interface'].InterfaceWF
+    pes_case, site, fit = PPES_STEPS[name]
+    kind = adhesion_kind(PES_STEPS[pes_case][2])
+    document = ppes_document(name)
+    tasks, calls = {}, []
+    query_db, update_db = emulated_database(tc, document, tasks, calls)
+    saved = core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db
+    core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db = query_db, update_db
+    try:
+        # calc_interface.py:211-215 (set_ppes of the command line); the fit only when asked for
+        start = run_ft.FT_StartPPES(
+            mid=document['mid'].split('_'), miller=document['miller'],
+            collection=MATCH_COLLECTION, calc_type=PPES_CALC_TYPE, check_entry=kind,
+            shifts=PPES_STEP_SHIFTS, site=site, db_file='golden', **({} if fit is None
+                                                                      else {'fit': fit}))
+        params = start.read_runtask('StartPPES', {})
+        params['main_folder'] = 'golden'  # get_main_folder reads the database directly (A47)
+        _, params = start.query_interface(params)
+        wf = start.run_func(interface_wf.calculate_ppes, **params)
+        fw_tasks = [t for fw in wf.fws for t in fw.tasks]
+        run_vasp = next(t for t in fw_tasks if type(t).__name__ == 'FT_RunVaspOnTheFly')
+        shifts = list(params['shifts'])
+        for shift, structure, tag in zip(shifts, run_vasp['structure'], run_vasp['tag']):
+            tasks[tag] = pes_task_document('ppes', f'{site}_{shift}', structure,
+                                           ppes_energy(shift))
+        for kind_of_task in ('FT_MoveTagResults', 'FT_FitPPES'):
+            for task in fw_tasks:
+                if type(task).__name__ == kind_of_task:
+                    task.run_task({})
+    finally:
+        core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db = saved
+    return {'inputs': ppes_inputs_data([f'{site}_{s}' for s in shifts], shifts,
+                                       run_vasp['structure'],
+                                       [v.kpoints for v in run_vasp['vis']]),
+            'calls': calls}
+
+
+def ppes_step_port(tc, name):
+    """ppes_inputs of the step from settings and a run with the document after
+    match, the PES and the adhesion, then run_ppes_analysis on a store that
+    records the database calls and gives the task documents."""
+    from triboworkflow.core.store import SystemWriter
+    from triboworkflow.core.store.legacy import TASKS, LegacyStore
+    from triboworkflow.execution.layout import system_dir
+    from triboworkflow.workflows.interface import ppes
+
+    dbtools = tc['highput.database.dbtools']
+    tasks = {}
+
+    class Recording(LegacyStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = []
+
+        def query_db(self, collection, *, entry=None, fltr=None):
+            if collection == TASKS:
+                field = copy.deepcopy(tasks[fltr['task_label']])
+                return field, dbtools.read_multiple_entry(field, entry)
+            return super().query_db(collection, entry=entry, fltr=fltr)
+
+        def update_db(self, data, collection, *, entry=None, fltr=None, update_op='$set',
+                      to_mongodb=True):
+            self.calls.append(update_call(data, collection, entry, fltr, update_op, to_mongodb))
+            super().update_db(data, collection, entry=entry, fltr=fltr, update_op=update_op,
+                              to_mongodb=to_mongodb)
+
+    pes_case, site, fit = PPES_STEPS[name]
+    pair, step, short = PES_STEPS[pes_case]
+    kind = adhesion_kind(short)
+    document = ppes_document(name)
+    settings = port_settings(pair, document['mid'].split('_'), ['match', step, 'adhesion', 'ppes'],
+                             short, adhesion={'pes': step, 'type': kind},
+                             ppes={'site': site, 'shifts': PPES_STEP_SHIFTS,
+                                   'fit': 'none' if fit is None else fit})
+    system = document['mid']
+    sdir = system_dir(Path('run'), system)
+    with SystemWriter(sdir) as writer:
+        writer.document.create(document)
+        writer.save()
+    inputs = ppes.ppes_inputs(Path('run'), system, settings)
+    for label, shift, structure, _ in inputs.points:
+        tasks[f'ppes/{label}'] = pes_task_document('ppes', label, structure, ppes_energy(shift))
+    with SystemWriter(sdir) as writer:
+        store = Recording(sdir, writer.document, ppes.COLLECTION)
+        ppes.run_ppes_analysis(inputs, store, [f'ppes/{p[0]}' for p in inputs.points])
+    return {'inputs': ppes_inputs_data([p[0] for p in inputs.points],
+                                       [p[1] for p in inputs.points],
+                                       [p[2] for p in inputs.points],
+                                       [p[3] for p in inputs.points]),
+            'calls': store.calls}
+
+
+def case_ppes_step(tc, name):
+    """Calculations and database writes of the step ppes."""
+    if tc.root == HISTORIC:
+        return ppes_step_historic(tc, name)
+    return ppes_step_port(tc, name)
+
+
 # Charge density. The workflow reads three densities on the same grid and in
 # the same cell (interface, bottom slab, top slab), averages them along each
 # axis and integrates |interface - bottom - top| (chgcar_integrator, on
@@ -1552,6 +1715,8 @@ for _name in PLOTPES_STEPS:
     CASES[f'plotpes_step_{_name}'] = (case_plotpes_step, {'name': _name})
 for _name in ADHESION_STEPS:
     CASES[f'adhesion_step_{_name}'] = (case_adhesion_step, {'name': _name})
+for _name in PPES_STEPS:
+    CASES[f'ppes_step_{_name}'] = (case_ppes_step, {'name': _name})
 for _cell in CHARGE_CELLS:
     for _case, _func in (('chgcar_average', case_chgcar_average),
                          ('chgcar_displacement', case_chgcar_displacement),

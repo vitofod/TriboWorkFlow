@@ -237,7 +237,10 @@ class Step:
         """Whether the entries of the step are written and current (``is_done``).
 
         Asked also of a completed step, at every pass and by every command:
-        one no longer current runs again.
+        one no longer current runs again. A step that reads entries written
+        by other steps is done only if those steps are done too, since its
+        provenance holds the content that it read and not whether that is
+        still current.
         """
         return False
 

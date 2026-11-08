@@ -699,6 +699,50 @@ def test_done_without_the_surface(analysed_copy):
     assert not adhesion.AdhesionStep().done(run_dir, SYSTEM)
 
 
+# The adhesion reads the entries of its surface and of match without computing them: it is
+# done only if they are current too, whatever the content that it read.
+
+def surface_step(pes_name):
+    return PES_STEPS[pes_name]()
+
+
+def test_done_follows_the_results_of_the_surface(analysed_copy):
+    run_dir, _, pes_name, _ = analysed_copy
+    assert surface_step(pes_name).done(run_dir, SYSTEM)
+    # A calculation of the surface was completed again with another energy and the surface
+    # was not analysed: its entries are not current, the adhesion read them as they are.
+    sdir = system_dir(run_dir, SYSTEM)
+    calc_id = surface_step(pes_name).calculations(run_dir, SYSTEM)[0].calc_id
+    record = store.read_record(sdir, calc_id)
+    results = {**record.results, 'output': {**record.results['output'], 'energy': -999.0}}
+    store.write_record(sdir, dataclasses.replace(record, results=results))
+    assert not surface_step(pes_name).done(run_dir, SYSTEM)
+    assert not adhesion.AdhesionStep().done(run_dir, SYSTEM)
+
+
+def test_done_follows_the_settings_of_the_surface(analysed_copy):
+    run_dir, _, pes_name, kind = analysed_copy
+    if (pes_name, kind) != ('pes_scf', 'regular'):
+        pytest.skip('a setting of the surface only: the slabs of the static one')
+    # The static surface is to be computed on reduced slabs, and was not analysed again. The
+    # four calculations of the adhesion do not change, nor the entries that it read.
+    before = adhesion.AdhesionStep().provenance(run_dir, SYSTEM)
+    edit_config(run_dir, 'short = false', 'short = true')
+    assert adhesion.AdhesionStep().provenance(run_dir, SYSTEM) == before
+    assert not surface_step(pes_name).done(run_dir, SYSTEM)
+    assert not adhesion.AdhesionStep().done(run_dir, SYSTEM)
+
+
+def test_done_follows_match(analysed_copy):
+    run_dir, _, pes_name, _ = analysed_copy
+    assert surface_step(pes_name).done(run_dir, SYSTEM)
+    # The slabs are to be matched again with another area, and match was not run again.
+    edit_config(run_dir, 'max_area = 160.0', 'max_area = 150.0')
+    assert not MatchStep().done(run_dir, SYSTEM)
+    assert not surface_step(pes_name).done(run_dir, SYSTEM)
+    assert not adhesion.AdhesionStep().done(run_dir, SYSTEM)
+
+
 def test_analysis_again_gives_the_same_document(analysed_copy):
     run_dir, calc_ids, _, _ = analysed_copy
     before = document(run_dir)
@@ -862,8 +906,14 @@ def test_the_step_waits_for_the_surface(tmp_path, capsys):
     assert 'structure.opt.pes.min' in capsys.readouterr().out
 
 
-def test_the_orchestrator_runs_the_chain(tmp_path, fake_slurm):
-    """match, the static surface, then the adhesion that reads it: a pass at a time."""
+def orchestrated_chain(tmp_path, fake_slurm):
+    """match, the static surface, then the adhesion that reads it: a pass at a time.
+
+    Returns
+    -------
+    run_dir, orchestrator
+        With the three steps completed.
+    """
     run_dir = pes_run(tmp_path, steps=('adhesion', 'pes_scf', 'match'))
     configure(run_dir, 'pes_scf', 'regular')
     orch = build_orchestrator(run_dir, groups=2)
@@ -893,6 +943,25 @@ def test_the_orchestrator_runs_the_chain(tmp_path, fake_slurm):
     assert report.success and set(statuses().values()) == {'completed'}
     assert adhesion.AdhesionStep().done(run_dir, SYSTEM)
     assert set(document(run_dir)['adhesion']) == {'regular'}
+    return run_dir, orch
+
+
+def test_the_orchestrator_runs_the_chain(tmp_path, fake_slurm):
+    orchestrated_chain(tmp_path, fake_slurm)
+
+
+def test_the_orchestrator_does_not_keep_the_adhesion_of_a_surface_not_current(tmp_path,
+                                                                             fake_slurm):
+    run_dir, orch = orchestrated_chain(tmp_path, fake_slurm)
+    # The static surface is to be computed on reduced slabs: it is no longer current, and the
+    # adhesion that read it is not either, whatever the entries that it read.
+    edit_config(run_dir, 'short = false', 'short = true')
+    assert not pes.StaticPesStep().done(run_dir, SYSTEM)
+    orch.run_pass()
+    statuses = {name: orch.entry(SYSTEM, name)['status'] for name in orch.order}
+    assert statuses['match'] == 'completed'
+    assert statuses['pes_scf'] != 'completed'
+    assert statuses['adhesion'] != 'completed'
 
 
 # --- errors of the analysis -------------------------------------------------------------------

@@ -9,8 +9,8 @@
 itself here once it is implemented; until then the command line answers that
 the step is not available, and nothing is prepared or submitted.
 
-In this version ``match``, ``pes``, ``pes_scf``, ``plotpes``, ``plotpes_scf``
-and ``adhesion`` are available: a run lists only these in
+In this version ``match``, ``pes``, ``pes_scf``, ``plotpes``, ``plotpes_scf``,
+``adhesion`` and ``ppes`` are available: a run lists only these in
 ``[interface].steps``; with any other step the command line stops with
 ``step '<name>' not available in this version`` before doing anything.
 """
@@ -21,10 +21,12 @@ from .adhesion import AdhesionStep
 from .match import MatchStep
 from .pes import RelaxedPesStep, StaticPesStep
 from .plotpes import RelaxedPlotPesStep, StaticPlotPesStep
+from .ppes import PpesStep
 
 STEPS: dict[str, type[Step]] = {'match': MatchStep, 'pes': RelaxedPesStep,
                                 'pes_scf': StaticPesStep, 'plotpes': RelaxedPlotPesStep,
-                                'plotpes_scf': StaticPlotPesStep, 'adhesion': AdhesionStep}
+                                'plotpes_scf': StaticPlotPesStep, 'adhesion': AdhesionStep,
+                                'ppes': PpesStep}
 
 
 class StepNotAvailable(LookupError):

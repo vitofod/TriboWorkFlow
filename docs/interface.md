@@ -1,4 +1,4 @@
-# Interface workflow: steps `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf` and `adhesion`
+# Interface workflow: steps `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `adhesion` and `ppes`
 
 The interface workflow starts from two slabs, given in `[interface]` of the
 settings ([configuration.md](configuration.md)). Its first step, `match`,
@@ -8,9 +8,10 @@ The steps `pes` and `pes_scf` compute the potential energy surface of the
 interface from those points, relaxed along z and static; `plotpes` and
 `plotpes_scf` interpolate the one and the other over the whole plane;
 `adhesion` computes the adhesion energy of the interface at the site of
-lowest and at the site of highest energy of one of the two surfaces. In this
-version these six steps are available, so a run lists only them in
-`[interface].steps`:
+lowest and at the site of highest energy of one of the two surfaces; `ppes`
+computes the energy of the interface that `adhesion` relaxed as its two slabs
+move apart or closer along z. In this version these seven steps are
+available, so a run lists only them in `[interface].steps`:
 
 ```bash
 triboworkflow analyse match
@@ -223,7 +224,10 @@ Changing `kdens`, `interface_distance`, a parameter of the calculations
 (e.g. `ecutwfc`) or the interface (a new `match`) makes both run again;
 `short` or `layers` only `pes_scf`; new results of a calculation, run again
 with the same input, only the PES that uses it. A PES analysed again removes
-its interpolation, which is then done again.
+its interpolation, which is then done again. A PES is done only while `match`
+is done and current too: the provenance holds the content that the step read,
+so changing the settings of `match` and not analysing it again leaves the
+PES not done, even if its own settings did not change.
 
 The step `shear` is not available in this version: which of the two PES it
 reads is decided with it.
@@ -379,7 +383,8 @@ An interpolation step is done when its four entries exist, their provenance
 is the one the entries read give now, and its figure exists. Analysing its
 PES again (new calculations, other settings, a new `match`) removes the
 interpolation, which is then done again; a figure removed makes the step run
-again.
+again. An interpolation is done only while its PES and `match` are done and
+current too.
 
 Notes
 -----
@@ -504,7 +509,10 @@ the settings, the calculations and the entries read give now. Changing
 settings) makes it run again: the structures of the calculations differ, so
 `prepare adhesion` stops with the list and `prepare adhesion --replace`
 prepares them again. New results of a calculation, run again with the same
-input, make the step run again at the next `analyse` or pass.
+input, make the step run again at the next `analyse` or pass. The step is
+done only while the PES it reads and `match` are done and current too: after
+a change to the PES that is not analysed again, `adhesion` is not done and its
+analysis stops, naming the steps to run first.
 
 Notes
 -----
@@ -528,3 +536,173 @@ that of the function that stacks the slabs, as there (A86). Not ported:
 `override`, `run_vasp`, `get_main_folder` (A47), `FT_SaveVASPOutputs` (the
 files of each calculation stay in its directory) and the other `calc_type`
 that `adhesion_energy` accepts at one's own risk.
+
+## Step `ppes`
+
+The perpendicular PES (PPES) is the energy of an interface as its two slabs
+move apart or closer along z, rigidly. The step starts from the interface that
+`adhesion` relaxed, moves the slab on top by each of the shifts of
+`[interface.ppes]` and runs one static pw.x calculation for each, with no
+atom free to move. It runs when listed in `[interface].steps`, and has its own
+commands like the other steps with calculations:
+
+```bash
+triboworkflow prepare ppes
+triboworkflow submit ppes
+triboworkflow analyse ppes
+```
+
+### Which interface
+
+The step waits for `adhesion` and, behind it, for its PES and `match`. One
+run covers one kind and one site:
+
+| Setting | Chooses | Entry read |
+|---|---|---|
+| `type` of `[interface.adhesion]` (`regular` or `short`) | the kind of interface, the one that `adhesion` computed | `structure.opt.<type>.interface_min` or `.interface_max` |
+| `site` of `[interface.ppes]` (`min_site` or `max_site`) | the interface at the site of lowest energy or of highest energy | `interface_min` for `min_site`, `interface_max` for `max_site` |
+
+The entry must be written by `adhesion` and current, otherwise the step is
+blocked with what is missing. To compute the other site, change `site` and run
+again: the calculations are other ones, and the results of the two sites stay
+side by side in the document. For the other kind make another run, as for the
+adhesion.
+
+### Calculations
+
+One calculation per shift, `ppes/<site>_<shift>`, with the shift in angstrom as
+it is written in `shifts`: `ppes/min_site_-0.75`, `ppes/min_site_0.25`. All are
+`scf` calculations (`calc_type` `slab_from_scratch`) of the relaxed interface
+with the slab on top moved by the shift along z, a negative shift bringing the
+slabs closer: shift 0 is the interface as `adhesion` left it. No atom is
+fixed, whatever the relaxation of `adhesion` fixed. The k-point grid comes from
+its density (`[k_points] mode = "kdens"` is required) and the pw.x input is
+written as for every calculation of the workflow. With the 15 default shifts
+([configuration.md](configuration.md)) a site needs 15 calculations.
+
+The atoms to move are chosen from the final structure of the adhesion by their
+position, not by the slab they belong to: those whose fractional z, wrapped
+into the cell, is below one half. They are the slab on top only while **each
+slab lies in one half of the cell**: the one on top below the middle, with the
+contact plane of the interface at the origin, and the bottom one above it, as
+the structures of `match` have them when the slabs are thin compared with the
+cell and as a relaxation leaves them. **Nothing checks it**, and outside that
+case the slab is deformed, not moved as a whole:
+
+- a slab on top thicker than half the cell keeps its upper atoms in place
+  (a Cu(111)/Al(111) interface with slabs of different thickness moved 82 of
+  the 105 atoms of the slab on top);
+- a bottom slab thicker than half the cell has its lower atoms moved with the
+  slab on top;
+- a final structure whose origin was moved by half a cell moves the bottom
+  slab instead.
+
+The energies and the fit of such an interface are those of a geometry that is
+not the PPES. Check the fractional z of the two slabs of the interface (the
+site property `interface_region`, `bot_slab` or `top_slab`, tells which atom
+belongs to which) before relying on the curve; the selection by the slab each
+atom belongs to is planned.
+
+### Analysis
+
+`analyse ppes`, or the orchestrator once every calculation is completed, uses
+the results only when each calculation is complete with the fingerprint that
+the settings give now, and all share one energy model (engine,
+pseudopotentials, cutoffs, k-points, smearing, spin, vdW): energies of
+different models are never combined, and the step stops with the calculations
+at fault and writes nothing. The energies are not combined with those of the
+adhesion either. Then it writes, with `<type>` the `type` of
+`[interface.adhesion]` and `<site>` the `site` of `[interface.ppes]`:
+
+| Entry of `system.json` | Content |
+|---|---|
+| `ppes.<type>.data.<site>.shift_<shift>` | the results of each calculation, in `output` (`nsites`, `density` in g/cm^3, `energy` and `energy_per_atom` in eV, `forces`, `stress`, `dir_name`, `task_id`, `task_label`, and the final `structure`; the keys that pw.x does not give are null) and the input `structure`; the key has a comma for the point of the shift (`shift_-0,75`) |
+| `ppes.<type>.energy.<site>.ppes_ev` | `[shift, energy]` for each shift, the total energy of the cell in eV |
+| `ppes.<type>.energy.<site>.ppes_jm2` | the same, per area of the cell of the final structure, in J/m^2 |
+| `ppes.<type>.energy.<site>.uber` | only with `fit = "uber"`: `g`, `l`, `sigma_g`, `sigma_l` |
+
+The energy is the total energy of the cell, **not referred to the lowest
+one**. Everything is written together, at the end: when any part fails,
+nothing is written. Before writing, the two entries of the type and site run
+(`data.<site>` and `energy.<site>`) are emptied, so that the shifts or the fit
+of an earlier analysis do not stay under the provenance of this one; the other
+site, the other type and the entries of the other steps are not touched. Each of
+the two entries records its provenance: the parameters of the step (type, site,
+shifts, fit, the `calc_type`, the k-point density), the calculations with
+their fingerprints and the results used, and the content of the interface read.
+
+The fit is the universal binding energy relation (UBER). It is made on the
+shifts and the energies in eV, and only on the shifts that are zero or
+positive, so:
+
+- `g` is the depth of the curve in **eV per cell**, not in J/m^2, `l` is its
+  length in **angstrom**, and `sigma_g` and `sigma_l` are their standard
+  deviations, in the same units;
+- with three shifts that are zero or positive the fit runs but the covariance
+  cannot be estimated: the deviations are infinite and the step says so with a
+  warning (they are written as such);
+- with fewer than three it fails, and so does the analysis: it names the fit
+  and the number of shifts it had, writes nothing and keeps the cause of the
+  error; list more shifts or use `fit = "none"`;
+- with four or more the deviations are finite.
+
+### Message
+
+```text
+<system>: ppes: <type> PPES at <site>, <n> shifts of the slab on top from <min> to <max> angstrom (slab_from_scratch)
+<system>: total energy per area: lowest <energy> J/m^2 at the shift <shift>, highest <energy> J/m^2 at the shift <shift>
+<system>: fit uber: g = <g> +- <sigma_g> eV per cell, l = <l> +- <sigma_l> angstrom
+```
+
+The last line is `no fit (fit = "none")` without the fit. The energies have
+6 decimals. What the code that builds the structures prints goes to the log at
+debug level only.
+
+### When the step runs again
+
+The step is done when its two entries exist and their provenance is the one
+that the settings, the calculations and the interface read give now. It is not
+done, and its analysis stops with the steps to run first, when `adhesion`, the
+PES it reads or `match` is not done and current: the provenance holds the
+content that each step read, not whether that content is still current.
+
+- Changing only `fit` computes nothing again: the fingerprints of the
+  calculations do not depend on it, so no calculation is prepared or
+  submitted, and the step only analyses the same results anew.
+- Changing `shifts` or `site` makes the step not done and asks for the
+  calculations of the shifts or of the site that are new; those that stay keep
+  their results.
+- Changing `kdens` or a parameter of the calculations (e.g. `ecutwfc`), or
+  analysing `adhesion` again (a new interface), changes the calculations
+  already prepared: `prepare ppes` stops with the list and `prepare ppes
+  --replace` prepares them again.
+- New results of a calculation, run again with the same input, make the step
+  run again at the next `analyse` or pass.
+
+Notes
+-----
+To remove: port of TribChem's `FT_StartPPES` (with
+`FireTaskInterface.query_interface`), `InterfaceWF.calculate_ppes`,
+`generate_ppes_inputs`, the `FT_MoveTagResults` of its calculations and
+`FT_FitPPES`. The golden cases `ppes_step_*` compare the structures, `calc_type`
+and k-points of the calculations and the database writes, the energies and the
+fit included, with those of the Firetasks, at both sites and with both kinds;
+the fit of the step on the files of `data/homogeneous/ppes_data` is compared
+with the golden values of the fit function (`uber_ppes_data`). Differences:
+DEV-35 (the k-point density from the settings, not from `comp_params` of the
+document), DEV-39 (the writes use the ids of the document of `match`), DEV-43
+(the two entries of the type and site run are emptied before the writes;
+TribChem merged the new keys into the old ones). TribChem's command line never
+passed the fit, so no fit was run (A88): `fit = "none"` is the default here
+too. The fit function works only with `"uber"` (A06, A89), and the other names
+are refused when the settings are read. The shifts of its command line are the
+default ones, with the jump over 2.5 (A90). The type of the PPES was an option
+independent of the adhesion in TribChem; here it is the one of
+`[interface.adhesion]`, and the PPES of a site was skipped there once the other
+site was done (A59), where here "done" is the entries of the site with their
+provenance (D57). The choice of the atoms to move by the fractional z is the
+original one, with the limits above (A91); the atoms of the interface already
+carry the slab they belong to (`interface_region`), which the selection does not
+use yet. Not ported: `override`, `run_vasp`, `get_main_folder`
+(A47), `FT_SaveVASPOutputs`, the other values of `ppes_type` and the figure and
+the csv of the PPES.

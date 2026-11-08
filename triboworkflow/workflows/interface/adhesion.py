@@ -118,6 +118,7 @@ from triboworkflow.vendored.highput.utils.vasp_tools import VaspInputSet
 from triboworkflow.vendored.physics.base.solidstate import get_cell_info
 from triboworkflow.vendored.physics.base.units import Converter
 
+from .chain import upstream_done
 from .match import (COLLECTION, DEFAULTS, FILTER_KEYS, match_parameters, match_provenance,
                     set_filter)
 from .pes import ID_KEYS, TRANSFER_FROM, RelaxedPesStep, StaticPesStep
@@ -775,12 +776,19 @@ class AdhesionStep(Step):
     name = STEP
 
     def done(self, run_dir, system):
-        """Whether its entries (``adhesion_leaves``) are written and current (``provenance``)."""
+        """Whether its entries (``adhesion_leaves``) are written and current (``provenance``).
+
+        The surface and ``match``, which it reads, have to be done too: the
+        provenance holds the content of the entries read, not whether they are
+        still current.
+        """
         sdir = system_dir(run_dir, system)
         document = read_system(sdir)
         entries = adhesion_leaves(_load_run(run_dir).interface.adhesion.type)
         # Before any analysis the inputs are not read: the PES may not have run.
         if not all(document.get(entry) for entry in entries):
+            return False
+        if not upstream_done(self, run_dir, system):
             return False
         try:
             expected = self.provenance(run_dir, system)

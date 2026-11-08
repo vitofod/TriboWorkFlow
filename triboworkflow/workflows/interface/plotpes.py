@@ -109,6 +109,7 @@ from triboworkflow.vendored.physics.base.solidstate import get_cell_info
 from triboworkflow.vendored.physics.base.units import Converter
 from triboworkflow.vendored.physics.tribology.potensurf import get_pes
 
+from .chain import upstream_done
 from .match import COLLECTION, FILTER_KEYS, match_parameters, match_provenance, set_filter
 from .pes import CALC_TYPES, ID_KEYS, PES_TYPE, RelaxedPesStep, StaticPesStep, pes_entry
 
@@ -513,13 +514,17 @@ class PlotPesStep(Step):
         """Whether the four entries are written and current and the figure exists.
 
         Nothing is interpolated: the entries read are compared with those
-        recorded in the provenance.
+        recorded in the provenance. The PES and ``match``, which it reads,
+        have to be done too: the provenance holds the content of the entries
+        read, not whether they are still current.
         """
         sdir = system_dir(run_dir, system)
         document = read_system(sdir)
         leaves = interpolation_leaves(PES_OF[self.name])
         # Before any analysis the inputs are not read: the PES may not have run.
         if not all(document.get(leaf) for leaf in leaves):
+            return False
+        if not upstream_done(self, run_dir, system):
             return False
         try:
             inputs = plotpes_inputs(sdir, document, _load_run(run_dir), self.name)

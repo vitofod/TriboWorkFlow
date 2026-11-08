@@ -474,8 +474,11 @@ Each pass:
 3. for each system, goes through the requested steps in the order of the
    graph, the order given deciding only between steps that are ready. A
    **completed** step is asked again whether its entries are done and
-   current (`Step.done`): one no longer current is **waiting** again, and is
-   evaluated again in the same pass. A step whose dependency failed or is
+   current (`Step.done`, which for the steps of the interface workflow also
+   asks that every step behind it, up to `match`, is done and current: the
+   provenance of an entry holds the content that was read, not whether the
+   step that wrote it is still current): one no longer current is **waiting**
+   again, and is evaluated again in the same pass. A step whose dependency failed or is
    blocked is **blocked**; one whose dependency is not completed is
    **waiting**; the steps of a system run one at a time. A step starts by
    checking its entries (already done and current: **completed** without
