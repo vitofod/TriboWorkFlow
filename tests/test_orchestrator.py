@@ -12,7 +12,9 @@ leave; the jobs are set to their states by the test.
 """
 
 import dataclasses
+import datetime
 import json
+import re
 
 import pytest
 
@@ -26,8 +28,10 @@ from triboworkflow.execution import archive as archive_module
 from triboworkflow.execution import layout
 from triboworkflow.execution import orchestrator as orchestrator_module
 from triboworkflow.execution.archive import released_claim
-from triboworkflow.execution.jobs import (MANIFEST_FILE, SUBMITTED_FILE, Launch, Manifest,
-                                          read_manifest, write_job)
+from triboworkflow.execution.jobs import (ANALYSIS_FILE, JOBSCRIPT_FILE, MANIFEST_FILE,
+                                          OUTCOME_FILE, SUBMITTED_FILE, WITHDRAWN_FILE, Launch,
+                                          Manifest, is_analysis, read_analysis, read_manifest,
+                                          write_job)
 from triboworkflow.execution.manager import JobManager
 from triboworkflow.execution.orchestrator import (INTERFACE_GRAPH, Orchestrator,
                                                   OrchestratorError, Step, order_steps)
@@ -137,8 +141,11 @@ def work(run, outcome='completed', only=None):
     """Workers take the next attempt of each calculation of the groups and end it.
 
     Every job is then set COMPLETED. ``only`` limits the calculations taken.
+    The jobs of the analyses (``analysis.json``) are left to the tests.
     """
     for name in list(run.manager.groups):
+        if is_analysis(layout.job_dir(run.dir, name)):
+            continue
         manifest, _ = read_manifest(layout.job_dir(run.dir, name) / MANIFEST_FILE)
         jobs = run.manager.group_jobs(name)
         for launch in manifest.calculations:
@@ -150,7 +157,8 @@ def work(run, outcome='completed', only=None):
                 continue
             run.start(launch.calc_id, jobs[0], launch=launch, output=OUTPUTS[outcome])
             run.finish(launch.calc_id, **OUTCOMES[outcome])
-    run.slurm.states.update({job_id: 'COMPLETED' for job_id in run.manager.jobs})
+    run.slurm.states.update({job_id: 'COMPLETED' for job_id, job in run.manager.jobs.items()
+                             if not is_analysis(layout.job_dir(run.dir, job['group']))})
 
 
 def statuses(report):
@@ -515,6 +523,295 @@ def test_a_step_analysed_by_hand_done_or_no_longer_current(run):
     write_entry(run.dir, SYSTEM, 'plotpes', version=2)  # written with other settings
     report = orch.run_pass()
     assert statuses(report) == {'plotpes': 'manual'} and orch.steps['plotpes'].calls == []
+
+
+# --- steps analysed in a job of their own --------------------------------------------------
+
+GROUP = f'{SYSTEM}.plotpes.1'
+NO_OUTCOME = orchestrator_module.NO_OUTCOME
+
+
+def job_run(run, requested=BY_HAND, versions=None, manager=None):
+    """Orchestrator whose plotpes is analysed in a job of its own ([execution.analysis])."""
+    versions = {} if versions is None else versions
+    steps = {name: (ManualStep if name == 'plotpes' else FakeStep)(run, name, versions)
+             for name in requested}
+    jobscript = run.dir.parent / 'analysis.sh'
+    if not jobscript.exists():
+        jobscript.write_text('#!/bin/bash\n#SBATCH --mem=200G\n')
+    return Orchestrator(run.dir, [SYSTEM], steps, manager or run.manager, EXECUTION,
+                        run.jobscript, analysis_jobscript=jobscript)
+
+
+def job_restarted(run, requested=BY_HAND):
+    """A new orchestrator and job manager, as after a restart or for a command of the CLI."""
+    run.manager = JobManager(run.dir, run.slurm, 3600, now=run.clock)
+    return job_run(run, requested, manager=run.manager)
+
+
+def job_of(run, group=GROUP):
+    (job_id,) = run.manager.group_jobs(group)
+    return job_id
+
+
+def the_job_ends(run, state='COMPLETED', analysed=True, group=GROUP, outcome=None):
+    """What the job of the analysis leaves: the entry of plotpes if ``analysed``, its outcome.
+
+    The job runs on a compute node, in a process of its own; the scheduler then
+    reports it in ``state``.
+    """
+    if analysed:
+        write_entry(run.dir, SYSTEM, 'plotpes')
+    if outcome is not None:
+        (layout.job_dir(run.dir, group) / OUTCOME_FILE).write_text(json.dumps(outcome))
+    run.slurm.states[job_of(run, group)] = state
+
+
+def test_a_step_analysed_in_a_job_of_its_own(run):
+    orch = job_run(run)
+    report = until_pes(orch, run)
+    entry = orch.entry(SYSTEM, 'plotpes')
+    assert (entry['status'], entry['job'], entry['calculations']) == ('running', GROUP, [])
+    assert statuses(report) == {'match': 'completed', 'pes': 'completed', 'plotpes': 'running',
+                                'shear': 'waiting'}
+    assert report.submitted == [GROUP] and orch.step_report(SYSTEM, 'plotpes').job == GROUP
+    path = layout.job_dir(run.dir, GROUP)
+    analysis, _ = read_analysis(path / ANALYSIS_FILE)
+    assert (analysis.system, analysis.step, analysis.scheduler) == (SYSTEM, 'plotpes', 'slurm')
+    assert not (path / MANIFEST_FILE).exists()
+    jobscript = (path / JOBSCRIPT_FILE).read_text()
+    assert jobscript.startswith('#!/bin/bash\n#SBATCH --mem=200G\n')
+    assert ' -m triboworkflow.cli.analysis_job ' in jobscript
+    job_id = job_of(run)
+    report = orch.run_pass()  # the job is in the queue
+    assert orch.entry(SYSTEM, 'plotpes')['reason'] == f'job {job_id} PENDING'
+    assert not report.finished
+    submitted = run.slurm.submitted
+    the_job_ends(run)
+    report = orch.run_pass()
+    assert statuses(report) == dict.fromkeys(BY_HAND, 'completed') and report.success
+    assert orch.entry(SYSTEM, 'plotpes')['reason'] == f'analysed in the job of group {GROUP}'
+    # Never prepared nor analysed by the orchestrator; one job, never submitted again.
+    assert orch.steps['plotpes'].calls == [] and run.slurm.submitted == submitted
+    state = json.loads((run.dir / 'orchestrator.json').read_text())
+    assert state['schema_version'] == 2 and state['systems'][SYSTEM]['plotpes']['job'] == GROUP
+
+
+def test_the_orchestrator_waits_for_the_job_of_the_analysis(run):
+    orch = job_run(run)
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        work(run)
+        if len(sleeps) == 3:
+            the_job_ends(run)
+
+    report = orch.run(sleep=sleep)
+    assert report.success and len(sleeps) == 3 and orch.steps['plotpes'].calls == []
+
+
+@pytest.mark.parametrize('state', ['COMPLETED', 'FAILED', 'TIMEOUT', 'OUT_OF_MEMORY', 'NODE_FAIL',
+                                   'CANCELLED'])
+def test_a_job_over_without_the_step_done_fails_it(run, state):
+    orch = job_run(run)
+    until_pes(orch, run)
+    job_id = job_of(run)
+    the_job_ends(run, state, analysed=False)
+    report = orch.run_pass()
+    entry = orch.entry(SYSTEM, 'plotpes')
+    assert statuses(report)['plotpes'] == 'failed' and statuses(report)['shear'] == 'blocked'
+    assert entry['reason'].startswith(f'job {job_id} {state} without completing the step: '
+                                      f'{NO_OUTCOME}; output of the job in jobs/{GROUP}; ')
+    assert entry['reason'].endswith('then "triboworkflow retry plotpes"')
+    assert entry['error'] == f'AnalysisJobFailed: job {job_id} {state}: {NO_OUTCOME}'
+    assert report.finished and not report.success
+    submitted = run.slurm.submitted
+    for _ in range(2):
+        orch.run_pass()
+    # Never submitted again automatically: the same job would fail in the same way.
+    assert run.slurm.submitted == submitted and statuses(orch.report())['plotpes'] == 'failed'
+    assert orch.steps['plotpes'].calls == []
+
+
+def test_after_a_failed_job_retry_submits_a_new_one(run):
+    orch = job_run(run)
+    until_pes(orch, run)
+    first = job_of(run)
+    the_job_ends(run, 'FAILED', analysed=False,
+                 outcome={'result': 'failed', 'error': 'MemoryError: Unable to allocate 88.3 GiB'})
+    orch.run_pass()
+    assert ('without completing the step: failed: MemoryError: Unable to allocate 88.3 GiB; '
+            in orch.entry(SYSTEM, 'plotpes')['reason'])
+    orch.retry(SYSTEM, 'plotpes')
+    assert orch.entry(SYSTEM, 'plotpes')['job'] is None
+    report = orch.run_pass()
+    second = f'{SYSTEM}.plotpes.2'
+    assert report.submitted == [second] and orch.entry(SYSTEM, 'plotpes')['job'] == second
+    assert job_of(run, second) != first
+    the_job_ends(run, group=second)
+    assert orch.run_pass().success
+
+
+def test_a_held_job_keeps_the_step_running(run, monkeypatch):
+    orch = job_run(run)
+    until_pes(orch, run)
+    job_id = job_of(run)
+    monkeypatch.setattr(run.slurm, 'is_held', lambda state: state == 'PENDING')
+    report = orch.run_pass()
+    assert statuses(report)['plotpes'] == 'running' and not report.finished
+    assert orch.entry(SYSTEM, 'plotpes')['reason'].startswith(f'job {job_id} PENDING: held')
+
+
+def test_a_job_no_longer_reported_keeps_the_step_running(run):
+    orch = job_run(run)
+    until_pes(orch, run)
+    job_id = job_of(run)
+    orch.run_pass()
+    del run.slurm.states[job_id]
+    report = orch.run_pass()
+    assert statuses(report)['plotpes'] == 'running' and not report.finished
+    assert orch.entry(SYSTEM, 'plotpes')['reason'].startswith(
+        f'job {job_id}: not reported by the scheduler, or in a state not known (last known state '
+        'PENDING)')
+
+
+def test_a_preempted_job_is_over_once_not_requeued(run):
+    orch = job_run(run)
+    until_pes(orch, run)
+    job_id = job_of(run)
+    run.slurm.states[job_id] = 'PREEMPTED'
+    orch.run_pass()
+    assert orch.entry(SYSTEM, 'plotpes')['reason'] == \
+        f'job {job_id} PREEMPTED: the scheduler may requeue it; to be confirmed by a later query'
+    run.clock.time += datetime.timedelta(seconds=EXECUTION.polling_interval)
+    report = orch.run_pass()
+    assert statuses(report)['plotpes'] == 'failed'
+    assert orch.entry(SYSTEM, 'plotpes')['reason'].startswith(
+        f'job {job_id} PREEMPTED, not requeued without completing the step: ')
+
+
+def stop(*args, **kwargs):
+    raise Stopped
+
+
+@pytest.mark.parametrize('where', ['add_group', '_save'])
+def test_a_group_written_before_an_interruption_is_taken_again(run, monkeypatch, where):
+    orch = job_run(run)
+    orch.run_pass()
+    work(run)
+    # Interrupted after writing the group, before registering it or saving the state.
+    monkeypatch.setattr(orch.manager if where == 'add_group' else orch, where, stop)
+    with pytest.raises(Stopped):
+        orch.run_pass()
+    assert is_analysis(layout.job_dir(run.dir, GROUP)) and run.slurm.submitted == 2
+    restarted = job_restarted(run)
+    report = restarted.run_pass()
+    assert report.submitted == [GROUP] and restarted.entry(SYSTEM, 'plotpes')['job'] == GROUP
+    assert len(restarted.manager.group_jobs(GROUP)) == 1 and run.slurm.submitted == 3
+    assert not layout.job_dir(run.dir, f'{SYSTEM}.plotpes.2').exists()
+
+
+def test_a_restart_follows_the_same_job(run):
+    until_pes(job_run(run), run)
+    job_id, submitted = job_of(run), run.slurm.submitted
+    restarted = job_restarted(run)
+    restarted.run_pass()
+    assert restarted.entry(SYSTEM, 'plotpes')['reason'] == f'job {job_id} PENDING'
+    assert run.slurm.submitted == submitted
+    the_job_ends(run)
+    assert job_restarted(run).run_pass().success and run.slurm.submitted == submitted
+
+
+def test_a_job_is_followed_also_without_the_table(run):
+    until_pes(job_run(run), run)
+    orch = manual_restarted(run)  # [execution.analysis] removed while the job runs
+    orch.run_pass()
+    assert orch.entry(SYSTEM, 'plotpes')['status'] == 'running'
+    assert orch.entry(SYSTEM, 'plotpes')['job'] == GROUP
+    the_job_ends(run)
+    assert orch.run_pass().success
+
+
+def test_the_steps_of_a_system_wait_for_the_job(run):
+    orch = job_run(run, ('match', 'pes', 'plotpes', 'adhesion'))
+    report = until_pes(orch, run)
+    assert statuses(report)['plotpes'] == 'running' and statuses(report)['adhesion'] == 'waiting'
+    assert orch.entry(SYSTEM, 'adhesion')['reason'] == 'ready; plotpes runs first'
+    the_job_ends(run)
+    report = orch.run_pass()
+    assert statuses(report)['plotpes'] == 'completed' and statuses(report)['adhesion'] == 'running'
+
+
+def test_the_job_waits_for_the_steps_that_run(run):
+    orch = job_run(run, ('match', 'pes', 'adhesion', 'plotpes'))
+    report = until_pes(orch, run)
+    assert statuses(report)['adhesion'] == 'running' and statuses(report)['plotpes'] == 'waiting'
+    assert orch.entry(SYSTEM, 'plotpes')['reason'] == 'ready; adhesion runs first'
+    assert not layout.job_dir(run.dir, GROUP).exists()
+    work(run)
+    report = orch.run_pass()
+    assert statuses(report)['adhesion'] == 'completed'
+    assert orch.entry(SYSTEM, 'plotpes')['job'] == GROUP and report.submitted == [GROUP]
+
+
+def test_analysis_by_hand_refused_while_the_job_may_run(run):
+    until_pes(job_run(run), run)
+    job_id = job_of(run)
+    before = (run.dir / 'orchestrator.json').read_bytes()
+    by_hand = job_restarted(run)
+    message = (f'{SYSTEM}/plotpes not analysed by hand: its analysis runs in a job of its own '
+               f'(group {GROUP}, job {job_id} submitted, not reported yet)')
+    with pytest.raises(OrchestratorError, match=re.escape(message)):
+        by_hand.analyse_step(SYSTEM, 'plotpes')
+    assert by_hand.steps['plotpes'].calls == []
+    assert (run.dir / 'orchestrator.json').read_bytes() == before
+    # Cancelled, and its end read from the scheduler (e.g. by "submit"): analysed by hand.
+    run.slurm.states[job_id] = 'CANCELLED'
+    by_hand.manager.cycle()
+    assert by_hand.analyse_step(SYSTEM, 'plotpes').status == 'completed'
+    assert by_hand.steps['plotpes'].calls == ['prepare', 'analyse']
+    assert by_hand.entry(SYSTEM, 'plotpes')['job'] is None
+
+
+def test_analysis_by_hand_of_a_job_never_submitted(run):
+    orch = job_run(run)
+    orch.run_pass()
+    work(run)
+    run.slurm.refuse = 1
+    orch.run_pass()
+    orch.run_pass()
+    reason = orch.entry(SYSTEM, 'plotpes')['reason']
+    assert reason.startswith('submission of the job refused: ')
+    assert reason.endswith(f'then "triboworkflow clear-refusal {GROUP}"')
+    submitted = run.slurm.submitted
+    by_hand = job_restarted(run)
+    assert by_hand.analyse_step(SYSTEM, 'plotpes').status == 'completed'
+    assert by_hand.steps['plotpes'].calls == ['prepare', 'analyse']
+    # Its group is withdrawn: never submitted later.
+    assert (layout.job_dir(run.dir, GROUP) / WITHDRAWN_FILE).is_file()
+    assert job_restarted(run).run_pass().success and run.slurm.submitted == submitted
+
+
+def test_prepare_and_submit_of_a_step_analysed_in_a_job(run):
+    for name in ('match', 'pes'):
+        write_entry(run.dir, SYSTEM, name)
+    orch = job_run(run, ['plotpes'])
+    report = orch.prepare_step(SYSTEM, 'plotpes')
+    assert report.status == 'waiting' and report.reason.startswith(
+        'ready: nothing to prepare; its analysis runs in a job of its own, submitted by '
+        '"submit plotpes" or by the orchestrator')
+    assert not (run.dir / 'jobs').exists()
+    report, written = orch.submit_step(SYSTEM, 'plotpes')
+    assert written == [GROUP] and report.status == 'running' and report.job == GROUP
+    assert run.slurm.submitted == 1
+    report, written = orch.submit_step(SYSTEM, 'plotpes')  # followed, nothing submitted
+    assert written == [] and report.reason == f'job {job_of(run)} PENDING'
+    assert orch.prepare_step(SYSTEM, 'plotpes').status == 'running'  # its job left as it is
+    the_job_ends(run)
+    report, written = orch.submit_step(SYSTEM, 'plotpes')
+    assert report.status == 'completed' and written == [] and run.slurm.submitted == 1
+    assert orch.steps['plotpes'].calls == []
 
 
 # --- relaunches ----------------------------------------------------------------------------
@@ -912,8 +1209,22 @@ def test_interrupted_pass_is_completed_without_duplicates(run, monkeypatch, poin
 
 def test_invalid_state_file(run):
     (run.dir).mkdir(parents=True, exist_ok=True)
-    (run.dir / 'orchestrator.json').write_text(json.dumps({'schema_version': 2, 'systems': {}}))
-    with pytest.raises(OrchestratorError, match='schema_version: 2; this version reads 1'):
+    (run.dir / 'orchestrator.json').write_text(json.dumps({'schema_version': 3, 'systems': {}}))
+    with pytest.raises(OrchestratorError, match='schema_version: 3; this version reads 2'):
+        orchestrator(run, ['match'])
+
+
+def test_state_file_of_schema_1_is_not_read(run):
+    # Schema 1 had no group of the job of an analysis in the state of a step.
+    entry = {'status': 'completed', 'reason': None, 'calculations': [], 'error': None,
+             'calcs': {}, 'attention': [], 'updated': None}
+    (run.dir / 'orchestrator.json').write_text(json.dumps(
+        {'schema_version': 1, 'systems': {SYSTEM: {'match': entry}}}))
+    with pytest.raises(OrchestratorError, match='schema_version: 1; this version reads 2'):
+        orchestrator(run, ['match'])
+    (run.dir / 'orchestrator.json').write_text(json.dumps(
+        {'schema_version': 2, 'systems': {SYSTEM: {'match': entry}}}))
+    with pytest.raises(OrchestratorError, match=f'{SYSTEM}.match: missing job'):
         orchestrator(run, ['match'])
 
 

@@ -29,7 +29,7 @@ from pathlib import Path
 
 from triboworkflow.core.settings import load_settings
 from triboworkflow.core.store.atomic import read_json
-from triboworkflow.execution.jobs import jobscript_path
+from triboworkflow.execution.jobs import analysis_jobscript_path, jobscript_path
 from triboworkflow.execution.manager import JobManager
 from triboworkflow.execution.orchestrator import STATE_FILE, Orchestrator
 from triboworkflow.execution.scheduler import JobScheduler
@@ -223,7 +223,8 @@ def build_orchestrator(run_dir, groups=None, steps=None, dry_run=False, step_obj
         {name: get_step(name) for name in names}
     manager = JobManager(run_dir, make_scheduler(settings, dry_run), execution.job_report_wait)
     return Orchestrator(run_dir, [system_name(settings)], objects, manager, execution,
-                        jobscript_path(settings))
+                        jobscript_path(settings),
+                        analysis_jobscript=analysis_jobscript_path(settings))
 
 
 def run_steps(run_dir, settings):
@@ -299,12 +300,16 @@ def print_step(report):
     """Print where a step stands; return the exit code.
 
     1 if the step is blocked or failed, 0 otherwise: a manual step is not an
-    error, its reason names the command that analyses it.
+    error, its reason names the command that analyses it. The group of the
+    job of an analysis is printed with its folder, where the scheduler writes
+    the log of the job.
     """
     text = f'{report.system}/{report.step}: {report.status}'
     if report.reason:
         text += f' ({report.reason})'
     print(text)
+    if report.job:
+        print(f'  job of the analysis: group {report.job}, folder jobs/{report.job}')
     if report.calcs:
         print('  calculations: ' + ', '.join(f'{n} {outcome}'
                                             for outcome, n in report.calcs.items()))

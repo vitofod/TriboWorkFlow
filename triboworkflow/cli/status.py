@@ -68,7 +68,8 @@ Example:
         for step in report.steps:
             entry = entries[step.step]
             calcs = ', '.join(f'{n} {outcome}' for outcome, n in step.calcs.items())
-            detail = '; '.join(filter(None, [step.reason, calcs and f'calculations: {calcs}']))
+            detail = '; '.join(filter(None, [step.reason, calcs and f'calculations: {calcs}',
+                                             step.job and f'job of the analysis: jobs/{step.job}']))
             print(f'  {step.step:<11} {step.status:<10} {entry["updated"] or "-":<26} {detail}')
         attention = [(step.step, item) for step in report.steps for item in step.attention]
         if attention:

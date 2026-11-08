@@ -29,7 +29,8 @@ machine with a fake engine.
 │       └── attempts/<n>/        the files of attempt n: run.pwi, output.pwo,
 │                                structure_out.extxyz, output.ppo, density.filplot
 ├── jobs/<name>/                 one group of jobs
-│   ├── manifest.json
+│   ├── manifest.json            or analysis.json, for the job of an analysis
+│   ├── outcome.json             written by the job of an analysis
 │   ├── jobscript.sh
 │   ├── submitted.json
 │   └── withdrawn.json           only for a group withdrawn before any submission
@@ -37,7 +38,7 @@ machine with a fake engine.
 │   ├── replacement.json         journal: what, why, groups withdrawn or retired
 │   └── <step>/<label>/          a calculation replaced, as it was
 ├── jobs.json                    registry of the job manager
-├── orchestrator.json            steps of each system
+├── orchestrator.json            steps of each system (schema 2)
 ├── orchestrator.pid             orchestrator running in the background
 ├── orchestrator.log             its output
 ├── run.lock                     held by the process that changes the run
@@ -477,13 +478,15 @@ Each pass:
    checking its entries (already done and current: **completed** without
    running) and the entries it reads (`check_prerequisites`: missing or
    stale, **blocked** with what is missing, nothing computed again), then
-   prepares its calculations. A step analysed only by hand
+   prepares its calculations. A step whose analysis needs a compute node
    (`Step.manual_analysis`: `plotpes`, `plotpes_scf`) is checked the same
-   way once ready, and never prepared nor analysed in a pass: when it is not
-   completed or blocked it is **manual**, with the command that analyses it
-   (`to analyse by hand: run "triboworkflow analyse plotpes" where there is
-   enough memory; …`), and a step that depends on it is **blocked**
-   (`depends on plotpes manual`) until it is completed. Right after the preparation, and before a
+   way once ready, and never analysed by the orchestrator: with
+   `[execution.analysis]` it is analysed in a job of its own (below,
+   *Analyses in a job of their own*); without it, when it is not completed
+   or blocked it is **manual**, with the command that analyses it (`to
+   analyse by hand: run "triboworkflow analyse plotpes" where there is
+   enough memory, or give [execution.analysis] …`), and a step that depends
+   on it is **blocked** (`depends on plotpes manual`) until it is completed. Right after the preparation, and before a
    **running** step is followed, the calculations prepared are compared with
    those the settings give now (`Step.plan`: `calc_id` and fingerprint): one
    missing, one no longer given or a fingerprint that differs makes the step
@@ -501,7 +504,11 @@ Each pass:
    model), needs the user and is never relaunched, as for `analyse_step`;
    when what is left needs the user it has **failed**, with the
    calculations and why;
-4. saves the steps in `orchestrator.json`.
+4. saves the steps in `orchestrator.json`: for each step its status,
+   reason, calculations prepared, error of its own, calculations by outcome,
+   those that need the user, the group of the job of its analysis (`job`,
+   null for the other steps) and the time of its update. `schema_version` is
+   2; this version reads no other.
 
 A failure blocks only the descendants: the other branches go on, and the
 workflow succeeds only when every requested step is completed. A step failed
@@ -522,16 +529,67 @@ calculations before it starts, and **completed** at its end. The next
 goes on with the steps that depend on it. An analysis stopped before its end
 (a signal, the walltime of a job) writes nothing: the step stays running with
 no calculations, a pass leaves it manual again without analysing it, and the
-next `analyse` starts it from the beginning. The interpolation of the PES is
-left to the user because its memory grows with the square of its points
-([interface.md](interface.md)); this version does not run it automatically,
-and a job of its own on a compute node, followed by the orchestrator, is for
-a later version.
+next `analyse` starts it from the beginning, or the next pass gives it to a
+job with `[execution.analysis]`. The interpolation of the PES never runs in
+the orchestrator because its memory grows with the square of its points
+([interface.md](interface.md)).
+
+### Analyses in a job of their own
+
+With `[execution.analysis]` ([configuration.md](configuration.md)) a ready
+step with `Step.manual_analysis` gets a group of jobs
+`jobs/<system>.<step>.<k>/`, as the calculations do, holding:
+
+- `analysis.json`: system, step, scheduler and digest of the jobscript, in
+  place of `manifest.json`;
+- `jobscript.sh`: the jobscript of `[execution.analysis]`, copied unchanged,
+  with one line added that runs the analysis: `<python> -m
+  triboworkflow.cli.analysis_job <run>/jobs/<group>/analysis.json`;
+- `submitted.json`, as for every group, and `outcome.json`, written by the
+  job at its end.
+
+The group asks for one job, submitted with the scheduler of `[execution]`;
+the logs of the job go in its folder. The step is then **running**, with the
+group in the key `job` of its state in `orchestrator.json`, and is followed
+at every pass:
+
+- once its entries are done and current (`Step.done`) it is **completed**,
+  whatever the job;
+- while the job is in the queue or runs, held, not reported, or its
+  submission was refused or of outcome not known, the step stays running,
+  with the state of the job and the command that resolves it;
+- once the job is over (a final state confirmed by the last query; for
+  Slurm `PREEMPTED`, reported again `polling_interval` seconds later, as not
+  requeued) without the step done, the step is **blocked** if its
+  prerequisites are no longer current, and **failed** otherwise, with the
+  state of the job, its outcome (`no outcome written: the job stopped before
+  its end (walltime, memory, node)` when it wrote none) and the folder of its
+  logs. It is never submitted again automatically, whatever the state: the
+  analysis has no checkpoint, and a job killed for its memory or walltime
+  would be killed again. The user gives the jobscript what it needs and runs
+  `retry <step>`; the next pass writes a new group, `<k>` + 1.
+
+The job runs `Step.analyse`, as `analyse` does by hand, after checking that
+the step is not done yet and that its prerequisites are current. It never
+takes `run.lock`, which the orchestrator holds, and writes only the entries
+of its step (under the lock of `system.json`, after checking again the
+entries it read) and its outcome; it exits without analysing if a later
+group of the step exists (a `retry` replaced it) or the group was withdrawn.
+The steps of a system still run one at a time: a step waits while the job of
+another runs, and the job waits for the steps that run. After an
+interruption between the writing of the group and the saving of the state,
+the next pass takes the group again instead of writing another, so two jobs
+never run the same analysis. `analyse <step>` by hand is refused while the
+job of the step may run according to the last query (`jobs.json`); a group
+whose job was never submitted is withdrawn, so that it is never submitted
+later. `prepare <step>` has nothing to prepare, and `submit <step>` writes
+and submits the job, or follows it.
 
 The three phases of a step can also be run one at a time, with the same
 state: `prepare_step` (as the start in a pass, without the scheduler),
 `submit_step` (a cycle of the jobs, then the step followed and its launches
-submitted, without the analysis) and `analyse_step` (the analysis, decided
+submitted, without the analysis; for a step analysed in a job of its own,
+that job) and `analyse_step` (the analysis, decided
 from the files alone: each calculation must have a claim, if any, of its last
 attempt, no group listing a next attempt, its last attempt ended completed,
 and results that can be used: its output parsed, its energy model fully

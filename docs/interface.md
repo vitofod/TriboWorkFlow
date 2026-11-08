@@ -302,24 +302,42 @@ so their figures never overwrite each other.
 ### Where they run
 
 The interpolation solves a dense linear system on all the points
-replicated, whose memory grows with the square of their number (*Cost*). In
-this version it never runs in the orchestrator, which lives on the login
-node, nor in any other automation: once ready, the step is left **manual**,
-with the command that analyses it, and the steps that depend on it wait.
-Run it by hand where there is enough memory, with the orchestrator ended or
-stopped ([cli.md](cli.md), *The interpolation of the PES*):
+replicated, whose memory grows with the square of their number (*Cost*). It
+never runs in the orchestrator, which lives on the login node. It runs in
+one of two ways, with the same code and the same results:
+
+- **in a job of its own** on a compute node, with `[execution.analysis]` in
+  the settings ([configuration.md](configuration.md)): once the step is
+  ready the orchestrator writes its group of jobs, submits it with the
+  jobscript of that table (memory, walltime, partition) and follows the job;
+  the job interpolates and writes the entries, and the step is completed
+  once they are done. A job that ends without them (out of memory, walltime)
+  makes the step **failed**, with the state of the job and its outcome, and
+  is never submitted again automatically: give the jobscript more memory or
+  time, then `triboworkflow retry plotpes` ([execution.md](execution.md),
+  *Analyses in a job of their own*);
+- **by hand**, without that table: once ready, the step is left **manual**,
+  with the command that analyses it, and the steps that depend on it wait.
+  Run it where there is enough memory, with the orchestrator ended or
+  stopped ([cli.md](cli.md), *The interpolation of the PES*):
 
 ```bash
 triboworkflow analyse plotpes
 triboworkflow analyse plotpes_scf
 ```
 
-The command holds the lock of the run for the whole interpolation. An
-interpolation stopped before its end writes nothing, and the next `analyse`
+The command holds the lock of the run for the whole interpolation; the job
+does not take it, and writes only the entries of its step and its outcome.
+An interpolation stopped before its end writes nothing, and the next one
 starts it from the beginning; an interpolation completed is recognised from
 its entries, their provenance and its figure, without interpolating again.
-A job of its own on a compute node, followed by the orchestrator, is for a
-later version; the interpolation stays the same.
+
+The memory of the job is about the size of the matrix (*Cost*): 8·N² bytes
+for N centres, N = 144 × the points left after the duplicates, with some
+more for the rest (the peak measured on the 20 736 centres below is about
+1.1 times the matrix). The linear algebra uses the threads of NumPy's BLAS:
+set them in the jobscript (e.g. `export OMP_NUM_THREADS=8`) to the cores
+asked for.
 
 ### Cost
 

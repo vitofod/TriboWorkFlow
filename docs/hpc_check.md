@@ -10,7 +10,10 @@ script gives the command line test steps in place of all of them, whose
 calculations are those of a case of the check (module
 docstring of the script). It complements `tests/hpc/hpc_check.py` (fake
 engine: claims, exit codes, locks; `execution.md`, "Checking a new
-machine").
+machine"). The jobs of the analyses (`[execution.analysis]`, the
+interpolation of the PES) run no pw.x and are not part of this check: they
+are checked with a run of the interface workflow that interpolates its PES
+(`execution.md`, "Analyses in a job of their own").
 
 Everything runs by hand, from a login node, in the virtual environment of
 the package. Nothing of the runs goes into the repository: the run folders

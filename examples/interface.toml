@@ -128,3 +128,11 @@ walltime = 86400                   # Seconds, as in the jobscript.
 polling_interval = 1800            # Seconds between two checks of the jobs.
 max_seconds_margin = 600           # Seconds kept free at the end of the walltime.
 job_report_wait = 3600             # Seconds a submitted job may stay unreported by the scheduler.
+
+# Job of the interpolation of the PES (plotpes, plotpes_scf), which can need tens
+# of GiB on large interfaces: never run by the orchestrator. With this table the
+# orchestrator submits it on a compute node and follows it; without it those steps
+# wait to be analysed by hand (triboworkflow analyse plotpes).
+# [execution.analysis]
+# jobscript = "analysis.sh"        # Relative to this file; copied with the analysis line added.
+#                                  # Memory, walltime and partition in its #SBATCH lines.

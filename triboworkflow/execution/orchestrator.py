@@ -26,14 +26,22 @@ other steps after them depend on ``pes`` for now. A pass
      is evaluated again in the same pass;
    - a step whose requested dependency failed or is blocked is ``blocked``;
      one whose dependency is not completed yet is ``waiting``;
-   - a ready step analysed only by hand (``Step.manual_analysis``) is never
-     prepared nor analysed in a pass: a step whose entries are already done
-     and current is ``completed``, one whose prerequisites are missing or
-     stale is ``blocked``, any other is ``manual``, with the command that
+   - a ready step whose analysis needs a compute node
+     (``Step.manual_analysis``) is never analysed by the orchestrator: a
+     step whose entries are already done and current is ``completed``, one
+     whose prerequisites are missing or stale is ``blocked``; any other,
+     with ``[execution.analysis]``, gets a group of jobs with
+     ``analysis.json`` (``jobs.py``), submitted for one job that runs the
+     analysis on a compute node (``cli/analysis_job.py``), and is
+     ``running`` while the job is followed; once the job is over the step
+     is ``completed`` from its entries, or ``failed`` with the state and
+     the outcome of the job, never submitted again automatically. Without
+     ``[execution.analysis]`` it is ``manual``, with the command that
      analyses it (``analyse_step``), and its descendants are blocked until
      it is completed;
    - a ready step starts only when no other step of the system is running,
-     so the steps of a system run one at a time; systems are independent;
+     so the steps of a system run one at a time, the analysis in a job of
+     its own included; systems are independent;
    - starting: a step whose entries are already done and current
      (``Step.done``) is ``completed`` without running; otherwise
      ``check_prerequisites`` checks the entries it reads, and a missing or
@@ -60,28 +68,32 @@ A failure blocks only the descendants of the step: the other branches go on,
 and a branch that succeeds does not make the workflow succeed while other
 requested steps failed or are blocked. A step failed for its calculations
 goes back to running when the user relaunches them; one failed for an error
-of its own (``prepare`` or ``analyse``) stays failed until ``retry``. A step
+of its own (``prepare`` or ``analyse``), or whose job of the analysis ended
+without completing it, stays failed until ``retry``. A step
 left to the user (``manual``) ends the passes as a failure does, without
 making the workflow succeed: once the user has analysed it, it is completed,
 and the next passes go on with its descendants. An analysis by hand stopped
-before its end leaves the step running with no calculations: a pass leaves
-it to the user again, and the next analysis starts it from the beginning.
+before its end leaves the step running with no calculations and no job: a
+pass leaves it to the user again, or gives it to a job with
+``[execution.analysis]``, and the next analysis starts it from the beginning.
 
 The state on disk is in two levels: the steps of each system in
-``orchestrator.json`` (status, reason, calculations prepared, error), the jobs
-in ``jobs.json`` (``manager.py``). Everything else is read again at every
-pass from the records, the claims, the groups and the scheduler, so after a
+``orchestrator.json`` (status, reason, calculations prepared, error, group
+of the job of the analysis), the jobs in ``jobs.json`` (``manager.py``).
+Everything else is read again at every pass from the records, the claims, the groups and the scheduler, so after a
 restart the orchestrator recovers the jobs, reconciles the attempts and only
 then decides new submissions, without duplicates. A pass interrupted at any
 point is completed by the next one: an attempt archived without its group is
 decided again, a group written and not registered is registered, a group
-registered and not submitted is submitted.
+registered and not submitted is submitted, and the group of an analysis
+whose job is not over is taken again instead of writing another.
 
 The three phases of a step can also be run one at a time, on one step, with
 the same state: ``prepare_step`` (as the start in a pass, without the
 scheduler), ``submit_step`` (a cycle of the jobs, then the step followed and
-its launches submitted, without the analysis) and ``analyse_step`` (the
-analysis, decided from the files alone: records, claims and manifests, never
+its launches submitted, without the analysis; for a step analysed in a job
+of its own, that job) and ``analyse_step`` (the analysis, decided from the
+files alone: records, claims, manifests and the registry of the jobs, never
 the scheduler). Phases run by hand and passes take turns on a run.
 
 Calculations that differ from the settings are never overwritten: the user
@@ -99,6 +111,7 @@ phases; a failed step blocks its descendants instead of stopping the whole
 run.
 """
 
+import datetime
 import logging
 import time
 from collections import Counter
@@ -111,13 +124,16 @@ from triboworkflow.core.store.atomic import read_json, write_json
 from triboworkflow.core.store.record import check_keys
 
 from .archive import ArchiveError, archive_attempt, read_claim, released_in_part
-from .jobs import MANIFEST_FILE, SUBMITTED_FILE, Manifest, is_withdrawn, write_job
-from .layout import CLAIM_FILE, JOBS_DIR, calc_dir, system_dir
+from .jobs import (MANIFEST_FILE, OUTCOME_FILE, SUBMITTED_FILE, Analysis, JobError, Manifest,
+                   is_analysis, is_withdrawn, write_analysis, write_job)
+from .layout import CLAIM_FILE, JOBS_DIR, calc_dir, job_dir, system_dir
+from .manager import HOLD_MESSAGES
 from .policy import LaunchSetup, decide, manual_launch
 from .preparation import (check_calculations, complete_replacement, prepare_calculations,
                           start_replacement)
 from .reconcile import LaunchError, Reconciler, launch_for, run_launches
 from .replacement import mark_done, unfinished
+from .scheduler import REVERSIBLE_STATES
 
 logger = logging.getLogger(__name__)
 
@@ -141,12 +157,14 @@ INTERFACE_GRAPH = {
 }
 
 STATE_FILE = 'orchestrator.json'
-STATE_VERSION = 1
+STATE_VERSION = 2
 # A step is manual when it is ready and its analysis is left to the user.
 STEP_STATES = ('waiting', 'running', 'completed', 'failed', 'blocked', 'manual')
-# Reason of a manual step. To remove: D54 (the analysis in a job of its own).
+# Reason of a manual step, left to the user without [execution.analysis].
 MANUAL_REASON = ('to analyse by hand: run "triboworkflow analyse {step}" where there is enough '
-                 'memory; this version does not analyse it automatically')
+                 'memory, or give [execution.analysis] to analyse it in a job of its own')
+# What a job of an analysis that wrote no outcome tells.
+NO_OUTCOME = 'no outcome written: the job stopped before its end (walltime, memory, node)'
 
 # Outcomes of the calculations of a running step after a pass: completed;
 # waiting for their group, their run or their held job; launched in this
@@ -155,7 +173,8 @@ CALC_OUTCOMES = ('completed', 'pending', 'running', 'held', 'launched', 'uncerta
 _IN_FLIGHT = ('pending', 'running', 'held', 'launched', 'uncertain')
 
 _STATE_KEYS = ('schema_version', 'systems')
-_STEP_KEYS = ('status', 'reason', 'calculations', 'error', 'calcs', 'attention', 'updated')
+_STEP_KEYS = ('status', 'reason', 'calculations', 'error', 'calcs', 'attention', 'job',
+              'updated')
 
 
 class OrchestratorError(ValueError):
@@ -173,10 +192,13 @@ class Step:
     name : str
         Name of the step, a key of the graph.
     manual_analysis : bool
-        True for a step without calculations whose analysis runs only by
-        hand (``Orchestrator.analyse_step``, command ``analyse``), on
-        resources the user chooses: a pass never prepares nor analyses it,
-        and leaves it ``manual``. False by default.
+        True for a step without calculations whose analysis needs more
+        resources than the login node gives, so that the orchestrator never
+        runs it: with ``[execution.analysis]`` a pass submits it in a job of
+        its own on a compute node and follows the job; without it a pass
+        leaves it ``manual``, to be analysed by hand
+        (``Orchestrator.analyse_step``, command ``analyse``) on resources the
+        user chooses. False by default.
     """
 
     name = None
@@ -249,6 +271,9 @@ class StepReport:
     attention : list of dict
         ``{'calc_id', 'state', 'reason'}`` of each calculation that needs the
         user or is uncertain.
+    job : str or None
+        Group of jobs of the analysis of the step in a job of its own, if
+        any.
     """
 
     system: str
@@ -257,6 +282,7 @@ class StepReport:
     reason: str | None
     calcs: dict
     attention: list
+    job: str | None = None
 
 
 @dataclass(frozen=True)
@@ -363,6 +389,10 @@ class Orchestrator:
         Jobscript of the user (``jobs.jobscript_path``).
     graph : mapping, optional
         Steps whose entries each step reads; ``INTERFACE_GRAPH`` by default.
+    analysis_jobscript : path-like or None, optional
+        Jobscript of ``[execution.analysis]`` (``jobs.analysis_jobscript_path``):
+        the steps with ``Step.manual_analysis`` are analysed in a job of their
+        own. None, the default: they are left to the user.
 
     Raises
     ------
@@ -371,7 +401,7 @@ class Orchestrator:
     """
 
     def __init__(self, run_dir, systems, steps, manager, execution, jobscript,
-                 graph=INTERFACE_GRAPH):
+                 graph=INTERFACE_GRAPH, analysis_jobscript=None):
         self.run_dir = Path(run_dir)
         self.systems = list(systems)
         self.steps = dict(steps)
@@ -383,6 +413,7 @@ class Orchestrator:
         self.manager = manager
         self.execution = execution
         self.jobscript = Path(jobscript)
+        self.analysis_jobscript = None if analysis_jobscript is None else Path(analysis_jobscript)
         self.path = self.run_dir / STATE_FILE
         self.state = self._load()
 
@@ -416,7 +447,7 @@ class Orchestrator:
             steps = state['systems'].setdefault(system, {})
             for name in self.order:
                 steps.setdefault(name, {'status': 'waiting', 'reason': None, 'calculations': None,
-                                        'error': None, 'calcs': {}, 'attention': [],
+                                        'error': None, 'calcs': {}, 'attention': [], 'job': None,
                                         'updated': None})
         return state
 
@@ -458,7 +489,7 @@ class Orchestrator:
             for name in self.order:
                 written += self._step(reconciler, system, name)
         if written:
-            self.manager.submit(held)
+            self.manager.submit(held - set(written))
         self._save()
         return self.report(written)
 
@@ -533,15 +564,33 @@ class Orchestrator:
                 if not any(group.startswith(prefix) for prefix in current)}
 
     def _register_written_groups(self):
-        """Register the groups written and neither registered, submitted nor withdrawn."""
+        """Register the groups written and neither registered, submitted nor withdrawn.
+
+        A group of calculations asks for the workers of ``[execution]``, the
+        group of an analysis for one job.
+        """
         root = self.run_dir / JOBS_DIR
         if not root.is_dir():
             return
         for path in sorted(root.iterdir()):
-            if ((path / MANIFEST_FILE).is_file() and not (path / SUBMITTED_FILE).exists()
+            analysis = is_analysis(path)
+            if (((path / MANIFEST_FILE).is_file() or analysis)
+                    and not (path / SUBMITTED_FILE).exists()
                     and path.name not in self.manager.groups and not is_withdrawn(path)):
                 logger.warning('Group %s written and not registered: registered now', path.name)
-                self.manager.add_group(path.name, self.execution.groups)
+                self.manager.add_group(path.name, 1 if analysis else self.execution.groups)
+
+    def _busy(self, system, name):
+        """The other steps of a system that run: the steps of a system run one at a time.
+
+        A step analysed in a job of its own runs while its job is followed;
+        one analysed by hand never runs in a pass, and found running it is an
+        analysis by hand stopped before its end, which holds back nothing.
+        """
+        return [other for other in self.order if other != name
+                and self.entry(system, other)['status'] == 'running'
+                and (not self.steps[other].manual_analysis
+                     or self.entry(system, other)['job'] is not None)]
 
     def _step(self, reconciler, system, name):
         """Advance one step of one system; the names of the groups written."""
@@ -563,14 +612,12 @@ class Orchestrator:
             self._set(entry, 'waiting', f'waits for {", ".join(pending)}')
             return []
         if self.steps[name].manual_analysis:
-            self._leave_to_user(system, name, entry)
-            return []
+            if self.analysis_jobscript is None and entry['job'] is None:
+                self._leave_to_user(system, name, entry)
+                return []
+            return self._analyse_in_job(system, name, entry)
         if entry['calculations'] is None:
-            # A step analysed by hand never runs in a pass: found running, it
-            # is an analysis stopped before its end, left to the user again.
-            busy = [other for other in self.order if other != name
-                    and not self.steps[other].manual_analysis
-                    and self.entry(system, other)['status'] == 'running']
+            busy = self._busy(system, name)
             if busy:
                 self._set(entry, 'waiting', f'ready; {", ".join(busy)} runs first')
                 return []
@@ -613,18 +660,7 @@ class Orchestrator:
         step found running is an analysis by hand stopped before its end:
         nothing of it is done and current, and it is left to the user again.
         """
-        step = self.steps[name]
-        sdir = system_dir(self.run_dir, system)
-        try:
-            if step.done(self.run_dir, system):
-                self._set(entry, 'completed', 'entries already done and current')
-                return
-            check_prerequisites(read_system(sdir), step.expected(self.run_dir, system), sdir)
-        except PrerequisiteError as error:
-            self._set(entry, 'blocked', str(error), calculations=None)
-            return
-        except Exception as error:  # an error of the step: the other steps go on
-            self._fail(entry, 'checking', error)
+        if not self._ready(system, name, entry):
             return
         if entry['status'] == 'running':
             logger.warning('%s/%s: its analysis by hand stopped before its end; it starts again '
@@ -633,6 +669,210 @@ class Orchestrator:
             logger.warning('%s/%s ready, %s', system, name, MANUAL_REASON.format(step=name))
         self._set(entry, 'manual', MANUAL_REASON.format(step=name), calculations=None, calcs={},
                   attention=[])
+
+    def _ready(self, system, name, entry):
+        """Whether a step without calculations is ready to be analysed, checked as at a start.
+
+        A step whose entries are already done and current is ``completed``,
+        one whose prerequisites are missing or stale is ``blocked``, and an
+        error of the step fails it: False for these, True otherwise.
+        """
+        step = self.steps[name]
+        sdir = system_dir(self.run_dir, system)
+        try:
+            if step.done(self.run_dir, system):
+                self._set(entry, 'completed', 'entries already done and current')
+                return False
+            check_prerequisites(read_system(sdir), step.expected(self.run_dir, system), sdir)
+        except PrerequisiteError as error:
+            self._set(entry, 'blocked', str(error), calculations=None)
+            return False
+        except Exception as error:  # an error of the step: the other steps go on
+            self._fail(entry, 'checking', error)
+            return False
+        return True
+
+    # --- analysis in a job of its own ------------------------------------------------
+
+    def _analyse_in_job(self, system, name, entry, wait=True):
+        """Start or follow the analysis of a step in a job of its own; the groups written.
+
+        A step whose job is known is followed (``_follow_analysis``).
+        Otherwise it is checked as at a start (``_ready``), waits while
+        another step of the system runs (unless ``wait`` is False, for a
+        phase run by hand), and its group is written with ``analysis.json``
+        and registered for one job; the step is then ``running`` with that
+        group in ``job`` and no calculations, and the state is saved. The
+        last group of the step, written and never submitted before an
+        interruption, or whose job may still run, is taken again instead of
+        writing another: two jobs never run the same analysis because of a
+        restart or a ``retry``.
+        """
+        if entry['job'] is not None:
+            return self._follow_analysis(system, name, entry)
+        if not self._ready(system, name, entry):
+            return []
+        if entry['status'] == 'running':
+            logger.warning('%s/%s: its analysis by hand stopped before its end; it runs again '
+                           'from the beginning, in a job of its own', system, name)
+        busy = self._busy(system, name) if wait else []
+        if busy:
+            self._set(entry, 'waiting', f'ready; {", ".join(busy)} runs first', calculations=None)
+            return []
+        group = self._group_to_take_again(system, name)
+        try:
+            if group is None:
+                group = self._group_name(system, name)
+                write_analysis(self.run_dir, Analysis(group, system, name,
+                                                      self.execution.scheduler),
+                               self.analysis_jobscript)
+                logger.info('Group %s: analysis of %s/%s in a job of its own', group, system,
+                            name)
+            else:
+                logger.warning('Group %s of the analysis of %s/%s, whose job is not over, '
+                               'taken again', group, system, name)
+            if group not in self.manager.groups:
+                self.manager.add_group(group, 1)
+        except (JobError, OSError) as error:
+            self._fail(entry, 'writing the job of the analysis', error)
+            return []
+        self._set(entry, 'running', f'analysis in a job of its own, group {group}',
+                  calculations=[], job=group, calcs={}, attention=[])
+        self._save()
+        return [group]
+
+    def _group_to_take_again(self, system, name):
+        """The last group of the analysis of a step, if never submitted or its job not over."""
+        prefix = f'{system}.{name}.'
+        root = self.run_dir / JOBS_DIR
+        found = sorted((int(p.name[len(prefix):]), p) for p in root.iterdir()
+                       if p.name.startswith(prefix) and p.name[len(prefix):].isdigit()) \
+            if root.is_dir() else []
+        if not found:
+            return None
+        path = found[-1][1]
+        if not is_analysis(path) or is_withdrawn(path):
+            return None
+        over, _ = self._analysis_job(path.name)
+        return None if over else path.name
+
+    def _analysis_job(self, group):
+        """Where the job of the group of an analysis stands, from the job manager.
+
+        Returns
+        -------
+        over : bool
+            Whether every job of the group is over: in a final state
+            confirmed by the last query, or in a state after which the
+            scheduler may requeue a job (``REVERSIBLE_STATES``, e.g. Slurm
+            ``PREEMPTED``) reported again at least ``polling_interval``
+            seconds after its first report.
+        text : str
+            The job and its state, or why it is not over.
+        """
+        manager, scheduler = self.manager, self.manager.scheduler
+        if group not in manager.groups:
+            return False, 'job not submitted yet'
+        info = manager.groups[group]
+        if info['refused'] is not None:
+            return False, (f'submission of the job refused: {info["refused"]}; fix '
+                           f'jobs/{group}/jobscript.sh (keep its last line, the analysis) and the '
+                           f'jobscript of [execution.analysis], then "triboworkflow clear-refusal '
+                           f'{group}"')
+        if info['unknown']:
+            return False, ('submission of the job of outcome not known: look for the job in the '
+                           f'queue, then "triboworkflow resolve-submission {group} --job-id ID" '
+                           'or "--no-job"')
+        job_ids = manager.group_jobs(group)
+        if not job_ids or manager.missing_jobs(group):
+            return False, 'job to submit'
+        reversible = REVERSIBLE_STATES.get(scheduler.scheduler_name, ())
+        text = None
+        for job_id in job_ids:
+            job = manager.jobs[job_id]
+            state = job['state']
+            reported = job['reported'] is True and job['error'] is None
+            if reported and scheduler.is_final(state):
+                text = f'job {job_id} {state}'
+                continue
+            if reported and job['active'] is False and scheduler.state_name(state) in reversible:
+                waited = (datetime.datetime.fromisoformat(job['checked'])
+                          - datetime.datetime.fromisoformat(job['state_since'])).total_seconds()
+                if waited >= self.execution.polling_interval:
+                    text = f'job {job_id} {state}, not requeued'
+                    continue
+                return False, (f'job {job_id} {state}: the scheduler may requeue it; to be '
+                               'confirmed by a later query')
+            status = manager.job_status(job_id)
+            if status == 'held':
+                return False, f'job {job_id} {state}: {HOLD_MESSAGES[job["hold"]["reason"]]}'
+            if job['error'] is not None:
+                return False, f'job {job_id} {state}; the last query failed: {job["error"]}'
+            if status == 'attention':
+                return False, (f'job {job_id}: not reported by the scheduler, or in a state not '
+                               f'known (last known state {state}); check it')
+            return False, f'job {job_id} {state or "submitted, not reported yet"}'
+        return True, text
+
+    def _outcome(self, group):
+        """What the job of an analysis wrote in ``outcome.json``, in words."""
+        path = job_dir(self.run_dir, group) / OUTCOME_FILE
+        if not path.is_file():
+            return NO_OUTCOME
+        try:
+            data = read_json(path)
+            result, error = data['result'], data['error']
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            return f'{OUTCOME_FILE} not read: {error}'
+        return f'{result}: {error}' if error else str(result)
+
+    def _follow_analysis(self, system, name, entry):
+        """Follow the job of the analysis of a step; the step is never analysed here.
+
+        A step whose entries are done and current is ``completed``, whatever
+        its job. While the job may run the step stays ``running``, with the
+        state of the job. Once the job is over without the step done, the
+        step is ``blocked`` if its prerequisites are no longer current, and
+        ``failed`` otherwise, with the state of the job and its outcome: it
+        is never submitted again automatically, since the same job would
+        fail in the same way (memory, walltime), and ``retry`` lets the next
+        pass submit a new job.
+        """
+        group = entry['job']
+        step = self.steps[name]
+        try:
+            if step.done(self.run_dir, system):
+                self._set(entry, 'completed', f'analysed in the job of group {group}')
+                return []
+        except Exception as error:
+            self._fail(entry, 'checking', error)
+            return []
+        if group not in self.manager.groups and not is_analysis(job_dir(self.run_dir, group)):
+            logger.warning('%s/%s: group %s of its analysis not found: a new one is written',
+                           system, name, group)
+            self._set(entry, 'waiting', f'group {group} of its analysis not found',
+                      calculations=None, job=None)
+            return []
+        over, text = self._analysis_job(group)
+        if not over:
+            self._set(entry, 'running', text)
+            return []
+        sdir = system_dir(self.run_dir, system)
+        try:
+            check_prerequisites(read_system(sdir), step.expected(self.run_dir, system), sdir)
+        except PrerequisiteError as error:
+            self._set(entry, 'blocked', str(error), calculations=None, job=None)
+            return []
+        except Exception as error:
+            self._fail(entry, 'checking', error)
+            return []
+        outcome = self._outcome(group)
+        reason = (f'{text} without completing the step: {outcome}; output of the job in '
+                  f'jobs/{group}; give the jobscript of [execution.analysis] more memory or time '
+                  f'if it needs them, then "triboworkflow retry {name}"')
+        logger.error('%s/%s: %s', system, name, reason)
+        self._set(entry, 'failed', reason, error=f'AnalysisJobFailed: {text}: {outcome}')
+        return []
 
     def _fail(self, entry, doing, error):
         logger.error('Step failed while %s: %s', doing, error)
@@ -654,7 +894,7 @@ class Orchestrator:
             self._fail(entry, 'checking', error)
             return False
         self._set(entry, 'waiting', 'entries no longer current', calculations=None, calcs={},
-                  attention=[])
+                  attention=[], job=None)
         return False
 
     def _stale(self, system, name, entry):
@@ -790,9 +1030,12 @@ class Orchestrator:
         A completed step still current, a step already prepared and a step
         failed for an error of its own are left as they are; for a step
         already prepared and running, the calculations that differ from the
-        settings now are logged (``check_calculations``). A step analysed only
-        by hand has nothing to prepare: it is left to the user as in a pass
-        (``_leave_to_user``).
+        settings now are logged (``check_calculations``). A step with
+        ``Step.manual_analysis`` has nothing to prepare: without
+        ``[execution.analysis]`` it is left to the user as in a pass
+        (``_leave_to_user``); with it, a step whose job is known is left as it
+        is, and any other is checked as at a start (``_ready``) and left
+        waiting for its job, which ``submit_step`` or a pass submits.
 
         Returns
         -------
@@ -808,7 +1051,14 @@ class Orchestrator:
         if self._still_completed(system, name, entry) or entry['error'] is not None:
             pass
         elif self.steps[name].manual_analysis:
-            self._leave_to_user(system, name, entry)
+            if entry['job'] is not None:
+                pass
+            elif self.analysis_jobscript is None:
+                self._leave_to_user(system, name, entry)
+            elif self._ready(system, name, entry):
+                self._set(entry, 'waiting', 'ready: nothing to prepare; its analysis runs in a '
+                          f'job of its own, submitted by "submit {name}" or by the orchestrator',
+                          calculations=None)
         elif entry['calculations'] is None:
             self._start(system, name, entry)
         elif entry['status'] == 'running':
@@ -898,6 +1148,12 @@ class Orchestrator:
         launched as in a pass. When they are all completed the step stays
         running, with that reason, until ``analyse_step``.
 
+        A step with ``Step.manual_analysis`` is analysed in a job of its own
+        (``[execution.analysis]``): the job is written and submitted, or
+        followed if it is known, as in a pass (``_analyse_in_job``), without
+        waiting for the other steps of the system. Once the job is over the
+        step is completed from its entries, or failed.
+
         Returns
         -------
         report : StepReport
@@ -908,15 +1164,18 @@ class Orchestrator:
         ------
         OrchestratorError
             If the step is not running (not prepared, completed or failed),
-            or it is analysed only by hand.
+            or it is analysed by hand only, without ``[execution.analysis]``.
         NotOnHPCError
             If the commands of the scheduler are not found.
         """
         self._check_replacements()
         entry = self.entry(system, name)
         if self.steps[name].manual_analysis:
-            raise OrchestratorError(f'{system}/{name} has no calculations to submit: it is '
-                                    f'analysed by hand, with "analyse {name}"')
+            if self.analysis_jobscript is None and entry['job'] is None:
+                raise OrchestratorError(
+                    f'{system}/{name} has no calculations to submit: it is analysed by hand, with '
+                    f'"analyse {name}", or in a job of its own with [execution.analysis]')
+            return self._submit_analysis(system, name, entry)
         if entry['status'] != 'running':
             raise OrchestratorError(f'{system}/{name} is {entry["status"]}: only a prepared step '
                                     f'is submitted; run "prepare {name}" first')
@@ -930,6 +1189,20 @@ class Orchestrator:
         self._save()
         return self.step_report(system, name), written
 
+    def _submit_analysis(self, system, name, entry):
+        """``submit_step`` of a step analysed in a job of its own."""
+        held = self._held_back()
+        self.manager.cycle(held)
+        self._register_written_groups()
+        if self._still_completed(system, name, entry) or entry['error'] is not None:
+            written = []
+        else:
+            written = self._analyse_in_job(system, name, entry, wait=False)
+        if written:
+            self.manager.submit(held - set(written))
+        self._save()
+        return self.step_report(system, name), written
+
     def analyse_step(self, system, name):
         """Analyse a step from the files of its calculations, without the scheduler.
 
@@ -939,7 +1212,11 @@ class Orchestrator:
         or any state before it, or from running when an analysis by hand
         stopped before its end, started again from the beginning; the passes
         then find it completed from its entries, without analysing it again.
-        A step with calculations must be prepared;
+        Such a step whose analysis was given to a job of its own is analysed
+        here only if no job of its group was ever submitted (the group is
+        then withdrawn) or its job is over according to the last query of the
+        job manager; while the job may still run nothing changes and an error
+        says so. A step with calculations must be prepared;
         each calculation must be done according to its files alone
         (``_not_done``), otherwise nothing changes and the error says, for each
         one, what is missing.
@@ -951,14 +1228,16 @@ class Orchestrator:
         Raises
         ------
         OrchestratorError
-            If the step is not prepared, or a calculation is not done
-            according to its files.
+            If the step is not prepared, a calculation is not done according
+            to its files, or the job of its analysis may still run.
         """
         self._check_replacements()
         entry = self.entry(system, name)
         if self._still_completed(system, name, entry) or entry['error'] is not None:
             self._save()
             return self.step_report(system, name)
+        if self.steps[name].manual_analysis and entry['job'] is not None:
+            self._take_from_job(system, name, entry)
         if entry['calculations'] is None:
             try:
                 planned = self.steps[name].plan(self.run_dir, system)
@@ -988,6 +1267,34 @@ class Orchestrator:
             self._set(entry, 'completed')
         self._save()
         return self.step_report(system, name)
+
+    def _take_from_job(self, system, name, entry):
+        """Take back from its job the analysis of a step, to analyse it by hand.
+
+        Only the files are read: the registry of the jobs, as the last query
+        left it, and ``submitted.json``. A group none of whose jobs was ever
+        submitted is withdrawn, so that it is never submitted later; a group
+        whose job is over is left as it is. The step is then as one not
+        started.
+
+        Raises
+        ------
+        OrchestratorError
+            If the job of the group may still run; nothing changes.
+        """
+        group = entry['job']
+        if self.manager.withdrawal_problem(group) is None:
+            if is_analysis(job_dir(self.run_dir, group)):
+                self.manager.withdraw(group, f'{system}/{name} analysed by hand')
+        else:
+            over, text = self._analysis_job(group)
+            if not over:
+                raise OrchestratorError(
+                    f'{system}/{name} not analysed by hand: its analysis runs in a job of its own '
+                    f'(group {group}, {text}). Wait for the job, or cancel it; its end is read '
+                    f'from the scheduler on the HPC machine, by "submit {name}" or by the '
+                    'orchestrator')
+        self._set(entry, entry['status'], entry['reason'], calculations=None, job=None)
 
     def _not_done(self, system, calc_ids):
         """``'<calc_id>: <what is missing>'`` for each calculation not done according to its files.
@@ -1171,10 +1478,15 @@ class Orchestrator:
         return attempt.n
 
     def retry(self, system, step):
-        """Let a step failed for an error of its own start again at the next pass."""
+        """Let a step failed for an error of its own start again at the next pass.
+
+        A step whose analysis failed in a job of its own gets a new job at the
+        next pass, unless the job of its last group may still run, which is
+        then followed again.
+        """
         self._check_replacements()
         entry = self.entry(system, step)
-        self._set(entry, 'waiting', 'retry asked', error=None, calculations=None)
+        self._set(entry, 'waiting', 'retry asked', error=None, calculations=None, job=None)
         self._save()
 
     # --- report ------------------------------------------------------------------
@@ -1183,7 +1495,7 @@ class Orchestrator:
         """``StepReport`` of the current state of one step."""
         entry = self.entry(system, name)
         return StepReport(system, name, entry['status'], entry['reason'], dict(entry['calcs']),
-                          list(entry['attention']))
+                          list(entry['attention']), entry['job'])
 
     def report(self, submitted=()):
         """``Report`` of the current state."""

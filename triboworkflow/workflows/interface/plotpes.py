@@ -47,11 +47,14 @@ grows with the square of their number: 20 736 points (an interface of 28
 atoms) take about two minutes and 3.2 GiB for the matrix alone; 108 864
 points (64 atoms) would need about 88 GiB.
 
-Where it runs: only by hand (``Step.manual_analysis``), with ``triboworkflow
-analyse plotpes`` or ``analyse plotpes_scf`` on a machine with enough memory.
-The orchestrator in the background, on the login node, never interpolates:
-once the step is ready it leaves it ``manual``, with that command, and the
-steps after it wait for it. The analysis takes the lock of the run, so it
+Where it runs: never in the orchestrator, on the login node
+(``Step.manual_analysis``). With ``[execution.analysis]`` the orchestrator
+submits it in a job of its own on a compute node and follows the job, which
+runs ``analyse`` of this step (``cli/analysis_job.py``) without taking the
+lock of the run. Without that table the orchestrator leaves the step
+``manual`` once it is ready, and the steps after it wait for it: the user
+runs ``triboworkflow analyse plotpes`` or ``analyse plotpes_scf`` on a
+machine with enough memory; that command takes the lock of the run, so it
 runs with the orchestrator stopped or ended.
 
 All or nothing: the entries are read, the interpolation runs and the figure is
@@ -79,7 +82,8 @@ saved (A84). The interpolation is computed twice, as there (A07). Not ported:
 ``db_file``, ``database``; ``pes_type`` is always ``energy``. The writes use
 the ids of the document written by ``match`` (DEV-39). The docstring of
 ``get_pes`` describes a cubic function on 3 x 3 replicas; the code is what
-counts (A85). The analysis by hand stands until the job of its own (D54).
+counts (A85). In TribChem the interpolation ran in a job of the queue, as a
+Firework; here in a job of its own (D55) or by hand (D54).
 """
 
 import contextlib
@@ -497,8 +501,9 @@ def _load_run(run_dir):
 class PlotPesStep(Step):
     """An interpolation step: the PES of one entry interpolated, no calculation.
 
-    Analysed only by hand (``manual_analysis``): its memory grows with the
-    square of the points interpolated.
+    Never analysed by the orchestrator (``manual_analysis``), but in a job of
+    its own or by hand: its memory grows with the square of the points
+    interpolated.
     """
 
     name = None

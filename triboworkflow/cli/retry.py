@@ -11,14 +11,18 @@ from .command import CLICommandBase
 class CLICommand(CLICommandBase):
     """let a step failed for an error of its own start again
 
-A step fails for an error of its own while it is prepared or analysed, or
-when the settings changed after its preparation; it stays failed until this
-command, once the cause is fixed. It then starts again at the next pass of
-the orchestrator, or with "prepare". A step failed because its calculations
-need the user is not retried: relaunch them.
+A step fails for an error of its own while it is prepared or analysed, when
+the settings changed after its preparation, or when the job of its analysis
+(plotpes, plotpes_scf with [execution.analysis]) ended without completing
+it; it stays failed until this command, once the cause is fixed (e.g. more
+memory or time in the jobscript of [execution.analysis]). It then starts
+again at the next pass of the orchestrator, or with "prepare" ("submit" for
+a new job of an analysis). A step failed because its calculations need the
+user is not retried: relaunch them.
 
 Example:
  $ triboworkflow retry ppes
+ $ triboworkflow retry plotpes
     """
 
     locks_run = True

@@ -17,6 +17,7 @@ compare the steps with TribChem's ``FT_PESInterpolation``.
 import contextlib
 import json
 import logging
+import os
 import shutil
 import socket
 import subprocess
@@ -27,10 +28,12 @@ import pytest
 
 from cli_helpers import fake_scheduler_bin, fake_slurm  # noqa: F401 (fixtures)
 from test_pes import edit_config, finish, pes_run
+from triboworkflow.cli.analysis_job import run_analysis
 from triboworkflow.cli.main import main
 from triboworkflow.cli.run import build_orchestrator, load_run
 from triboworkflow.core.store import PrerequisiteError, StoreError, SystemWriter, read_system
 from triboworkflow.execution import layout
+from triboworkflow.execution.jobs import ANALYSIS_FILE, Analysis, write_analysis
 from triboworkflow.execution.lock import RunLock
 from triboworkflow.workflows.interface.registry import get_step
 from triboworkflow.vendored.physics.base.solidstate import get_cell_info
@@ -429,7 +432,7 @@ def test_the_passes_never_interpolate(pes_copy, fake_slurm, monkeypatch):
     for name in STEPS:
         assert orch.entry(CUCU, name)['reason'] == (
             f'to analyse by hand: run "triboworkflow analyse {name}" where there is enough '
-            'memory; this version does not analyse it automatically')
+            'memory, or give [execution.analysis] to analyse it in a job of its own')
     assert report.finished and not report.success
     assert calls == [] and figures(pes_copy) == []
 
@@ -555,3 +558,145 @@ def test_an_analysis_stopped_is_done_again_alone(pes_copy, fake_slurm, monkeypat
     assert len(calls) == 4 and not partial.exists() and not (pes_copy / 'run.lock').exists()
     assert figures(pes_copy) == ['plotpes/pes_Cu111-Cu111.png', 'plotpes_scf/pes_Cu111-Cu111.png']
     assert all(step().done(pes_copy, CUCU) for step in STEPS.values())
+
+
+# --- the analysis in a job of its own -------------------------------------------------------
+
+def analysis_group(run_dir, name, k=1):
+    """The group of the analysis of ``name``, as the orchestrator writes it: its analysis.json."""
+    jobscript = run_dir / 'analysis.sh'
+    jobscript.write_text('#!/bin/bash\n#SBATCH --mem=8G\n')
+    group = Analysis(name=f'{CUCU}.{name}.{k}', system=CUCU, step=name, scheduler='slurm')
+    return write_analysis(run_dir, group, jobscript) / ANALYSIS_FILE
+
+
+@pytest.mark.parametrize('name', ['plotpes', 'plotpes_scf'])
+def test_the_job_interpolates_while_the_orchestrator_holds_the_run(pes_copy, interpolated,
+                                                                   monkeypatch, name):
+    calls = count_get_pes(monkeypatch)
+    path = analysis_group(pes_copy, name)
+    with RunLock(pes_copy, 'triboworkflow start'):  # the orchestrator in the background
+        outcome = run_analysis(path)
+    assert (outcome['result'], outcome['error']) == ('analysed', None)
+    assert len(calls) == 2 and figures(pes_copy) == [f'{name}/pes_Cu111-Cu111.png']
+    assert get_step(name).done(pes_copy, CUCU)
+    # The entries of the analysis by hand, with their provenance.
+    for leaf in plotpes.interpolation_leaves(plotpes.PES_OF[name]):
+        found, expected = read_system(sdir(pes_copy)), read_system(sdir(interpolated))
+        assert found.get(leaf) == expected.get(leaf)
+        assert found.provenance(leaf) == expected.provenance(leaf)
+    assert not (pes_copy / 'run.lock').exists()
+    # A job again (e.g. a late one): recognised from the files, nothing interpolated.
+    before = system_bytes(pes_copy)
+    assert run_analysis(path)['result'] == 'done'
+    assert len(calls) == 2 and system_bytes(pes_copy) == before
+
+
+def test_the_jobscript_of_the_group_runs_the_analysis(pes_copy):
+    # The jobscript as the scheduler runs it on the node, in a process of its own.
+    path = analysis_group(pes_copy, 'plotpes')
+    env = {**os.environ, 'SLURM_JOB_ID': '5151'}
+    done = subprocess.run(['bash', str(path.parent / 'jobscript.sh')], cwd=path.parent, env=env,
+                          capture_output=True, text=True, timeout=600)
+    assert done.returncode == 0, done.stderr
+    outcome = json.loads((path.parent / 'outcome.json').read_text())
+    assert (outcome['result'], outcome['job_id']) == ('analysed', '5151')
+    assert plotpes.RelaxedPlotPesStep().done(pes_copy, CUCU)
+    assert 'interpolation in eV' in done.stderr  # the log of the job
+
+
+def test_the_job_writes_nothing_when_the_pes_changes(pes_copy, monkeypatch):
+    interpolate = plotpes.interpolate
+
+    def change(inputs, figure):
+        result = interpolate(inputs, figure)
+        points = document(pes_copy)['highsym']['inter_unique']
+        calc_ids = finish(pes_copy, 'pes', {p: -1000.0 - 0.03 * i for i, p in enumerate(points)},
+                          prepare=False, system=CUCU)
+        pes.RelaxedPesStep().analyse(pes_copy, CUCU, calc_ids)
+        return result
+
+    monkeypatch.setattr(plotpes, 'interpolate', change)
+    outcome = run_analysis(analysis_group(pes_copy, 'plotpes'))
+    assert outcome['result'] == 'failed'
+    assert outcome['error'].startswith('StoreError: ') and \
+        'the entries read changed during the interpolation' in outcome['error']
+    assert figures(pes_copy) == [] and not plotpes.RelaxedPlotPesStep().done(pes_copy, CUCU)
+
+
+def with_analysis_job(run_dir):
+    """[execution.analysis] in the settings of the run, with its jobscript."""
+    (run_dir / 'analysis.sh').write_text('#!/bin/bash\n#SBATCH --mem=8G\n')
+    with open(run_dir / 'config.toml', 'a', encoding='utf-8') as f:
+        f.write('\n[execution.analysis]\njobscript = "analysis.sh"\n')
+
+
+def the_node_runs(run_dir, slurm, group, state='COMPLETED'):
+    """The job of a group on a compute node: the line of its jobscript, then its end."""
+    path = layout.job_dir(run_dir, group)
+    outcome = run_analysis(path / ANALYSIS_FILE)
+    for job_id in json.loads((path / 'submitted.json').read_text())['job_ids']:
+        slurm.states[job_id] = state
+    return outcome
+
+
+def test_a_run_interpolates_in_jobs_of_their_own(pes_copy, fake_slurm, monkeypatch):
+    calls = count_get_pes(monkeypatch)
+    with_analysis_job(pes_copy)
+    orch = build_orchestrator(pes_copy)
+    report = orch.run_pass()
+    first, second = f'{CUCU}.plotpes.1', f'{CUCU}.plotpes_scf.1'
+    assert statuses(orch) == {'match': 'completed', 'pes': 'completed', 'pes_scf': 'completed',
+                              'plotpes': 'running', 'plotpes_scf': 'waiting'}
+    assert orch.entry(CUCU, 'plotpes_scf')['reason'] == 'ready; plotpes runs first'
+    assert report.submitted == [first] and fake_slurm.submitted == 1 and not report.finished
+    assert calls == []  # the orchestrator never interpolates
+    assert the_node_runs(pes_copy, fake_slurm, first)['result'] == 'analysed'
+    report = orch.run_pass()
+    assert statuses(orch)['plotpes'] == 'completed' and statuses(orch)['plotpes_scf'] == 'running'
+    assert report.submitted == [second] and len(calls) == 2
+    assert the_node_runs(pes_copy, fake_slurm, second)['result'] == 'analysed'
+    for _ in range(2):
+        report = orch.run_pass()
+        assert report.success and statuses(orch) == dict.fromkeys(ALL_STEPS, 'completed')
+    assert len(calls) == 4 and fake_slurm.submitted == 2
+    assert figures(pes_copy) == ['plotpes/pes_Cu111-Cu111.png', 'plotpes_scf/pes_Cu111-Cu111.png']
+
+
+def test_the_job_of_the_analysis_from_the_command_line(pes_copy, fake_slurm, fake_scheduler_bin,
+                                                       monkeypatch, capsys):
+    calls = count_get_pes(monkeypatch)
+    with_analysis_job(pes_copy)
+    group = f'{CUCU}.plotpes.1'
+    assert cli(pes_copy, 'prepare', 'plotpes') == 0
+    assert (f'{CUCU}/plotpes: waiting (ready: nothing to prepare; its analysis runs in a job of '
+            'its own') in capsys.readouterr().out
+    assert cli(pes_copy, 'submit', 'plotpes') == 0
+    out = capsys.readouterr().out
+    assert f'{CUCU}/plotpes: running (analysis in a job of its own, group {group})' in out
+    assert f'  job of the analysis: group {group}, folder jobs/{group}' in out
+    assert f'group {group}: 1 jobs submitted' in out and 'again to follow its job' in out
+    # While its job may run, the analysis by hand is refused and changes nothing.
+    before = run_files(pes_copy)
+    assert cli(pes_copy, 'analyse', 'plotpes') == 1
+    assert (f'{CUCU}/plotpes not analysed by hand: its analysis runs in a job of its own (group '
+            f'{group}, job ') in capsys.readouterr().err
+    assert {p: d for p, d in run_files(pes_copy).items() if p != 'cli.log'} == \
+        {p: d for p, d in before.items() if p != 'cli.log'}
+    assert cli(pes_copy, 'status') == 0
+    assert f'job of the analysis: jobs/{group}' in capsys.readouterr().out
+    assert calls == []
+    the_node_runs(pes_copy, fake_slurm, group)
+    assert cli(pes_copy, 'submit', 'plotpes') == 0
+    out = capsys.readouterr().out
+    assert f'{CUCU}/plotpes: completed (analysed in the job of group {group})' in out
+    assert 'no group written' in out and len(calls) == 2 and fake_slurm.submitted == 1
+
+
+def test_the_job_without_the_pes(tmp_path):
+    run_dir = cucu_run(tmp_path)
+    MatchStep().analyse(run_dir, CUCU, [])
+    before = system_bytes(run_dir)
+    outcome = run_analysis(analysis_group(run_dir, 'plotpes_scf'))
+    assert outcome['result'] == 'blocked' and 'pes_scf.data' in outcome['error']
+    assert system_bytes(run_dir) == before and figures(run_dir) == []

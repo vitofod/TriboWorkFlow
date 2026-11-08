@@ -17,8 +17,8 @@ import pytest
 from triboworkflow.core.settings import (Settings, SettingsError, load_settings,
                                          settings_from_dict, validate)
 from triboworkflow.core.settings.schema import (INTER_PARAMS_DEFAULTS, INTERFACE_STEPS,
-                                                GenerationParams, InterParams, PesScfParams,
-                                                key_name)
+                                                AnalysisParams, GenerationParams, InterParams,
+                                                PesScfParams, key_name)
 from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
 from triboworkflow.vendored.highput.utils.tasktools import read_default_params
 
@@ -286,6 +286,19 @@ def test_pp_command_is_optional():
     assert settings.execution.pp_command == 'srun pp.x'
 
 
+def test_analysis_job_is_optional():
+    # Without [execution.analysis] the costly analyses are left to the user.
+    assert settings_from_dict(WORKFLOW).execution.analysis is None
+    settings = settings_from_dict(edited(WORKFLOW, {'execution.analysis.jobscript': 'analysis.sh'}))
+    assert settings.execution.analysis == AnalysisParams(jobscript='analysis.sh')
+
+
+def test_analysis_jobscript_placeholder():
+    # As the jobscript of [execution], an empty one is a placeholder.
+    data = edited(WORKFLOW, {'execution.analysis.jobscript': ''})
+    assert settings_from_dict(data).missing_values() == ['execution.analysis.jobscript']
+
+
 def test_engine_per_step():
     settings = settings_from_dict(edited(WORKFLOW, {'interface.engines': {'ppes': 'qe'}}))
     assert settings.interface.engine_for('ppes') == 'qe'
@@ -502,6 +515,15 @@ ERRORS = [
      'must not be empty'),
     ('pp-command-type', W, {'execution.pp_command': 1}, 'execution.pp_command',
      'expected str, got 1'),
+    # [execution.analysis]: the job of the analyses that need a compute node.
+    ('analysis-jobscript-missing', W, {'execution.analysis': {}}, 'execution.analysis.jobscript',
+     'required key missing'),
+    ('analysis-jobscript-type', W, {'execution.analysis.jobscript': 1},
+     'execution.analysis.jobscript', 'expected str, got 1'),
+    ('analysis-key', W, {'execution.analysis': {'jobscript': 'analysis.sh', 'memory': '200G'}},
+     'execution.analysis.memory', 'unknown key (allowed keys: jobscript)'),
+    ('analysis-scalar', W, {'execution.analysis': 'analysis.sh'}, 'execution.analysis',
+     'expected a table'),
     # [interface]
     ('one-slab', W, {'interface.slabs': WORKFLOW['interface']['slabs'][:1]}, 'interface.slabs',
      'give two slabs; got 1'),

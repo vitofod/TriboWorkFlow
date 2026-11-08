@@ -22,10 +22,12 @@ from triboworkflow.core import store
 from triboworkflow.core.store import StoreError
 from triboworkflow.execution import layout
 from triboworkflow.execution import scheduler as scheduler_module
-from triboworkflow.execution.jobs import (JOBSCRIPT_FILE, MANIFEST_FILE, PENDING_KEY,
-                                          SUBMITTED_FILE, JobError, Launch, Manifest,
-                                          jobscript_path, read_manifest, submit_jobs,
-                                          surely_not_created, worker_line, write_job)
+from triboworkflow.execution.jobs import (ANALYSIS_FILE, JOBSCRIPT_FILE, MANIFEST_FILE,
+                                          PENDING_KEY, SUBMITTED_FILE, Analysis, JobError, Launch,
+                                          Manifest, analysis_jobscript_path, analysis_line,
+                                          is_analysis, jobscript_path, most_jobs, read_analysis,
+                                          read_manifest, submit_jobs, surely_not_created,
+                                          worker_line, write_analysis, write_job)
 from triboworkflow.execution.scheduler import JobScheduler
 
 EXAMPLES = Path(__file__).resolve().parents[1] / 'examples'
@@ -442,3 +444,116 @@ def test_number_of_jobs(run_dir, jobscript, count):
     path = write_job(run_dir, manifest(), jobscript)
     with pytest.raises(JobError, match='number of jobs'):
         submit_jobs(path, JobScheduler('slurm', dry_run=True), count)
+
+
+# --- groups of an analysis -------------------------------------------------------------
+
+ANALYSIS_TEMPLATE = b'#!/bin/bash\n#SBATCH --mem=200G\n#SBATCH --time=04:00:00\n'
+
+
+def analysis(**changes):
+    fields = dict(name='Cu111_Al111.plotpes.1', system='Cu111_Al111', step='plotpes',
+                  scheduler='slurm')
+    fields.update(changes)
+    return Analysis(**fields)
+
+
+@pytest.fixture
+def analysis_jobscript(tmp_path):
+    path = tmp_path / 'analysis.sh'
+    path.write_bytes(ANALYSIS_TEMPLATE)
+    return path
+
+
+def test_write_analysis(tmp_path, analysis_jobscript):
+    run = tmp_path / 'run'
+    path = write_analysis(run, analysis(), analysis_jobscript, python='/opt/venv/bin/python')
+    assert path == run / 'jobs' / 'Cu111_Al111.plotpes.1' and is_analysis(path)
+    assert not (path / MANIFEST_FILE).exists()
+    assert analysis_jobscript.read_bytes() == ANALYSIS_TEMPLATE
+    text = (path / JOBSCRIPT_FILE).read_bytes()
+    assert text.startswith(ANALYSIS_TEMPLATE)
+    words = shlex.split(text[len(ANALYSIS_TEMPLATE):].decode())
+    assert words[:3] == ['/opt/venv/bin/python', '-m', 'triboworkflow.cli.analysis_job']
+    assert words[:3] == shlex.split(analysis_line(path / ANALYSIS_FILE, '/opt/venv/bin/python'))[:3]
+    assert Path(words[3]) == (path / ANALYSIS_FILE).resolve() and len(words) == 4
+    read, run_found = read_analysis(path / ANALYSIS_FILE)
+    # The digest is the one of the jobscript of [execution.analysis], as copied.
+    assert read == analysis(jobscript_digest=store.bytes_digest(ANALYSIS_TEMPLATE))
+    assert read.number == 1 and run_found == run.resolve()
+    assert json.loads((path / ANALYSIS_FILE).read_text())['schema_version'] == 1
+
+
+def test_write_analysis_errors(tmp_path, analysis_jobscript):
+    run = tmp_path / 'run'
+    with pytest.raises(JobError, match=r'jobscript .*missing.sh of \[execution.analysis\] not '
+                                       'found'):
+        write_analysis(run, analysis(), tmp_path / 'missing.sh')
+    assert not (run / 'jobs').exists()
+    write_analysis(run, analysis(), analysis_jobscript)
+    with pytest.raises(JobError, match='already exists'):
+        write_analysis(run, analysis(), analysis_jobscript)
+
+
+@pytest.mark.parametrize('changes, message', [
+    ({'name': 'Cu111_Al111.pes.1'}, "name: 'Cu111_Al111.pes.1' is not Cu111_Al111.plotpes.<k>"),
+    ({'name': 'Cu111_Al111.plotpes.0'}, 'k >= 1'),
+    ({'name': 'Cu111_Al111.plotpes.a'}, 'k >= 1'),
+    ({'name': 'Cu111_Al111.plotpes.'}, 'k >= 1'),
+    ({'system': 'a/b'}, 'system'),
+    ({'scheduler': ' '}, 'scheduler: a non-empty string is required'),
+    ({'jobscript_digest': 'md5:1'}, 'jobscript_digest'),
+])
+def test_analysis_errors(changes, message):
+    with pytest.raises(JobError, match=message):
+        analysis(**changes)
+
+
+@pytest.mark.parametrize('edit, message', [
+    (lambda d: d.update(schema_version=2), 'schema_version: 2; this version reads 1'),
+    (lambda d: d.update(memory='200G'), "unknown 'memory'"),
+    (lambda d: d.pop('step'), 'missing step'),
+])
+def test_analysis_file_errors(tmp_path, analysis_jobscript, edit, message):
+    path = write_analysis(tmp_path / 'run', analysis(), analysis_jobscript) / ANALYSIS_FILE
+    data = json.loads(path.read_text())
+    edit(data)
+    path.write_text(json.dumps(data))
+    with pytest.raises(JobError, match=f'{path.name}: .*{message}'):
+        read_analysis(path)
+
+
+def test_read_analysis_checks_the_directory(tmp_path, analysis_jobscript):
+    path = write_analysis(tmp_path / 'run', analysis(), analysis_jobscript)
+    moved = path.parent / 'Cu111_Al111.plotpes.2'
+    path.rename(moved)
+    with pytest.raises(JobError, match="analysis of the group 'Cu111_Al111.plotpes.1' found in"):
+        read_analysis(moved / ANALYSIS_FILE)
+
+
+def test_analysis_jobscript_relative_to_the_settings_file():
+    settings = example_settings()
+    assert analysis_jobscript_path(settings) is None  # no [execution.analysis]
+    settings = example_settings(analysis={'jobscript': 'analysis.sh'})
+    assert analysis_jobscript_path(settings) == Path('analysis.sh')
+    settings.source = EXAMPLES / 'interface.toml'
+    assert analysis_jobscript_path(settings) == EXAMPLES / 'analysis.sh'
+    settings.execution.analysis.jobscript = '/abs/analysis.sh'
+    assert analysis_jobscript_path(settings) == Path('/abs/analysis.sh')
+
+
+@pytest.mark.parametrize('count', [1, 4])
+def test_an_analysis_runs_one_job(tmp_path, analysis_jobscript, count, caplog):
+    path = write_analysis(tmp_path / 'run', analysis(), analysis_jobscript)
+    assert most_jobs(path) == 1
+    scheduler = JobScheduler('slurm', dry_run=True)
+    assert submit_jobs(path, scheduler, count) == [None]
+    assert scheduler.commands == [(['sbatch', str(path / JOBSCRIPT_FILE)], None, path)]
+    reduced = 'Group Cu111_Al111.plotpes.1: 1 jobs submitted instead of 4, one for an analysis'
+    assert (reduced in caplog.text) == (count > 1)
+
+
+def test_most_jobs(run_dir, jobscript, tmp_path):
+    assert most_jobs(write_job(run_dir, manifest(), jobscript)) == 3
+    with pytest.raises(JobError, match='manifest.json not found: write the group first'):
+        most_jobs(tmp_path / 'empty')

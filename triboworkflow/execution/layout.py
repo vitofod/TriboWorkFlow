@@ -25,6 +25,8 @@ A run keeps the systems and the jobs that run their calculations::
     │                                density.filplot of the charge density
     ├── jobs/<name>/                 one group of jobs
     │   ├── manifest.json            calculations of the group and how to run them
+    │   ├── analysis.json            in place of manifest.json: the step analysed in the job
+    │   ├── outcome.json             outcome of that analysis, written by its job
     │   ├── jobscript.sh             jobscript submitted for each job
     │   ├── submitted.json           ids of the submitted jobs
     │   └── withdrawn.json           only for a group withdrawn before any submission

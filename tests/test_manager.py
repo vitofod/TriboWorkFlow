@@ -18,8 +18,9 @@ import pytest
 
 from triboworkflow.core.guard import NotOnHPCError
 from triboworkflow.execution import layout
-from triboworkflow.execution.jobs import (PENDING_KEY, SUBMITTED_FILE, WITHDRAWN_FILE, JobError,
-                                          Launch, Manifest, submit_jobs, write_job)
+from triboworkflow.execution.jobs import (PENDING_KEY, SUBMITTED_FILE, WITHDRAWN_FILE, Analysis,
+                                          JobError, Launch, Manifest, submit_jobs,
+                                          write_analysis, write_job)
 from triboworkflow.execution.manager import INTERRUPTED, JobManager, JobManagerError
 from triboworkflow.execution.scheduler import SGE_HOLD_TYPES, JobScheduler, JobSchedulerError
 
@@ -449,6 +450,26 @@ def test_withdrawal_refused_while_a_job_may_exist(run_dir, manager, slurm):
     with pytest.raises(JobManagerError, match='has no manifest'):
         jobs.withdraw('batch3', 'replaced')
     assert not (layout.job_dir(run_dir, 'batch1') / WITHDRAWN_FILE).exists()
+
+
+def test_the_group_of_an_analysis_has_one_job(run_dir, tmp_path, manager, slurm):
+    write_analysis(run_dir, Analysis(name='Cu111_Al111.plotpes.1', system='Cu111_Al111',
+                                     step='plotpes', scheduler='slurm'), tmp_path / 'job.sh')
+    jobs = manager()
+    assert jobs.add_group('Cu111_Al111.plotpes.1', 4) == 1
+    summary = jobs.cycle()
+    assert slurm.count('sbatch') == 1 and summary.to_submit == 0
+    assert summary.waiting == jobs.group_jobs('Cu111_Al111.plotpes.1') == ['1000']
+    slurm.states['1000'] = 'OUT_OF_MEMORY'
+    assert manager().cycle().complete == ['Cu111_Al111.plotpes.1']
+    assert slurm.count('sbatch') == 1  # an ended job is never submitted again
+
+
+def test_withdraw_the_group_of_an_analysis(run_dir, tmp_path, manager):
+    write_analysis(run_dir, Analysis(name='Cu111_Al111.plotpes.1', system='Cu111_Al111',
+                                     step='plotpes', scheduler='slurm'), tmp_path / 'job.sh')
+    manager().withdraw('Cu111_Al111.plotpes.1', 'analysed by hand')
+    assert manager().withdrawn() == ['Cu111_Al111.plotpes.1']
 
 
 def test_withdrawal_refused_with_a_pending_submission(run_dir, manager, slurm):

@@ -17,7 +17,8 @@ jobs it asks for, the submissions that failed and the state of each job, in
    (``JobScheduler.get_job_state``), also of the jobs that need attention;
 3. submits the jobs still missing from each group: ``min(count,
    calculations of the group)`` jobs per group, where ``count`` is the number
-   of workers asked for (``submit_jobs``). Every registered job counts,
+   of workers asked for, and one job for the group of an analysis
+   (``submit_jobs``). Every registered job counts,
    recovered or queued or possibly still running, and so does every
    submission whose outcome is not known.
 
@@ -87,7 +88,7 @@ from triboworkflow.core.store.atomic import read_json, write_json
 from triboworkflow.core.store.record import check_keys
 
 from .jobs import (MANIFEST_FILE, PENDING_KEY, SUBMITTED_FILE, WITHDRAWN_FILE, JobError,
-                   is_withdrawn, read_manifest, submit_jobs, surely_not_created)
+                   is_analysis, is_withdrawn, most_jobs, submit_jobs, surely_not_created)
 from .layout import JOBS_DIR, JOBS_REGISTRY_FILE, job_dir
 from .scheduler import JobSchedulerError
 
@@ -277,7 +278,7 @@ class JobManager:
     # --- groups ----------------------------------------------------------------
 
     def add_group(self, name, count):
-        """Register a group written by ``write_job``, to be submitted by ``submit``.
+        """Register a group written by ``write_job`` or ``write_analysis``, to be submitted.
 
         Parameters
         ----------
@@ -285,29 +286,27 @@ class JobManager:
             Name of the group.
         count : int
             Number of workers asked for (``groups`` of ``[execution]``); at
-            most one job per calculation of the group is planned.
+            most one job per calculation of the group is planned, and one
+            for an analysis.
 
         Returns
         -------
         int
-            Jobs planned for the group, ``min(count, calculations)``.
+            Jobs planned for the group, ``min(count, most_jobs)``.
 
         Raises
         ------
         JobManagerError
             If the group is already registered.
         JobError
-            If ``count`` is not an integer > 0 or the group has no manifest.
+            If ``count`` is not an integer > 0 or the group has neither a
+            manifest nor an analysis.
         """
         if name in self.groups:
             raise JobManagerError(f'group {name!r} is already registered in {self.path}')
         if type(count) is not int or count <= 0:
             raise JobError(f'number of jobs: {count!r} is not an integer > 0')
-        path = job_dir(self.run_dir, name) / MANIFEST_FILE
-        if not path.is_file():
-            raise JobError(f'{path} not found: write the group first')
-        manifest, _ = read_manifest(path)
-        planned = min(count, len(manifest.calculations))
+        planned = min(count, most_jobs(job_dir(self.run_dir, name)))
         self.groups[name] = {'planned': planned, 'refused': None, 'unknown': []}
         self._save()
         return planned
@@ -440,12 +439,12 @@ class JobManager:
         Raises
         ------
         JobManagerError
-            If the group has no manifest, or one of its jobs may exist
-            (``withdrawal_problem``).
+            If the group has neither a manifest nor an analysis, or one of its
+            jobs may exist (``withdrawal_problem``).
         """
         path = job_dir(self.run_dir, name)
-        if not (path / MANIFEST_FILE).is_file():
-            raise JobManagerError(f'group {name!r} has no manifest in {path}')
+        if not (path / MANIFEST_FILE).is_file() and not is_analysis(path):
+            raise JobManagerError(f'group {name!r} has no manifest nor analysis in {path}')
         problem = self.withdrawal_problem(name)
         if problem is not None:
             raise JobManagerError(f'group {name!r} cannot be withdrawn: {problem}')

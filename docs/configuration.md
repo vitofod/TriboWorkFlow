@@ -316,12 +316,30 @@ writing of the restart files and the commands of the jobscript that run
 before the worker; 600 s is a starting value. Both values are recorded with
 each run.
 
+### `[execution.analysis]`
+
+Optional: the job of the analyses that need a compute node, i.e. the
+interpolations of the PES (`plotpes`, `plotpes_scf`), whose memory grows with
+the square of the points ([interface.md](interface.md#cost)). The
+orchestrator never runs them on the login node: with this table it submits
+each in a job of its own and follows it; without it those steps wait to be
+analysed by hand (`triboworkflow analyse plotpes`).
+
+| Key | Type | | Notes |
+|---|---|---|---|
+| `jobscript` | str | R | jobscript of these jobs, relative to the folder of the settings file; copied for each job with the line that runs the analysis added, never changed. Its lines give memory, walltime and partition (e.g. `#SBATCH --mem=200G`, `#SBATCH --time=04:00:00`) and the threads of the linear algebra (`export OMP_NUM_THREADS=...`); the scheduler is the one of `[execution]` |
+
+A job that ends without completing its step is never submitted again
+automatically: the step fails with the state of the job, and after the
+jobscript is given what it needs `triboworkflow retry <step>` submits a new
+one ([execution.md](execution.md), *Analyses in a job of their own*).
+
 ## `[interface]` (interface workflow)
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `slabs` | list | R | two `[[interface.slabs]]` entries, slab 1 then slab 2: their order gives the interface id (`mid1_mid2`) and the strain weights (`strain_weight_1` goes with slab 1); the slab on top is decided by the matching (see below) |
-| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both; `plotpes` interpolates `pes` and `plotpes_scf` interpolates `pes_scf`, each run only when listed, also both ([interface.md](interface.md)). In this version `match`, `pes`, `pes_scf`, `plotpes` and `plotpes_scf` are available, the last two analysed only by hand (`analyse plotpes`): with any other step the command line stops with `step '<name>' not available in this version` |
+| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both; `plotpes` interpolates `pes` and `plotpes_scf` interpolates `pes_scf`, each run only when listed, also both ([interface.md](interface.md)). In this version `match`, `pes`, `pes_scf`, `plotpes` and `plotpes_scf` are available, the last two analysed in a job of their own with `[execution.analysis]`, or by hand (`analyse plotpes`): with any other step the command line stops with `step '<name>' not available in this version` |
 | `set_bm` | bool | `true` | strain weights from the bulk moduli of the two materials |
 | `engine` | str | `"qe"` | engine of the steps that run calculations |
 | `engines` | table | `{}` | per-step engine for `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`; only `qe` for now |

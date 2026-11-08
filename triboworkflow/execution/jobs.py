@@ -25,6 +25,17 @@ lives in ``<run>/jobs/<name>/`` (see ``layout.py``):
 The jobscript of the user is never changed. The jobs of a group differ only
 by their ids.
 
+A group can also hold, instead of calculations, the analysis of one step of
+one system that needs a compute node (e.g. the interpolation of a potential
+energy surface, too large for the login node where the orchestrator runs).
+Such a group has ``analysis.json`` in place of ``manifest.json`` (system,
+step, scheduler, digest of the jobscript of ``[execution.analysis]``) and
+runs one job; the line added to its jobscript starts the analysis
+(``ANALYSIS_MODULE``), which leaves its outcome in ``outcome.json``. Its name
+is ``<system>.<step>.<k>`` as for the groups of calculations, and a group of
+a later ``k`` replaces it. The workers, the reconciliation of the
+calculations and the replacements read only the groups with a manifest.
+
 Each calculation of a manifest names the attempt the group runs: its number
 ``n``, why it runs (``LAUNCH_KINDS``), the level of the remedies and the
 parameters changed. A worker runs a calculation only while its record has
@@ -65,6 +76,9 @@ MANIFEST_FILE = 'manifest.json'
 JOBSCRIPT_FILE = 'jobscript.sh'
 SUBMITTED_FILE = 'submitted.json'
 WITHDRAWN_FILE = 'withdrawn.json'
+ANALYSIS_VERSION = 1
+ANALYSIS_FILE = 'analysis.json'
+OUTCOME_FILE = 'outcome.json'
 
 # Key of submitted.json with the start of a submission whose outcome is not
 # recorded yet.
@@ -72,6 +86,8 @@ PENDING_KEY = 'pending'
 
 # Module started by the line added to the jobscript.
 WORKER_MODULE = 'triboworkflow.execution.worker'
+# Module started by the line added to the jobscript of an analysis.
+ANALYSIS_MODULE = 'triboworkflow.cli.analysis_job'
 
 # Why an attempt runs: the first one; again with the input of the attempt it
 # repeats, after a crash or a kill; at the next level of the remedies, to help
@@ -81,6 +97,7 @@ LAUNCH_KINDS = ('initial', 'unchanged', 'remedy', 'manual')
 _MANIFEST_KEYS = ('schema_version', 'name', 'scheduler', 'run_command', 'pp_command',
                   'jobscript_digest', 'walltime', 'max_seconds_margin', 'calculations')
 _LAUNCH_KEYS = ('system', 'calc_id', 'n', 'kind', 'level', 'values', 'initial_values', 'restart')
+_ANALYSIS_KEYS = ('schema_version', 'name', 'system', 'step', 'scheduler', 'jobscript_digest')
 
 
 class JobError(ValueError):
@@ -450,6 +467,195 @@ def _gives_density(run_dir, launch):
     return record.density
 
 
+# --- groups of an analysis ----------------------------------------------------------
+
+@dataclass(frozen=True)
+class Analysis:
+    """The analysis of one step of one system, in a job of its own.
+
+    Parameters
+    ----------
+    name : str
+        Name of the group, ``<system>.<step>.<k>`` with ``k`` an integer
+        >= 1, i.e. of its directory in ``<run>/jobs/``.
+    system, step : str
+        The step analysed and its system.
+    scheduler : str
+        Scheduler the job runs under.
+    jobscript_digest : str or None, optional
+        ``file_digest`` of the jobscript of ``[execution.analysis]``, which
+        sets the resources of the job; ``write_analysis`` sets it from the
+        jobscript it copies.
+
+    Raises
+    ------
+    JobError
+        If a field is not valid.
+    """
+
+    name: str
+    system: str
+    step: str
+    scheduler: str
+    jobscript_digest: str | None = None
+
+    def __post_init__(self):
+        try:
+            check_name(self.name, 'name')
+            check_name(self.system, 'system')
+            check_name(self.step, 'step')
+        except ValueError as error:
+            raise JobError(str(error)) from None
+        number = self.name.removeprefix(f'{self.system}.{self.step}.')
+        if number == self.name or not number.isdigit() or int(number) < 1:
+            raise JobError(f'name: {self.name!r} is not {self.system}.{self.step}.<k>, k >= 1')
+        if not isinstance(self.scheduler, str) or not self.scheduler.strip():
+            raise JobError(f'scheduler: a non-empty string is required, not {self.scheduler!r}')
+        if self.jobscript_digest is not None:
+            try:
+                check_fingerprint(self.jobscript_digest, 'jobscript_digest')
+            except ValueError as error:
+                raise JobError(str(error)) from None
+
+    @property
+    def number(self):
+        """``k`` of the name: the groups of the step are numbered from 1."""
+        return int(self.name.rsplit('.', 1)[1])
+
+    def to_dict(self):
+        """JSON object of the group."""
+        return {'schema_version': ANALYSIS_VERSION, 'name': self.name, 'system': self.system,
+                'step': self.step, 'scheduler': self.scheduler,
+                'jobscript_digest': self.jobscript_digest}
+
+    @classmethod
+    def from_dict(cls, data, source=None):
+        """Group from its JSON object; ``source`` prefixes the error messages."""
+        try:
+            check_keys(data, _ANALYSIS_KEYS, 'analysis')
+            version = data['schema_version']
+            if type(version) is not int or version != ANALYSIS_VERSION:
+                raise JobError(f'schema_version: {version!r}; this version reads '
+                               f'{ANALYSIS_VERSION}')
+            return cls(name=data['name'], system=data['system'], step=data['step'],
+                       scheduler=data['scheduler'], jobscript_digest=data['jobscript_digest'])
+        except ValueError as error:  # JobError, and StoreError from check_keys
+            raise JobError(f'{source}: {error}' if source else str(error)) from None
+
+
+def is_analysis(path):
+    """Whether the group in directory ``path`` holds an analysis (``analysis.json``)."""
+    return (Path(path) / ANALYSIS_FILE).is_file()
+
+
+def read_analysis(path):
+    """Read the ``analysis.json`` of a group; the run is the directory three levels above it.
+
+    Returns
+    -------
+    analysis : Analysis
+    run_dir : pathlib.Path
+        Directory of the run (``<run>/jobs/<name>/analysis.json``).
+    """
+    path = Path(path).resolve()
+    analysis = Analysis.from_dict(read_json(path), source=path)
+    if path.parent.name != analysis.name:
+        raise JobError(f'{path}: analysis of the group {analysis.name!r} found in {path.parent}')
+    return analysis, path.parent.parent.parent
+
+
+def analysis_jobscript_path(settings):
+    """Jobscript of ``[execution.analysis]``, relative to the folder of the settings file.
+
+    Returns
+    -------
+    pathlib.Path or None
+        None without ``[execution]`` or ``[execution.analysis]``. Without a
+        settings file a relative path is relative to the current directory.
+    """
+    execution = settings.execution
+    if execution is None or execution.analysis is None:
+        return None
+    path = Path(execution.analysis.jobscript)
+    if not path.is_absolute() and settings.source is not None:
+        path = Path(settings.source).parent / path
+    return path
+
+
+def analysis_line(analysis_path, python=None):
+    """Line added to the jobscript of an analysis: the analysis started on its group.
+
+    Parameters
+    ----------
+    analysis_path : path-like
+        ``analysis.json`` of the group, written as an absolute path.
+    python : str or None, optional
+        Python interpreter of the job; the one running this code by default.
+    """
+    python = python or sys.executable
+    path = os.path.abspath(analysis_path)
+    return f'{shlex.quote(python)} -m {ANALYSIS_MODULE} {shlex.quote(path)}'
+
+
+def write_analysis(run_dir, analysis, jobscript, python=None):
+    """Write the directory of the group of an analysis: ``analysis.json`` and jobscript.
+
+    Parameters
+    ----------
+    run_dir : path-like
+        Directory of the run.
+    analysis : Analysis
+        The step analysed and how the job runs.
+    jobscript : path-like
+        Jobscript of ``[execution.analysis]``; it is copied, never changed.
+    python : str or None, optional
+        Python interpreter of the job (see ``analysis_line``).
+
+    Returns
+    -------
+    pathlib.Path
+        Directory of the group, ``<run>/jobs/<name>``.
+
+    Raises
+    ------
+    JobError
+        If the jobscript is missing or the group already exists.
+    """
+    jobscript = Path(jobscript)
+    if not jobscript.is_file():
+        raise JobError(f'jobscript {jobscript} of [execution.analysis] not found')
+    template = jobscript.read_bytes()
+    analysis = replace(analysis, jobscript_digest=bytes_digest(template))
+    path = job_dir(run_dir, analysis.name)
+    try:
+        path.mkdir(parents=True)
+    except FileExistsError:
+        raise JobError(f'group of jobs {path} already exists') from None
+    write_json(path / ANALYSIS_FILE, analysis.to_dict())
+    line = analysis_line(path / ANALYSIS_FILE, python)
+    (path / JOBSCRIPT_FILE).write_bytes(template + os.fsencode(f'\n{line}\n'))
+    return path
+
+
+def most_jobs(path):
+    """Most jobs a group runs: one per calculation of its manifest, one for an analysis.
+
+    Raises
+    ------
+    JobError
+        If the group has neither ``manifest.json`` nor ``analysis.json``, or
+        the one it has is not valid.
+    """
+    path = Path(path)
+    if is_analysis(path):
+        read_analysis(path / ANALYSIS_FILE)
+        return 1
+    if not (path / MANIFEST_FILE).is_file():
+        raise JobError(f'{path / MANIFEST_FILE} not found: write the group first')
+    manifest, _ = read_manifest(path / MANIFEST_FILE)
+    return len(manifest.calculations)
+
+
 def is_withdrawn(path):
     """Whether the group in directory ``path`` was withdrawn (``withdrawn.json``)."""
     return (Path(path) / WITHDRAWN_FILE).is_file()
@@ -473,7 +679,8 @@ def submit_jobs(path, scheduler, count, now=None):
     """Submit the jobscript of a group once per worker.
 
     ``count`` workers are asked for, but never more than the calculations of
-    the group: a worker without a calculation to take would only exit. The
+    the group, and one for an analysis (``most_jobs``): a worker without a
+    calculation to take would only exit. The
     reduction is logged. Before each submission ``submitted.json`` gets the
     time it starts (``pending``); the job id replaces it as soon as the job
     is submitted, so that an interruption in between leaves the trace of a
@@ -519,11 +726,10 @@ def submit_jobs(path, scheduler, count, now=None):
     jobscript = path / JOBSCRIPT_FILE
     if not jobscript.is_file():
         raise JobError(f'{jobscript} not found: write the group first')
-    manifest, _ = read_manifest(path / MANIFEST_FILE)
-    jobs = min(count, len(manifest.calculations))
+    jobs = min(count, most_jobs(path))
     if jobs < count:
-        logger.warning('Group %s: %d jobs submitted instead of %d, one per calculation',
-                       manifest.name, jobs, count)
+        logger.warning('Group %s: %d jobs submitted instead of %d, %s', path.name, jobs, count,
+                       'one for an analysis' if is_analysis(path) else 'one per calculation')
     submitted = path / SUBMITTED_FILE
     stamp = now or _local_stamp
     job_ids = []

@@ -533,6 +533,29 @@ class QEParams:
 # --- execution on HPC -----------------------------------------------------------
 
 @dataclass
+class AnalysisParams:
+    """``[execution.analysis]``: the job of the analyses that need a compute node.
+
+    Some analyses take more memory and time than the login node, where the
+    orchestrator runs, can give: the interpolation of a potential energy
+    surface builds a dense matrix of tens of GiB on large interfaces. The
+    orchestrator never runs them itself. With this table it submits each in a
+    job of its own and follows it; without it the step waits to be analysed by
+    hand (``triboworkflow analyse <step>``).
+
+    Attributes
+    ----------
+    jobscript : str
+        Jobscript of these jobs, relative to the folder of the settings file;
+        copied unchanged, with the line that runs the analysis added. Its lines
+        give memory, walltime and partition; the scheduler is the one of
+        ``[execution]``.
+    """
+
+    jobscript: str
+
+
+@dataclass
 class ExecutionParams:
     """``[execution]``: scheduler, jobscript and groups of calculations.
 
@@ -565,6 +588,9 @@ class ExecutionParams:
         Seconds after its submission during which a job that the scheduler
         does not report is still waited for; after that it needs attention,
         and it is never submitted again automatically.
+    analysis : AnalysisParams or None
+        Job of the analyses that need a compute node; None: those steps are
+        analysed by hand.
     """
 
     scheduler: str
@@ -576,6 +602,7 @@ class ExecutionParams:
     max_seconds_margin: int = 600
     job_report_wait: int = 3600
     pp_command: str | None = None
+    analysis: AnalysisParams | None = None
 
     def check(self, path):
         """Validate the table; errors name ``path``."""
