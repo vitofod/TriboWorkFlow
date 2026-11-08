@@ -81,6 +81,10 @@ SHORT_LAYERS_111, SHORT_LAYERS_OTHER = 3, 2
 INTER_PARAMS_DEFAULTS = {'max_area': 160.0, 'interface_distance': 2.0, 'max_angle_tol': 0.4}
 # Criteria of best_match: the matching returns the match of smallest area.
 BEST_MATCH = ('area',)
+# Surface that the step adhesion starts from (the step that computes it) and
+# kinds of adhesion, as in [interface.adhesion].
+ADHESION_PES = ('pes', 'pes_scf')
+ADHESION_TYPES = ('regular', 'short')
 
 # &CONTROL keys of a single calculation: in the workflow the code sets them
 # for every calculation (own prefix and outdir, calculation from calc_type).
@@ -782,6 +786,50 @@ class PesScfParams:
 
 
 @dataclass
+class AdhesionParams:
+    """``[interface.adhesion]``: the surface and the slabs of the adhesion.
+
+    The step ``adhesion`` computes the energy of the interface at the minimum
+    and at the maximum of a potential energy surface, and of its two slabs.
+    One choice holds for the whole run: to compare another one, make another
+    run.
+
+    Attributes
+    ----------
+    pes : str
+        Step whose surface gives the minimum and the maximum: ``pes``
+        (relaxed along z) or ``pes_scf`` (static); ``pes`` by default. The
+        step ``adhesion`` needs it.
+    type : str
+        ``regular`` (default) or ``short``. With ``pes``, ``regular`` starts
+        from the interfaces that the surface relaxed. With ``pes_scf``,
+        ``regular`` puts the complete slabs at the sites of the minimum and of
+        the maximum, and ``short`` starts from the reduced slabs of those
+        points, so it needs ``short = true`` in ``[interface.pes_scf]``.
+
+    Notes
+    -----
+    To remove: TribChem's ``FT_StartAdhesion`` read the surface (``pes_type``,
+    default ``pes``) and the kind (``adhesion_type``, default ``regular``)
+    separately (``entrypoints/parsers/utils.py:727-738``); its command line
+    gave (``pes``, ``regular``) and (``pes_scf``, ``short``), and the code
+    refused (``pes``, ``short``) (``run.py:1440-1442``). (``pes_scf``,
+    ``regular``) was in the code and out of the command line (D56).
+    """
+
+    pes: str = 'pes'
+    type: str = 'regular'
+
+    def check(self, path):
+        """Validate the table; errors name ``path``."""
+        _choice(f'{path}.pes', self.pes, ADHESION_PES)
+        _choice(f'{path}.type', self.type, ADHESION_TYPES)
+        if self.type == 'short' and self.pes == 'pes':
+            raise SettingsError(f'{path}.type', "'short' needs pes = 'pes_scf': the relaxed "
+                                'surface always uses the complete slabs')
+
+
+@dataclass
 class InterfaceParams:
     """``[interface]``: inputs of the interface workflow.
 
@@ -805,6 +853,8 @@ class InterfaceParams:
     inter_params : InterParams
     pes_scf : PesScfParams
         Slabs of the static PES, used by the step ``pes_scf``.
+    adhesion : AdhesionParams
+        Surface and slabs of the step ``adhesion``.
     """
 
     slabs: list[SlabParams]
@@ -814,6 +864,7 @@ class InterfaceParams:
     engines: dict[str, str] = field(default_factory=dict)
     inter_params: InterParams = field(default_factory=InterParams)
     pes_scf: PesScfParams = field(default_factory=PesScfParams)
+    adhesion: AdhesionParams = field(default_factory=AdhesionParams)
 
     def engine_for(self, step):
         """Engine of a step that runs calculations.
@@ -857,6 +908,9 @@ class InterfaceParams:
         for step, engine in self.engines.items():
             _choice(f'{path}.engines', step, STEPS_WITH_ENGINE)
             _choice(f'{path}.engines.{step}', engine, ENGINES, later)
+        if self.adhesion.type == 'short' and not self.pes_scf.short:
+            raise SettingsError(f'{path}.adhesion.type', "'short' starts from the reduced slabs of "
+                                'the static surface: set short = true in [interface.pes_scf]')
         # With set_bm the strain weights are the bulk moduli of the two
         # materials, which replace those of inter_params.
         if self.set_bm:

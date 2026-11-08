@@ -1,0 +1,5044 @@
+{
+ "inputs": {
+  "labels": [
+   "bot_slab",
+   "top_slab",
+   "interface_min",
+   "interface_max"
+  ],
+  "calc_types": [
+   "slab_pos_relax",
+   "slab_pos_relax",
+   "slab_pos_relax",
+   "interface_z_relax"
+  ],
+  "structures": [
+   {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.567197,
+       0.0,
+       1.571954794415344e-16
+      ],
+      [
+       -1.2835990000000006,
+       2.2232580000000004,
+       1.5719550437332297e-16
+      ],
+      [
+       0.0,
+       0.0,
+       29.388195983000003
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.567197,
+     "b": 2.567197407167007,
+     "c": 29.388195983000003,
+     "alpha": 90.0,
+     "beta": 90.0,
+     "gamma": 120.00000763897559,
+     "volume": 167.73434135993082
+    },
+    "properties": {},
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       -0.24479549529415817
+      ],
+      "properties": {
+       "interface_region": "bot_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       -7.194097991460275
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.33333299999999993,
+       0.6666670000000002,
+       -0.1745516770349917
+      ],
+      "properties": {
+       "interface_region": "bot_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       -1.6169320008474486e-06,
+       1.4821727410860008,
+       -5.129758893865657
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       -0.03402726729393201
+      ],
+      "properties": {
+       "interface_region": "bot_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       -1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666669999999998,
+       0.333333,
+       -0.10427108555309851
+      ],
+      "properties": {
+       "interface_region": "bot_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       1.2835996169319994,
+       0.7410852589140001,
+       -3.0643390975946194
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.567197,
+        0.0,
+        0.0
+       ],
+       [
+        -1.283599,
+        2.223258,
+        0.0
+       ],
+       [
+        0.0,
+        0.0,
+        31.288323
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.567197,
+      "b": 2.567197407167006,
+      "c": 31.288323,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000763897559,
+      "volume": 178.5793947235694
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.40101582
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        12.54711250426986
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.333333,
+        0.666667,
+        0.46699376
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.6169319999592702e-06,
+        1.482172741086,
+        14.611451601864479
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.59898418
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        18.741210495730137
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.666667,
+        0.333333,
+        0.53300624
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.283599616932,
+        0.741085258914,
+        16.676871398135518
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0,
+    "scale_factor": [
+     [
+      1,
+      0,
+      0
+     ],
+     [
+      0,
+      1,
+      0
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.567197,
+       0.0,
+       1.571954794415344e-16
+      ],
+      [
+       -1.2835990000000006,
+       2.2232580000000004,
+       1.5719550437332297e-16
+      ],
+      [
+       0.0,
+       0.0,
+       29.388195983000003
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.567197,
+     "b": 2.567197407167007,
+     "c": 29.388195983000003,
+     "alpha": 90.0,
+     "beta": 90.0,
+     "gamma": 120.00000763897559,
+     "volume": 167.73434135993082
+    },
+    "properties": {},
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       0.24479549529415812
+      ],
+      "properties": {
+       "interface_region": "top_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       7.194097991460274
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333329999999999,
+       0.6666670000000002,
+       0.17455167703499164
+      ],
+      "properties": {
+       "interface_region": "top_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       -1.616932000958471e-06,
+       1.4821727410860008,
+       5.129758893865655
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       0.03402726729393201
+      ],
+      "properties": {
+       "interface_region": "top_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666669999999998,
+       0.333333,
+       0.10427108555309851
+      ],
+      "properties": {
+       "interface_region": "top_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       1.2835996169319994,
+       0.7410852589140001,
+       3.0643390975946194
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.567197,
+        0.0,
+        0.0
+       ],
+       [
+        -1.283599,
+        2.223258,
+        0.0
+       ],
+       [
+        0.0,
+        0.0,
+        31.288323
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.567197,
+      "b": 2.567197407167006,
+      "c": 31.288323,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000763897559,
+      "volume": 178.5793947235694
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.40101582
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        12.54711250426986
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.333333,
+        0.666667,
+        0.46699376
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.6169319999592702e-06,
+        1.482172741086,
+        14.611451601864479
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.59898418
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        18.741210495730137
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.666667,
+        0.333333,
+        0.53300624
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.283599616932,
+        0.741085258914,
+        16.676871398135518
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0,
+    "scale_factor": [
+     [
+      1,
+      0,
+      0
+     ],
+     [
+      0,
+      1,
+      0
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.567197,
+       0.0,
+       1.571954794415344e-16
+      ],
+      [
+       -1.2835990000000006,
+       2.2232580000000004,
+       1.5719550437332297e-16
+      ],
+      [
+       0.0,
+       0.0,
+       29.388195983000003
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.567197,
+     "b": 2.567197407167007,
+     "c": 29.388195983000003,
+     "alpha": 90.0,
+     "beta": 90.0,
+     "gamma": 120.00000763897559,
+     "volume": 167.73434135993082
+    },
+    "properties": {},
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       -0.24479549529415817
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       -7.194097991460275
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333329999999999,
+       0.6666670000000002,
+       -0.17455167703499172
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       -1.616932000958471e-06,
+       1.4821727410860008,
+       -5.129758893865658
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       -0.03402726729393201
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       -1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666669999999998,
+       0.333333,
+       -0.10427108555309852
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       1.2835996169319994,
+       0.7410852589140001,
+       -3.06433909759462
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666672,
+       0.33333333333333537,
+       0.24479549529415814
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       1.283598333333332,
+       0.7410860000000047,
+       7.194097991460274
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.999999666666667,
+       1.0000003333333356,
+       0.1745516770349917
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       1.2835967164013309,
+       2.2232587410860054,
+       5.129758893865657
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666672,
+       0.33333333333333537,
+       0.034027267293932004
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       1.283598333333332,
+       0.7410860000000047,
+       1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.3333336666666669,
+       0.6666663333333352,
+       0.10427108555309852
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       2.5671979502653315,
+       1.4821712589140046,
+       3.0643390975946203
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.567197,
+        0.0,
+        0.0
+       ],
+       [
+        -1.283599,
+        2.223258,
+        0.0
+       ],
+       [
+        0.0,
+        0.0,
+        31.288323
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.567197,
+      "b": 2.567197407167006,
+      "c": 31.288323,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000763897559,
+      "volume": 178.5793947235694
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.40101582
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        12.54711250426986
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.333333,
+        0.666667,
+        0.46699376
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.6169319999592702e-06,
+        1.482172741086,
+        14.611451601864479
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.59898418
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        18.741210495730137
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.666667,
+        0.333333,
+        0.53300624
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.283599616932,
+        0.741085258914,
+        16.676871398135518
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0,
+    "scale_factor": [
+     [
+      1,
+      0,
+      0
+     ],
+     [
+      0,
+      1,
+      0
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.567197,
+       0.0,
+       1.571954794415344e-16
+      ],
+      [
+       -1.2835990000000006,
+       2.2232580000000004,
+       1.5719550437332297e-16
+      ],
+      [
+       0.0,
+       0.0,
+       29.388195983000003
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.567197,
+     "b": 2.567197407167007,
+     "c": 29.388195983000003,
+     "alpha": 90.0,
+     "beta": 90.0,
+     "gamma": 120.00000763897559,
+     "volume": 167.73434135993082
+    },
+    "properties": {},
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       -0.24479549529415817
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       -7.194097991460275
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333329999999999,
+       0.6666670000000002,
+       -0.17455167703499172
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       -1.616932000958471e-06,
+       1.4821727410860008,
+       -5.129758893865658
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       -0.03402726729393201
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       -1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666669999999998,
+       0.333333,
+       -0.10427108555309852
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       1.2835996169319994,
+       0.7410852589140001,
+       -3.06433909759462
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       0.24479549529415814
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       7.194097991460274
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.33333299999999977,
+       0.6666670000000002,
+       0.1745516770349917
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       -1.6169320012915378e-06,
+       1.4821727410860008,
+       5.129758893865657
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       0.03402726729393201
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666669999999998,
+       0.333333,
+       0.10427108555309854
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       1.2835996169319994,
+       0.7410852589140001,
+       3.0643390975946203
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.567197,
+        0.0,
+        0.0
+       ],
+       [
+        -1.283599,
+        2.223258,
+        0.0
+       ],
+       [
+        0.0,
+        0.0,
+        31.288323
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.567197,
+      "b": 2.567197407167006,
+      "c": 31.288323,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000763897559,
+      "volume": 178.5793947235694
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.40101582
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        12.54711250426986
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.333333,
+        0.666667,
+        0.46699376
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.6169319999592702e-06,
+        1.482172741086,
+        14.611451601864479
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.59898418
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        18.741210495730137
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.666667,
+        0.333333,
+        0.53300624
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.283599616932,
+        0.741085258914,
+        16.676871398135518
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0,
+    "scale_factor": [
+     [
+      1,
+      0,
+      0
+     ],
+     [
+      0,
+      1,
+      0
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   }
+  ],
+  "kpoints": [
+   {
+    "@module": "pymatgen.io.vasp.inputs",
+    "@class": "Kpoints",
+    "comment": "Automatic kpoint scheme",
+    "nkpoints": 0,
+    "generation_style": "Gamma",
+    "kpoints": [
+     [
+      17,
+      17,
+      1
+     ]
+    ],
+    "usershift": [
+     0,
+     0,
+     0
+    ],
+    "kpts_weights": null,
+    "coord_type": null,
+    "labels": null,
+    "tet_number": 0,
+    "tet_weight": 0,
+    "tet_connections": null
+   },
+   {
+    "@module": "pymatgen.io.vasp.inputs",
+    "@class": "Kpoints",
+    "comment": "Automatic kpoint scheme",
+    "nkpoints": 0,
+    "generation_style": "Gamma",
+    "kpoints": [
+     [
+      17,
+      17,
+      1
+     ]
+    ],
+    "usershift": [
+     0,
+     0,
+     0
+    ],
+    "kpts_weights": null,
+    "coord_type": null,
+    "labels": null,
+    "tet_number": 0,
+    "tet_weight": 0,
+    "tet_connections": null
+   },
+   {
+    "@module": "pymatgen.io.vasp.inputs",
+    "@class": "Kpoints",
+    "comment": "Automatic kpoint scheme",
+    "nkpoints": 0,
+    "generation_style": "Gamma",
+    "kpoints": [
+     [
+      17,
+      17,
+      1
+     ]
+    ],
+    "usershift": [
+     0,
+     0,
+     0
+    ],
+    "kpts_weights": null,
+    "coord_type": null,
+    "labels": null,
+    "tet_number": 0,
+    "tet_weight": 0,
+    "tet_connections": null
+   },
+   {
+    "@module": "pymatgen.io.vasp.inputs",
+    "@class": "Kpoints",
+    "comment": "Automatic kpoint scheme",
+    "nkpoints": 0,
+    "generation_style": "Gamma",
+    "kpoints": [
+     [
+      17,
+      17,
+      1
+     ]
+    ],
+    "usershift": [
+     0,
+     0,
+     0
+    ],
+    "kpts_weights": null,
+    "coord_type": null,
+    "labels": null,
+    "tet_number": 0,
+    "tet_weight": 0,
+    "tet_connections": null
+   }
+  ]
+ },
+ "calls": [
+  {
+   "call": "update_db",
+   "data": [
+    4,
+    2.5163747547613613,
+    -1000.25,
+    -250.0625,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "adhesion/bot_slab",
+    "adhesion/bot_slab",
+    "adhesion/bot_slab",
+    {
+     "@module": "pymatgen.core.surface",
+     "@class": "Slab",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.567197,
+        0.0,
+        1.571954794415344e-16
+       ],
+       [
+        -1.2835990000000006,
+        2.2232580000000004,
+        1.5719550437332297e-16
+       ],
+       [
+        0.0,
+        0.0,
+        29.388195983000003
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.567197,
+      "b": 2.567197407167007,
+      "c": 29.388195983000003,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000763897559,
+      "volume": 167.73434135993082
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        0.0,
+        -0.24479549529415817
+       ],
+       "properties": {
+        "interface_region": "bot_slab",
+        "magmom": -0.0,
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        -7.194097991460275
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333299999999993,
+        0.6666670000000002,
+        -0.1745516770349917
+       ],
+       "properties": {
+        "interface_region": "bot_slab",
+        "magmom": -0.0,
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.6169320008474486e-06,
+        1.4821727410860008,
+        -5.129758893865657
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        0.0,
+        -0.03402726729393201
+       ],
+       "properties": {
+        "interface_region": "bot_slab",
+        "magmom": -0.0,
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        -1.0
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666669999999998,
+        0.333333,
+        -0.10427108555309851
+       ],
+       "properties": {
+        "interface_region": "bot_slab",
+        "magmom": -0.0,
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Cu",
+       "xyz": [
+        1.2835996169319994,
+        0.7410852589140001,
+        -3.0643390975946194
+       ]
+      }
+     ],
+     "oriented_unit_cell": {
+      "@module": "pymatgen.core.structure",
+      "@class": "Structure",
+      "charge": 0,
+      "lattice": {
+       "matrix": [
+        [
+         2.567197,
+         0.0,
+         0.0
+        ],
+        [
+         -1.283599,
+         2.223258,
+         0.0
+        ],
+        [
+         0.0,
+         0.0,
+         31.288323
+        ]
+       ],
+       "pbc": [
+        true,
+        true,
+        true
+       ],
+       "a": 2.567197,
+       "b": 2.567197407167006,
+       "c": 31.288323,
+       "alpha": 90.0,
+       "beta": 90.0,
+       "gamma": 120.00000763897559,
+       "volume": 178.5793947235694
+      },
+      "properties": {},
+      "sites": [
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.0,
+         -0.0,
+         0.40101582
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         0.0,
+         0.0,
+         12.54711250426986
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.333333,
+         0.666667,
+         0.46699376
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         -1.6169319999592702e-06,
+         1.482172741086,
+         14.611451601864479
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.0,
+         -0.0,
+         0.59898418
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         0.0,
+         0.0,
+         18.741210495730137
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.666667,
+         0.333333,
+         0.53300624
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         1.283599616932,
+         0.741085258914,
+         16.676871398135518
+        ]
+       }
+      ]
+     },
+     "miller_index": [
+      1,
+      1,
+      1
+     ],
+     "shift": 0,
+     "scale_factor": [
+      [
+       1,
+       0,
+       0
+      ],
+      [
+       0,
+       1,
+       0
+      ],
+      [
+       0,
+       0,
+       1
+      ]
+     ],
+     "reconstruction": null,
+     "energy": null
+    }
+   ],
+   "collection": "PBE.interface_elements",
+   "entry": [
+    [
+     "data",
+     "bot_slab",
+     "nsites"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "density"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "energy"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "energy_per_atom"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "bandgap"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "cbm"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "vbm"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "is_gap_direct"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "forces"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "stress"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "pseudo_potential"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "dir_name"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "task_id"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "task_label"
+    ],
+    [
+     "structure",
+     "opt",
+     "regular",
+     "bot_slab"
+    ]
+   ],
+   "fltr": {
+    "mid": "mp-30_mp-30",
+    "formula": "Cu_Cu",
+    "name": "Cu111-Cu111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": [
+    4,
+    2.5163747547613613,
+    -1008.5,
+    -252.125,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "adhesion/top_slab",
+    "adhesion/top_slab",
+    "adhesion/top_slab",
+    {
+     "@module": "pymatgen.core.surface",
+     "@class": "Slab",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.567197,
+        0.0,
+        1.571954794415344e-16
+       ],
+       [
+        -1.2835990000000006,
+        2.2232580000000004,
+        1.5719550437332297e-16
+       ],
+       [
+        0.0,
+        0.0,
+        29.388195983000003
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.567197,
+      "b": 2.567197407167007,
+      "c": 29.388195983000003,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000763897559,
+      "volume": 167.73434135993082
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        0.0,
+        0.24479549529415812
+       ],
+       "properties": {
+        "interface_region": "top_slab",
+        "magmom": -0.0,
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        7.194097991460274
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.3333329999999999,
+        0.6666670000000002,
+        0.17455167703499164
+       ],
+       "properties": {
+        "interface_region": "top_slab",
+        "magmom": -0.0,
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.616932000958471e-06,
+        1.4821727410860008,
+        5.129758893865655
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        0.0,
+        0.03402726729393201
+       ],
+       "properties": {
+        "interface_region": "top_slab",
+        "magmom": -0.0,
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        1.0
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666669999999998,
+        0.333333,
+        0.10427108555309851
+       ],
+       "properties": {
+        "interface_region": "top_slab",
+        "magmom": -0.0,
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Cu",
+       "xyz": [
+        1.2835996169319994,
+        0.7410852589140001,
+        3.0643390975946194
+       ]
+      }
+     ],
+     "oriented_unit_cell": {
+      "@module": "pymatgen.core.structure",
+      "@class": "Structure",
+      "charge": 0,
+      "lattice": {
+       "matrix": [
+        [
+         2.567197,
+         0.0,
+         0.0
+        ],
+        [
+         -1.283599,
+         2.223258,
+         0.0
+        ],
+        [
+         0.0,
+         0.0,
+         31.288323
+        ]
+       ],
+       "pbc": [
+        true,
+        true,
+        true
+       ],
+       "a": 2.567197,
+       "b": 2.567197407167006,
+       "c": 31.288323,
+       "alpha": 90.0,
+       "beta": 90.0,
+       "gamma": 120.00000763897559,
+       "volume": 178.5793947235694
+      },
+      "properties": {},
+      "sites": [
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.0,
+         -0.0,
+         0.40101582
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         0.0,
+         0.0,
+         12.54711250426986
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.333333,
+         0.666667,
+         0.46699376
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         -1.6169319999592702e-06,
+         1.482172741086,
+         14.611451601864479
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.0,
+         -0.0,
+         0.59898418
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         0.0,
+         0.0,
+         18.741210495730137
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.666667,
+         0.333333,
+         0.53300624
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         1.283599616932,
+         0.741085258914,
+         16.676871398135518
+        ]
+       }
+      ]
+     },
+     "miller_index": [
+      1,
+      1,
+      1
+     ],
+     "shift": 0,
+     "scale_factor": [
+      [
+       1,
+       0,
+       0
+      ],
+      [
+       0,
+       1,
+       0
+      ],
+      [
+       0,
+       0,
+       1
+      ]
+     ],
+     "reconstruction": null,
+     "energy": null
+    }
+   ],
+   "collection": "PBE.interface_elements",
+   "entry": [
+    [
+     "data",
+     "top_slab",
+     "nsites"
+    ],
+    [
+     "data",
+     "top_slab",
+     "density"
+    ],
+    [
+     "data",
+     "top_slab",
+     "energy"
+    ],
+    [
+     "data",
+     "top_slab",
+     "energy_per_atom"
+    ],
+    [
+     "data",
+     "top_slab",
+     "bandgap"
+    ],
+    [
+     "data",
+     "top_slab",
+     "cbm"
+    ],
+    [
+     "data",
+     "top_slab",
+     "vbm"
+    ],
+    [
+     "data",
+     "top_slab",
+     "is_gap_direct"
+    ],
+    [
+     "data",
+     "top_slab",
+     "forces"
+    ],
+    [
+     "data",
+     "top_slab",
+     "stress"
+    ],
+    [
+     "data",
+     "top_slab",
+     "pseudo_potential"
+    ],
+    [
+     "data",
+     "top_slab",
+     "dir_name"
+    ],
+    [
+     "data",
+     "top_slab",
+     "task_id"
+    ],
+    [
+     "data",
+     "top_slab",
+     "task_label"
+    ],
+    [
+     "structure",
+     "opt",
+     "regular",
+     "top_slab"
+    ]
+   ],
+   "fltr": {
+    "mid": "mp-30_mp-30",
+    "formula": "Cu_Cu",
+    "name": "Cu111-Cu111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": [
+    8,
+    5.032749509522723,
+    -2010.125,
+    -251.265625,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "adhesion/interface_min",
+    "adhesion/interface_min",
+    "adhesion/interface_min",
+    {
+     "@module": "pymatgen.core.surface",
+     "@class": "Slab",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.567197,
+        0.0,
+        1.571954794415344e-16
+       ],
+       [
+        -1.2835990000000006,
+        2.2232580000000004,
+        1.5719550437332297e-16
+       ],
+       [
+        0.0,
+        0.0,
+        29.388195983000003
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.567197,
+      "b": 2.567197407167007,
+      "c": 29.388195983000003,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000763897559,
+      "volume": 167.73434135993082
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        0.0,
+        -0.24479549529415817
+       ],
+       "properties": {
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "interface_region": "bot_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        -7.194097991460275
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.3333329999999999,
+        0.6666670000000002,
+        -0.17455167703499172
+       ],
+       "properties": {
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "interface_region": "bot_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.616932000958471e-06,
+        1.4821727410860008,
+        -5.129758893865658
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        0.0,
+        -0.03402726729393201
+       ],
+       "properties": {
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "interface_region": "bot_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        -1.0
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666669999999998,
+        0.333333,
+        -0.10427108555309852
+       ],
+       "properties": {
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "interface_region": "bot_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.2835996169319994,
+        0.7410852589140001,
+        -3.06433909759462
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666672,
+        0.33333333333333537,
+        0.24479549529415814
+       ],
+       "properties": {
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "interface_region": "top_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.283598333333332,
+        0.7410860000000047,
+        7.194097991460274
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.999999666666667,
+        1.0000003333333356,
+        0.1745516770349917
+       ],
+       "properties": {
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "interface_region": "top_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.2835967164013309,
+        2.2232587410860054,
+        5.129758893865657
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666672,
+        0.33333333333333537,
+        0.034027267293932004
+       ],
+       "properties": {
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "interface_region": "top_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.283598333333332,
+        0.7410860000000047,
+        1.0
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        1.3333336666666669,
+        0.6666663333333352,
+        0.10427108555309852
+       ],
+       "properties": {
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "interface_region": "top_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        2.5671979502653315,
+        1.4821712589140046,
+        3.0643390975946203
+       ]
+      }
+     ],
+     "oriented_unit_cell": {
+      "@module": "pymatgen.core.structure",
+      "@class": "Structure",
+      "charge": 0,
+      "lattice": {
+       "matrix": [
+        [
+         2.567197,
+         0.0,
+         0.0
+        ],
+        [
+         -1.283599,
+         2.223258,
+         0.0
+        ],
+        [
+         0.0,
+         0.0,
+         31.288323
+        ]
+       ],
+       "pbc": [
+        true,
+        true,
+        true
+       ],
+       "a": 2.567197,
+       "b": 2.567197407167006,
+       "c": 31.288323,
+       "alpha": 90.0,
+       "beta": 90.0,
+       "gamma": 120.00000763897559,
+       "volume": 178.5793947235694
+      },
+      "properties": {},
+      "sites": [
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.0,
+         -0.0,
+         0.40101582
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         0.0,
+         0.0,
+         12.54711250426986
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.333333,
+         0.666667,
+         0.46699376
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         -1.6169319999592702e-06,
+         1.482172741086,
+         14.611451601864479
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.0,
+         -0.0,
+         0.59898418
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         0.0,
+         0.0,
+         18.741210495730137
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.666667,
+         0.333333,
+         0.53300624
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         1.283599616932,
+         0.741085258914,
+         16.676871398135518
+        ]
+       }
+      ]
+     },
+     "miller_index": [
+      1,
+      1,
+      1
+     ],
+     "shift": 0,
+     "scale_factor": [
+      [
+       1,
+       0,
+       0
+      ],
+      [
+       0,
+       1,
+       0
+      ],
+      [
+       0,
+       0,
+       1
+      ]
+     ],
+     "reconstruction": null,
+     "energy": null
+    }
+   ],
+   "collection": "PBE.interface_elements",
+   "entry": [
+    [
+     "data",
+     "interface_min",
+     "nsites"
+    ],
+    [
+     "data",
+     "interface_min",
+     "density"
+    ],
+    [
+     "data",
+     "interface_min",
+     "energy"
+    ],
+    [
+     "data",
+     "interface_min",
+     "energy_per_atom"
+    ],
+    [
+     "data",
+     "interface_min",
+     "bandgap"
+    ],
+    [
+     "data",
+     "interface_min",
+     "cbm"
+    ],
+    [
+     "data",
+     "interface_min",
+     "vbm"
+    ],
+    [
+     "data",
+     "interface_min",
+     "is_gap_direct"
+    ],
+    [
+     "data",
+     "interface_min",
+     "forces"
+    ],
+    [
+     "data",
+     "interface_min",
+     "stress"
+    ],
+    [
+     "data",
+     "interface_min",
+     "pseudo_potential"
+    ],
+    [
+     "data",
+     "interface_min",
+     "dir_name"
+    ],
+    [
+     "data",
+     "interface_min",
+     "task_id"
+    ],
+    [
+     "data",
+     "interface_min",
+     "task_label"
+    ],
+    [
+     "structure",
+     "opt",
+     "regular",
+     "interface_min"
+    ]
+   ],
+   "fltr": {
+    "mid": "mp-30_mp-30",
+    "formula": "Cu_Cu",
+    "name": "Cu111-Cu111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": [
+    8,
+    5.032749509522723,
+    -2009.0,
+    -251.125,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "adhesion/interface_max",
+    "adhesion/interface_max",
+    "adhesion/interface_max",
+    {
+     "@module": "pymatgen.core.surface",
+     "@class": "Slab",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.567197,
+        0.0,
+        1.571954794415344e-16
+       ],
+       [
+        -1.2835990000000006,
+        2.2232580000000004,
+        1.5719550437332297e-16
+       ],
+       [
+        0.0,
+        0.0,
+        29.388195983000003
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.567197,
+      "b": 2.567197407167007,
+      "c": 29.388195983000003,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000763897559,
+      "volume": 167.73434135993082
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        0.0,
+        -0.24479549529415817
+       ],
+       "properties": {
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "interface_region": "bot_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        -7.194097991460275
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.3333329999999999,
+        0.6666670000000002,
+        -0.17455167703499172
+       ],
+       "properties": {
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "interface_region": "bot_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.616932000958471e-06,
+        1.4821727410860008,
+        -5.129758893865658
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        0.0,
+        -0.03402726729393201
+       ],
+       "properties": {
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "interface_region": "bot_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        -1.0
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666669999999998,
+        0.333333,
+        -0.10427108555309852
+       ],
+       "properties": {
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "interface_region": "bot_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.2835996169319994,
+        0.7410852589140001,
+        -3.06433909759462
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        0.0,
+        0.24479549529415814
+       ],
+       "properties": {
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "interface_region": "top_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        7.194097991460274
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333299999999977,
+        0.6666670000000002,
+        0.1745516770349917
+       ],
+       "properties": {
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "interface_region": "top_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.6169320012915378e-06,
+        1.4821727410860008,
+        5.129758893865657
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        0.0,
+        0.03402726729393201
+       ],
+       "properties": {
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "interface_region": "top_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        1.0
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666669999999998,
+        0.333333,
+        0.10427108555309854
+       ],
+       "properties": {
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "interface_region": "top_slab",
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.2835996169319994,
+        0.7410852589140001,
+        3.0643390975946203
+       ]
+      }
+     ],
+     "oriented_unit_cell": {
+      "@module": "pymatgen.core.structure",
+      "@class": "Structure",
+      "charge": 0,
+      "lattice": {
+       "matrix": [
+        [
+         2.567197,
+         0.0,
+         0.0
+        ],
+        [
+         -1.283599,
+         2.223258,
+         0.0
+        ],
+        [
+         0.0,
+         0.0,
+         31.288323
+        ]
+       ],
+       "pbc": [
+        true,
+        true,
+        true
+       ],
+       "a": 2.567197,
+       "b": 2.567197407167006,
+       "c": 31.288323,
+       "alpha": 90.0,
+       "beta": 90.0,
+       "gamma": 120.00000763897559,
+       "volume": 178.5793947235694
+      },
+      "properties": {},
+      "sites": [
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.0,
+         -0.0,
+         0.40101582
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         0.0,
+         0.0,
+         12.54711250426986
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.333333,
+         0.666667,
+         0.46699376
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         -1.6169319999592702e-06,
+         1.482172741086,
+         14.611451601864479
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.0,
+         -0.0,
+         0.59898418
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         0.0,
+         0.0,
+         18.741210495730137
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Cu",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.666667,
+         0.333333,
+         0.53300624
+        ],
+        "properties": {
+         "magmom": -0.0
+        },
+        "label": "Cu",
+        "xyz": [
+         1.283599616932,
+         0.741085258914,
+         16.676871398135518
+        ]
+       }
+      ]
+     },
+     "miller_index": [
+      1,
+      1,
+      1
+     ],
+     "shift": 0,
+     "scale_factor": [
+      [
+       1,
+       0,
+       0
+      ],
+      [
+       0,
+       1,
+       0
+      ],
+      [
+       0,
+       0,
+       1
+      ]
+     ],
+     "reconstruction": null,
+     "energy": null
+    }
+   ],
+   "collection": "PBE.interface_elements",
+   "entry": [
+    [
+     "data",
+     "interface_max",
+     "nsites"
+    ],
+    [
+     "data",
+     "interface_max",
+     "density"
+    ],
+    [
+     "data",
+     "interface_max",
+     "energy"
+    ],
+    [
+     "data",
+     "interface_max",
+     "energy_per_atom"
+    ],
+    [
+     "data",
+     "interface_max",
+     "bandgap"
+    ],
+    [
+     "data",
+     "interface_max",
+     "cbm"
+    ],
+    [
+     "data",
+     "interface_max",
+     "vbm"
+    ],
+    [
+     "data",
+     "interface_max",
+     "is_gap_direct"
+    ],
+    [
+     "data",
+     "interface_max",
+     "forces"
+    ],
+    [
+     "data",
+     "interface_max",
+     "stress"
+    ],
+    [
+     "data",
+     "interface_max",
+     "pseudo_potential"
+    ],
+    [
+     "data",
+     "interface_max",
+     "dir_name"
+    ],
+    [
+     "data",
+     "interface_max",
+     "task_id"
+    ],
+    [
+     "data",
+     "interface_max",
+     "task_label"
+    ],
+    [
+     "structure",
+     "opt",
+     "regular",
+     "interface_max"
+    ]
+   ],
+   "fltr": {
+    "mid": "mp-30_mp-30",
+    "formula": "Cu_Cu",
+    "name": "Cu111-Cu111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.567197,
+       0.0,
+       1.571954794415344e-16
+      ],
+      [
+       -1.2835990000000006,
+       2.2232580000000004,
+       1.5719550437332297e-16
+      ],
+      [
+       0.0,
+       0.0,
+       29.388195983000003
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.567197,
+     "b": 2.567197407167007,
+     "c": 29.388195983000003,
+     "alpha": 90.0,
+     "beta": 90.0,
+     "gamma": 120.00000763897559,
+     "volume": 167.73434135993082
+    },
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       -0.24479549529415817
+      ],
+      "properties": {
+       "interface_region": "bot_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       -7.194097991460275
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.33333299999999993,
+       0.6666670000000002,
+       -0.1745516770349917
+      ],
+      "properties": {
+       "interface_region": "bot_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       -1.6169320008474486e-06,
+       1.4821727410860008,
+       -5.129758893865657
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       -0.03402726729393201
+      ],
+      "properties": {
+       "interface_region": "bot_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       -1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666669999999998,
+       0.333333,
+       -0.10427108555309851
+      ],
+      "properties": {
+       "interface_region": "bot_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       1.2835996169319994,
+       0.7410852589140001,
+       -3.0643390975946194
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.567197,
+        0.0,
+        0.0
+       ],
+       [
+        -1.283599,
+        2.223258,
+        0.0
+       ],
+       [
+        0.0,
+        0.0,
+        31.288323
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.567197,
+      "b": 2.567197407167006,
+      "c": 31.288323,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000763897559,
+      "volume": 178.5793947235694
+     },
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.40101582
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        12.54711250426986
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.333333,
+        0.666667,
+        0.46699376
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.6169319999592702e-06,
+        1.482172741086,
+        14.611451601864479
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.59898418
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        18.741210495730137
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.666667,
+        0.333333,
+        0.53300624
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.283599616932,
+        0.741085258914,
+        16.676871398135518
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0,
+    "scale_factor": [
+     [
+      1,
+      0,
+      0
+     ],
+     [
+      0,
+      1,
+      0
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   "collection": "PBE.interface_elements",
+   "entry": [
+    "structure",
+    "opt",
+    "regular",
+    "bot_slab"
+   ],
+   "fltr": {
+    "mid": "mp-30_mp-30",
+    "formula": "Cu_Cu",
+    "name": "Cu111-Cu111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.567197,
+       0.0,
+       1.571954794415344e-16
+      ],
+      [
+       -1.2835990000000006,
+       2.2232580000000004,
+       1.5719550437332297e-16
+      ],
+      [
+       0.0,
+       0.0,
+       29.388195983000003
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.567197,
+     "b": 2.567197407167007,
+     "c": 29.388195983000003,
+     "alpha": 90.0,
+     "beta": 90.0,
+     "gamma": 120.00000763897559,
+     "volume": 167.73434135993082
+    },
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       0.24479549529415812
+      ],
+      "properties": {
+       "interface_region": "top_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       7.194097991460274
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333329999999999,
+       0.6666670000000002,
+       0.17455167703499164
+      ],
+      "properties": {
+       "interface_region": "top_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       -1.616932000958471e-06,
+       1.4821727410860008,
+       5.129758893865655
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       0.03402726729393201
+      ],
+      "properties": {
+       "interface_region": "top_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666669999999998,
+       0.333333,
+       0.10427108555309851
+      ],
+      "properties": {
+       "interface_region": "top_slab",
+       "magmom": -0.0,
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Cu",
+      "xyz": [
+       1.2835996169319994,
+       0.7410852589140001,
+       3.0643390975946194
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.567197,
+        0.0,
+        0.0
+       ],
+       [
+        -1.283599,
+        2.223258,
+        0.0
+       ],
+       [
+        0.0,
+        0.0,
+        31.288323
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.567197,
+      "b": 2.567197407167006,
+      "c": 31.288323,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000763897559,
+      "volume": 178.5793947235694
+     },
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.40101582
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        12.54711250426986
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.333333,
+        0.666667,
+        0.46699376
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.6169319999592702e-06,
+        1.482172741086,
+        14.611451601864479
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.59898418
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        18.741210495730137
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.666667,
+        0.333333,
+        0.53300624
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.283599616932,
+        0.741085258914,
+        16.676871398135518
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0,
+    "scale_factor": [
+     [
+      1,
+      0,
+      0
+     ],
+     [
+      0,
+      1,
+      0
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   "collection": "PBE.interface_elements",
+   "entry": [
+    "structure",
+    "opt",
+    "regular",
+    "top_slab"
+   ],
+   "fltr": {
+    "mid": "mp-30_mp-30",
+    "formula": "Cu_Cu",
+    "name": "Cu111-Cu111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.567197,
+       0.0,
+       1.571954794415344e-16
+      ],
+      [
+       -1.2835990000000006,
+       2.2232580000000004,
+       1.5719550437332297e-16
+      ],
+      [
+       0.0,
+       0.0,
+       29.388195983000003
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.567197,
+     "b": 2.567197407167007,
+     "c": 29.388195983000003,
+     "alpha": 90.0,
+     "beta": 90.0,
+     "gamma": 120.00000763897559,
+     "volume": 167.73434135993082
+    },
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       -0.24479549529415817
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       -7.194097991460275
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333329999999999,
+       0.6666670000000002,
+       -0.17455167703499172
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       -1.616932000958471e-06,
+       1.4821727410860008,
+       -5.129758893865658
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       -0.03402726729393201
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       -1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666669999999998,
+       0.333333,
+       -0.10427108555309852
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       1.2835996169319994,
+       0.7410852589140001,
+       -3.06433909759462
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666672,
+       0.33333333333333537,
+       0.24479549529415814
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       1.283598333333332,
+       0.7410860000000047,
+       7.194097991460274
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.999999666666667,
+       1.0000003333333356,
+       0.1745516770349917
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       1.2835967164013309,
+       2.2232587410860054,
+       5.129758893865657
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666672,
+       0.33333333333333537,
+       0.034027267293932004
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       1.283598333333332,
+       0.7410860000000047,
+       1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.3333336666666669,
+       0.6666663333333352,
+       0.10427108555309852
+      ],
+      "properties": {
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       2.5671979502653315,
+       1.4821712589140046,
+       3.0643390975946203
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.567197,
+        0.0,
+        0.0
+       ],
+       [
+        -1.283599,
+        2.223258,
+        0.0
+       ],
+       [
+        0.0,
+        0.0,
+        31.288323
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.567197,
+      "b": 2.567197407167006,
+      "c": 31.288323,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000763897559,
+      "volume": 178.5793947235694
+     },
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.40101582
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        12.54711250426986
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.333333,
+        0.666667,
+        0.46699376
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.6169319999592702e-06,
+        1.482172741086,
+        14.611451601864479
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.59898418
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        18.741210495730137
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.666667,
+        0.333333,
+        0.53300624
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.283599616932,
+        0.741085258914,
+        16.676871398135518
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0,
+    "scale_factor": [
+     [
+      1,
+      0,
+      0
+     ],
+     [
+      0,
+      1,
+      0
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   "collection": "PBE.interface_elements",
+   "entry": [
+    "structure",
+    "opt",
+    "regular",
+    "interface_min"
+   ],
+   "fltr": {
+    "mid": "mp-30_mp-30",
+    "formula": "Cu_Cu",
+    "name": "Cu111-Cu111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.567197,
+       0.0,
+       1.571954794415344e-16
+      ],
+      [
+       -1.2835990000000006,
+       2.2232580000000004,
+       1.5719550437332297e-16
+      ],
+      [
+       0.0,
+       0.0,
+       29.388195983000003
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.567197,
+     "b": 2.567197407167007,
+     "c": 29.388195983000003,
+     "alpha": 90.0,
+     "beta": 90.0,
+     "gamma": 120.00000763897559,
+     "volume": 167.73434135993082
+    },
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       -0.24479549529415817
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       -7.194097991460275
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333329999999999,
+       0.6666670000000002,
+       -0.17455167703499172
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       -1.616932000958471e-06,
+       1.4821727410860008,
+       -5.129758893865658
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       -0.03402726729393201
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       -1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666669999999998,
+       0.333333,
+       -0.10427108555309852
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "bot_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       1.2835996169319994,
+       0.7410852589140001,
+       -3.06433909759462
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       0.24479549529415814
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       7.194097991460274
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.33333299999999977,
+       0.6666670000000002,
+       0.1745516770349917
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       -1.6169320012915378e-06,
+       1.4821727410860008,
+       5.129758893865657
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.0,
+       0.0,
+       0.03402726729393201
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       0.0,
+       0.0,
+       1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Cu",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666669999999998,
+       0.333333,
+       0.10427108555309854
+      ],
+      "properties": {
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "interface_region": "top_slab",
+       "magmom": -0.0
+      },
+      "label": "Cu",
+      "xyz": [
+       1.2835996169319994,
+       0.7410852589140001,
+       3.0643390975946203
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.567197,
+        0.0,
+        0.0
+       ],
+       [
+        -1.283599,
+        2.223258,
+        0.0
+       ],
+       [
+        0.0,
+        0.0,
+        31.288323
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.567197,
+      "b": 2.567197407167006,
+      "c": 31.288323,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000763897559,
+      "volume": 178.5793947235694
+     },
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.40101582
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        12.54711250426986
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.333333,
+        0.666667,
+        0.46699376
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        -1.6169319999592702e-06,
+        1.482172741086,
+        14.611451601864479
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.0,
+        -0.0,
+        0.59898418
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        0.0,
+        0.0,
+        18.741210495730137
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Cu",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.666667,
+        0.333333,
+        0.53300624
+       ],
+       "properties": {
+        "magmom": -0.0
+       },
+       "label": "Cu",
+       "xyz": [
+        1.283599616932,
+        0.741085258914,
+        16.676871398135518
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0,
+    "scale_factor": [
+     [
+      1,
+      0,
+      0
+     ],
+     [
+      0,
+      1,
+      0
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   "collection": "PBE.interface_elements",
+   "entry": [
+    "structure",
+    "opt",
+    "regular",
+    "interface_max"
+   ],
+   "fltr": {
+    "mid": "mp-30_mp-30",
+    "formula": "Cu_Cu",
+    "name": "Cu111-Cu111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": {
+    "regular": {
+     "min_site": {
+      "adhesion_energy_ev": -1.375,
+      "adhesion_energy_jm2": -3.8597929887839757
+     },
+     "max_site": {
+      "adhesion_energy_ev": -0.25,
+      "adhesion_energy_jm2": -0.7017805434152683
+     },
+     "corrugation_ev": 1.125,
+     "corrugation_jm2": 3.158012445368707
+    }
+   },
+   "collection": "PBE.interface_elements",
+   "entry": "adhesion",
+   "fltr": {
+    "mid": "mp-30_mp-30",
+    "formula": "Cu_Cu",
+    "name": "Cu111-Cu111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  }
+ ]
+}

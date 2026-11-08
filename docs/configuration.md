@@ -339,7 +339,7 @@ one ([execution.md](execution.md), *Analyses in a job of their own*).
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `slabs` | list | R | two `[[interface.slabs]]` entries, slab 1 then slab 2: their order gives the interface id (`mid1_mid2`) and the strain weights (`strain_weight_1` goes with slab 1); the slab on top is decided by the matching (see below) |
-| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both; `plotpes` interpolates `pes` and `plotpes_scf` interpolates `pes_scf`, each run only when listed, also both ([interface.md](interface.md)). In this version `match`, `pes`, `pes_scf`, `plotpes` and `plotpes_scf` are available, the last two analysed in a job of their own with `[execution.analysis]`, or by hand (`analyse plotpes`): with any other step the command line stops with `step '<name>' not available in this version` |
+| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both; `plotpes` interpolates `pes` and `plotpes_scf` interpolates `pes_scf`, each run only when listed, also both ([interface.md](interface.md)); `adhesion` reads the PES chosen in `[interface.adhesion]`. In this version `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf` and `adhesion` are available, `plotpes` and `plotpes_scf` analysed in a job of their own with `[execution.analysis]`, or by hand (`analyse plotpes`): with any other step the command line stops with `step '<name>' not available in this version` |
 | `set_bm` | bool | `true` | strain weights from the bulk moduli of the two materials |
 | `engine` | str | `"qe"` | engine of the steps that run calculations |
 | `engines` | table | `{}` | per-step engine for `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`; only `qe` for now |
@@ -427,3 +427,24 @@ To remove: TribChem's command line always passed the layers, so its static
 PES was always on reduced slabs (here the complete slabs are the default,
 D07), and it applied the 3/2 rule to the slabs in the order given, while the
 values went to the bottom and the top slab (DEV-38, A81).
+
+`[interface.adhesion]`: the PES that gives the two sites of the adhesion and
+the kind of adhesion (step `adhesion`, [interface.md](interface.md)); other
+keys are errors. One choice for the whole run.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `pes` | str | `"pes"` | `"pes"` (relaxed along z) or `"pes_scf"` (static): the step whose minimum and maximum the adhesion is computed at; the step `adhesion` waits for it |
+| `type` | str | `"regular"` | `"regular"` or `"short"`. With `pes`, `regular` starts from the interfaces that the PES relaxed. With `pes_scf`, `regular` stacks the complete slabs at the sites of the static PES, and `short` starts from the reduced slabs of its points |
+
+The allowed combinations are (`pes`, `regular`), (`pes_scf`, `regular`) and
+(`pes_scf`, `short`). (`pes`, `short`) is an error, and `short` needs
+`short = true` in `[interface.pes_scf]`, whose reduced slabs it uses. The
+calculation types are not settings: the two slabs and the interface at the
+lowest site relax all the atoms, the interface at the highest site only along
+z.
+
+To remove: TribChem's `FT_StartAdhesion` read the PES (`pes_type`, default
+`pes`) and the kind (`adhesion_type`, default `regular`) as two options; its
+command line allowed (`pes`, `regular`) and (`pes_scf`, `short`), and the
+code refused (`pes`, `short`) (D56).

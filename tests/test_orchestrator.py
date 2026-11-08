@@ -34,7 +34,8 @@ from triboworkflow.execution.jobs import (ANALYSIS_FILE, JOBSCRIPT_FILE, MANIFES
                                           write_job)
 from triboworkflow.execution.manager import JobManager
 from triboworkflow.execution.orchestrator import (INTERFACE_GRAPH, Orchestrator,
-                                                  OrchestratorError, Step, order_steps)
+                                                  OrchestratorError, Step, interface_graph,
+                                                  order_steps)
 from triboworkflow.execution.policy import PolicyError
 
 EXECUTION = ExecutionParams(scheduler='slurm', jobscript='job.sh', run_command='pw.x', groups=2,
@@ -56,8 +57,8 @@ class FakeStep(Step):
     already there, whatever their fingerprint.
     """
 
-    def __init__(self, run, name, versions):
-        self.run, self.name, self.versions = run, name, versions
+    def __init__(self, run, name, versions, graph=INTERFACE_GRAPH):
+        self.run, self.name, self.versions, self.graph = run, name, versions, graph
         self.fingerprint = FP
         self.input_text = PWI
         self.calls = []
@@ -73,7 +74,7 @@ class FakeStep(Step):
         return is_done(read_system(sdir), [self.name], self.provenance(self.name), sdir)
 
     def expected(self, run_dir, system):
-        return {(dep,): self.provenance(dep) for dep in INTERFACE_GRAPH[self.name]}
+        return {(dep,): self.provenance(dep) for dep in self.graph[self.name]}
 
     def prepare(self, run_dir, system):
         self.calls.append('prepare')
@@ -105,11 +106,11 @@ def run(tmp_path):
     return Run(tmp_path)
 
 
-def orchestrator(run, requested=ALL, versions=None, manager=None, steps=None):
+def orchestrator(run, requested=ALL, versions=None, manager=None, steps=None, graph=INTERFACE_GRAPH):
     versions = {} if versions is None else versions
-    steps = steps or {name: FakeStep(run, name, versions) for name in requested}
+    steps = steps or {name: FakeStep(run, name, versions, graph) for name in requested}
     return Orchestrator(run.dir, [SYSTEM], steps, manager or run.manager, EXECUTION,
-                        run.jobscript)
+                        run.jobscript, graph=graph)
 
 
 OUTCOMES = {
@@ -197,6 +198,30 @@ def test_each_pes_has_its_interpolation():
         ['match', 'pes', 'plotpes', 'pes_scf', 'plotpes_scf']
 
 
+def test_adhesion_reads_the_pes_of_the_settings():
+    # The base graph has the default surface; the graph of a run follows
+    # [interface.adhesion].pes and always adds the entries of match.
+    assert INTERFACE_GRAPH['adhesion'] == ('pes', 'match')
+    assert interface_graph() == INTERFACE_GRAPH == interface_graph('pes')
+    scf = interface_graph('pes_scf')
+    assert scf['adhesion'] == ('pes_scf', 'match')
+    assert {name: deps for name, deps in scf.items() if name != 'adhesion'} == \
+        {name: deps for name, deps in INTERFACE_GRAPH.items() if name != 'adhesion'}
+    assert tuple(scf) == tuple(INTERFACE_GRAPH)
+    assert INTERFACE_GRAPH['adhesion'] == ('pes', 'match')  # the base graph is not changed
+    # Steps below adhesion stay below it.
+    assert scf['ppes'] == scf['charge'] == ('adhesion',)
+    # With the static surface adhesion follows pes_scf and does not wait for pes.
+    requested = ['adhesion', 'pes_scf', 'pes', 'match']
+    assert order_steps(requested, scf) == ['match', 'pes_scf', 'adhesion', 'pes']
+    assert order_steps(requested, interface_graph()) == ['match', 'pes_scf', 'pes', 'adhesion']
+
+
+def test_adhesion_surface_not_in_the_graph():
+    with pytest.raises(OrchestratorError, match="adhesion reads pes or pes_scf, not 'plotpes'"):
+        interface_graph('plotpes')
+
+
 @pytest.mark.parametrize('requested, graph, message', [
     (['pes', 'band'], INTERFACE_GRAPH, 'steps not in the graph: band'),
     (['pes', 'pes'], INTERFACE_GRAPH, 'requested more than once'),
@@ -249,8 +274,19 @@ def test_run_stops_when_asked(run, stop, max_passes, passes):
     assert state['systems'][SYSTEM]['pes']['status'] == 'running'
 
 
+@pytest.mark.parametrize('pes, status', [('pes_scf', 'running'), ('pes', 'blocked')])
+def test_adhesion_needs_the_pes_that_the_settings_name(run, pes, status):
+    # Only the static PES and match are done: adhesion that reads the static
+    # surface starts, one that reads the relaxed surface has no prerequisite.
+    write_entry(run.dir, SYSTEM, 'pes_scf')
+    write_entry(run.dir, SYSTEM, 'match')
+    orch = orchestrator(run, ['adhesion'], graph=interface_graph(pes))
+    assert statuses(orch.run_pass()) == {'adhesion': status}
+
+
 def test_steps_of_a_system_run_one_at_a_time_in_the_given_order(run):
     write_entry(run.dir, SYSTEM, 'pes')
+    write_entry(run.dir, SYSTEM, 'match')
     orch = orchestrator(run, ['charge', 'ppes', 'adhesion'])
     assert statuses(orch.run_pass()) == {'adhesion': 'running', 'charge': 'waiting',
                                          'ppes': 'waiting'}

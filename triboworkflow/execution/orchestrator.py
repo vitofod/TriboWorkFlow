@@ -9,8 +9,10 @@ The steps of each system follow the graph of the entries they read and write
 entries of ``pes`` and ``match``, and ``match`` → ``pes_scf`` →
 ``plotpes_scf``. ``pes`` and ``pes_scf`` (the potential energy surface relaxed
 along z and the static one) are independent; ``plotpes`` and ``plotpes_scf``
-interpolate the one and the other and read also the entries of ``match``; the
-other steps after them depend on ``pes`` for now. A pass
+interpolate the one and the other and read also the entries of ``match``;
+``shear`` depends on ``pes`` for now. ``adhesion`` reads the surface chosen in
+``[interface.adhesion]`` and the entries of ``match``
+(``interface_graph``). A pass
 (``Orchestrator.run_pass``):
 
 1. runs a cycle of the job manager (``JobManager.cycle``): jobs recovered,
@@ -141,9 +143,11 @@ logger = logging.getLogger(__name__)
 # written by the steps of the interface workflow).
 # pes and pes_scf need only match. plotpes interpolates pes and plotpes_scf
 # interpolates pes_scf, each reading also the high-symmetry points of match.
-# Which of the two PES shear and adhesion read is decided with those steps,
-# and until then they depend on pes.
-# To remove: Q38 (shear, adhesion).
+# Which of the two PES shear reads is decided with that step, and until then
+# it depends on pes. adhesion reads the PES that [interface.adhesion] names
+# and the entries of match (the slabs, the sites): here the default, pes;
+# interface_graph gives the graph of a run.
+# To remove: Q38 (shear); the adhesion is decided in D56.
 INTERFACE_GRAPH = {
     'match': (),
     'pes': ('match',),
@@ -151,10 +155,35 @@ INTERFACE_GRAPH = {
     'plotpes': ('pes', 'match'),
     'plotpes_scf': ('pes_scf', 'match'),
     'shear': ('plotpes', 'pes', 'match'),
-    'adhesion': ('pes',),
+    'adhesion': ('pes', 'match'),
     'ppes': ('adhesion',),
     'charge': ('adhesion',),
 }
+
+
+def interface_graph(adhesion_pes='pes'):
+    """Graph of the steps of a run: ``INTERFACE_GRAPH`` with the PES of ``adhesion``.
+
+    Parameters
+    ----------
+    adhesion_pes : str, optional
+        Step whose surface ``adhesion`` reads, ``[interface.adhesion].pes``:
+        ``pes`` or ``pes_scf``.
+
+    Returns
+    -------
+    dict
+        Name → steps whose entries the step reads. With ``pes_scf``, ``adhesion``
+        no longer depends on ``pes``: it neither waits for it nor fails with it.
+
+    Raises
+    ------
+    OrchestratorError
+        If ``adhesion_pes`` is not a surface of the graph.
+    """
+    if adhesion_pes not in ('pes', 'pes_scf'):
+        raise OrchestratorError(f'adhesion reads pes or pes_scf, not {adhesion_pes!r}')
+    return INTERFACE_GRAPH | {'adhesion': (adhesion_pes, 'match')}
 
 STATE_FILE = 'orchestrator.json'
 STATE_VERSION = 2

@@ -17,8 +17,8 @@ import pytest
 from triboworkflow.core.settings import (Settings, SettingsError, load_settings,
                                          settings_from_dict, validate)
 from triboworkflow.core.settings.schema import (INTER_PARAMS_DEFAULTS, INTERFACE_STEPS,
-                                                AnalysisParams, GenerationParams, InterParams,
-                                                PesScfParams, key_name)
+                                                AdhesionParams, AnalysisParams, GenerationParams,
+                                                InterParams, PesScfParams, key_name)
 from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
 from triboworkflow.vendored.highput.utils.tasktools import read_default_params
 
@@ -353,6 +353,25 @@ def test_static_pes_on_reduced_slabs():
     assert settings.interface.pes_scf == PesScfParams(short=True, layers=[4, 2])
 
 
+def test_adhesion_from_the_relaxed_pes_by_default():
+    # The defaults of the original workflow: the relaxed surface, complete slabs.
+    default = AdhesionParams(pes='pes', type='regular')
+    assert settings_from_dict(WORKFLOW).interface.adhesion == default
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.adhesion': DELETE}))
+    assert settings.interface.adhesion == default
+
+
+@pytest.mark.parametrize('edits, expected', [
+    ({'interface.adhesion.pes': 'pes_scf'}, AdhesionParams(pes='pes_scf', type='regular')),
+    ({'interface.adhesion.pes': 'pes_scf', 'interface.adhesion.type': 'short',
+      'interface.pes_scf.short': True}, AdhesionParams(pes='pes_scf', type='short')),
+    ({'interface.adhesion.pes': 'pes', 'interface.adhesion.type': 'regular'},
+     AdhesionParams(pes='pes', type='regular')),
+])
+def test_adhesion_combinations_allowed(edits, expected):
+    assert settings_from_dict(edited(WORKFLOW, edits)).interface.adhesion == expected
+
+
 def test_groups_optional():
     assert settings_from_dict(edited(WORKFLOW, {'execution.groups': DELETE})).execution.groups is None
 
@@ -567,6 +586,22 @@ ERRORS = [
      'allowed keys: short, layers'),
     ('pes-table', W, {'interface.pes': {'short': True}}, 'interface.pes',
      'unknown key (allowed keys: slabs, steps, '),
+    # [interface.adhesion]: one surface and one kind of adhesion for the run.
+    ('adhesion-pes', W, {'interface.adhesion.pes': 'plotpes'}, 'interface.adhesion.pes',
+     "'plotpes' is not allowed; allowed values: 'pes', 'pes_scf'"),
+    ('adhesion-type', W, {'interface.adhesion.type': 'long'}, 'interface.adhesion.type',
+     "'long' is not allowed; allowed values: 'regular', 'short'"),
+    ('adhesion-pes-number', W, {'interface.adhesion.pes': 1}, 'interface.adhesion.pes',
+     'expected str, got 1'),
+    ('adhesion-key', W, {'interface.adhesion.layers': 3}, 'interface.adhesion.layers',
+     'allowed keys: pes, type'),
+    # The relaxed surface has only complete slabs.
+    ('adhesion-short-on-relaxed-pes', W, {'interface.adhesion.type': 'short',
+                                          'interface.pes_scf.short': True},
+     'interface.adhesion.type', "'short' needs pes = 'pes_scf'"),
+    ('adhesion-short-on-complete-slabs', W, {'interface.adhesion.pes': 'pes_scf',
+                                             'interface.adhesion.type': 'short'},
+     'interface.adhesion.type', 'set short = true in [interface.pes_scf]'),
     # [qe]
     ('qe-version', W, {'qe.version': '7.2MaX'}, 'qe.version',
      "'7.2MaX' is not a version of pw.x: give major.minor or major.minor.patch"),

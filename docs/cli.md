@@ -16,9 +16,10 @@ a command the help is printed and the code is 2. `triboworkflow <command>
 The steps themselves (`match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`,
 `shear`, `adhesion`, `ppes`, `charge`) come from a registry that each step
 joins once it is implemented. In this version `match`, `pes`, `pes_scf`,
-`plotpes` and `plotpes_scf` are implemented ([interface.md](interface.md)),
-the last two analysed in a job of their own or by hand, never by the
-orchestrator (*The interpolation of the PES*): a
+`plotpes`, `plotpes_scf` and `adhesion` are implemented
+([interface.md](interface.md)), `plotpes` and `plotpes_scf` analysed in a job
+of their own or by hand, never by the orchestrator (*The interpolation of the
+PES*): a
 command on a run whose `[interface].steps` lists another step answers
 `step 'shear' not available in this version`, and nothing is prepared or
 submitted; `check`, `status`, `stop` and the actions on jobs and groups work
@@ -51,7 +52,8 @@ CuAl/                       the run
   (e.g. with `rsync -a`).
 - `[interface].steps` lists the steps to run. The graph of the steps decides
   what comes first (`match` → {`pes` → {`plotpes` → `shear`; `adhesion` →
-  {`ppes`; `charge`}}; `pes_scf` → `plotpes_scf`}); the order of the list decides only
+  {`ppes`; `charge`}}; `pes_scf` → `plotpes_scf`}); `adhesion` follows the PES
+  chosen in `[interface.adhesion]`, `pes` or `pes_scf`; the order of the list decides only
   between steps ready at the same time. A step already done and current is not run again;
   an entry it reads that is valid is reused even if its step is not listed.
 - `[execution].groups` (jobs, i.e. workers, per group) is optional: it comes
@@ -173,6 +175,32 @@ prepared, submitted and analysed first, by hand as below or by `start`.
 `systems/mp-30_mp-134/pes_scf/<point>/`; `analyse pes_scf` writes the entry
 `pes_scf` and the structures of its minimum and maximum
 ([interface.md](interface.md)).
+
+### The adhesion
+
+```toml
+[interface]
+steps = ["match", "pes_scf", "adhesion"]
+
+[interface.adhesion]
+pes = "pes_scf"       # the PES whose minimum and maximum it is computed at: "pes" or "pes_scf"
+type = "regular"      # "regular" or "short" (short: with short = true in [interface.pes_scf])
+```
+
+`adhesion` has four calculations, `adhesion/bot_slab`, `top_slab`,
+`interface_min` and `interface_max`, and reads the PES named by `pes` and
+`match`; the other PES is not needed. By hand, once that PES is analysed:
+
+```bash
+triboworkflow prepare adhesion
+triboworkflow submit adhesion
+triboworkflow analyse adhesion    # writes data, structure.opt.<type> and adhesion.<type>
+```
+
+`prepare adhesion` is blocked with what is missing while the PES is not done
+and current. When the PES, `match` or `[interface.adhesion]` change after the
+calculations were prepared, those that differ are not overwritten:
+`prepare adhesion --replace` prepares them again ([interface.md](interface.md)).
 
 ### The interpolation of the PES
 

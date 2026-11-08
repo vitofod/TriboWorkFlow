@@ -1,4 +1,4 @@
-# Interface workflow: steps `match`, `pes`, `pes_scf`, `plotpes` and `plotpes_scf`
+# Interface workflow: steps `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf` and `adhesion`
 
 The interface workflow starts from two slabs, given in `[interface]` of the
 settings ([configuration.md](configuration.md)). Its first step, `match`,
@@ -6,8 +6,10 @@ runs no calculation: it builds the interface cell of the two slabs and the
 high-symmetry points of the two facing surfaces, which the next steps use.
 The steps `pes` and `pes_scf` compute the potential energy surface of the
 interface from those points, relaxed along z and static; `plotpes` and
-`plotpes_scf` interpolate the one and the other over the whole plane. In
-this version these five steps are available, so a run lists only them in
+`plotpes_scf` interpolate the one and the other over the whole plane;
+`adhesion` computes the adhesion energy of the interface at the site of
+lowest and at the site of highest energy of one of the two surfaces. In this
+version these six steps are available, so a run lists only them in
 `[interface].steps`:
 
 ```bash
@@ -223,8 +225,8 @@ Changing `kdens`, `interface_distance`, a parameter of the calculations
 with the same input, only the PES that uses it. A PES analysed again removes
 its interpolation, which is then done again.
 
-The later steps (`shear`, `adhesion`) are not available in this version:
-which of the two PES each one reads is decided with them.
+The step `shear` is not available in this version: which of the two PES it
+reads is decided with it.
 
 Notes
 -----
@@ -393,3 +395,136 @@ document of `match`); the analysis only by hand until the job of its own
 (D54). The figure is closed once saved (A84); the interpolation is computed
 twice, as there (A07). Not ported: `override`, `check_entry` (the provenance
 decides), `to_file` (A83), `db_file`, `database`.
+
+## Step `adhesion`
+
+The adhesion energy of an interface is the energy that binds its two slabs:
+the energy of the interface minus those of the two slabs alone. The step
+computes it with four pw.x calculations, for the interface at the site of
+lowest energy and at the site of highest energy of a PES, and takes the
+difference of the two as the corrugation. It runs when listed in
+`[interface].steps`, and has its own commands like the PES steps:
+
+```bash
+triboworkflow prepare adhesion
+triboworkflow submit adhesion
+triboworkflow analyse adhesion
+```
+
+### Which surface and which slabs
+
+`[interface.adhesion]` ([configuration.md](configuration.md)) chooses, for the
+whole run, the PES that gives the two sites and the kind of adhesion. The
+step waits for that PES (and for `match`), not for the other one:
+
+| `pes` | `type` | Interfaces of the two sites | Slabs |
+|---|---|---|---|
+| `pes` (default) | `regular` (default) | the final structures of the minimum and of the maximum of the relaxed PES (`structure.opt.pes.min`, `.max`) | the complete slabs of `match` |
+| `pes_scf` | `regular` | the complete slabs of `match`, stacked at the sites of lowest and highest energy of the static PES (`pes_scf.energy.min_site`, `.max_site`, with the shifts of `highsym.inter_unique`) | the complete slabs of `match` |
+| `pes_scf` | `short` | the input structures of the static PES at those two sites (`pes_scf.data.<site>.input.structure`) | the atoms below and above the plane z = 0 of the interface at the lowest site, taken as slabs again |
+
+`short` needs `short = true` in `[interface.pes_scf]` (the reduced slabs of the
+PES), and `pes = "pes"` with `short` is an error: the relaxed PES always
+uses the complete slabs. The interface of the second row is stacked at a
+distance of 2 Å between the slabs, whatever `interface_distance` of
+`[interface.inter_params]` is. One variant per run: to compute another, make
+another run, or change the settings and replace the calculations
+(`prepare adhesion --replace`, [cli.md](cli.md)).
+
+### Calculations
+
+| Calculation | System | `calc_type` | Atoms that move |
+|---|---|---|---|
+| `adhesion/bot_slab` | the bottom slab alone | `slab_pos_relax` | all |
+| `adhesion/top_slab` | the top slab alone | `slab_pos_relax` | all |
+| `adhesion/interface_min` | the interface at the site of lowest energy | `slab_pos_relax` | all |
+| `adhesion/interface_max` | the interface at the site of highest energy | `interface_z_relax` | only along z, the hydrogen atoms in every direction |
+
+All four are `relax` calculations, with the k-point grid from its density as
+for the PES (`[k_points] mode = "kdens"` is required) and the pw.x input
+written as for every calculation of the workflow. The entries read must be
+done and current, otherwise the step is blocked with what is missing: the
+slabs of `match` (`structure.init.bot_slab`, `.top_slab`) and, by variant,
+`structure.opt.pes.min` and `.max` of `pes`; or `pes_scf.energy.min_site` and
+`.max_site` of `pes_scf` together with `highsym` of `match` (`regular`) or
+with `pes_scf.data` (`short`).
+
+### Analysis
+
+`analyse adhesion`, or the orchestrator once every calculation is
+completed, uses the results only when each calculation is complete with the
+fingerprint that the settings give now, and the four share one energy model
+(engine, pseudopotentials, cutoffs, k-points, smearing, spin, vdW): energies
+of different models are never combined, and the step stops with the
+calculations at fault and writes nothing. Then it writes, with `<type>` the
+`type` of `[interface.adhesion]`:
+
+| Entry of `system.json` | Content |
+|---|---|
+| `data.<label>` (`data.short.<label>` with `short`) | the results of each calculation: `nsites`, `density` (g/cm^3), `energy` and `energy_per_atom` (eV, the total energy of pw.x), `forces`, `stress`, `dir_name`, `task_id`, `task_label` (the calculation, `adhesion/bot_slab`); the keys that pw.x does not give (`bandgap`, `cbm`, `vbm`, `is_gap_direct`, `pseudo_potential`, and `forces` or `stress` when not printed) are null |
+| `structure.opt.<type>.<label>` | the final structure of each calculation; the two slabs are slabs again (pymatgen `Slab` dicts, with the Miller indices and the other keys of the slabs they started from), the two interfaces stay structures |
+| `adhesion.<type>` | `min_site` and `max_site`, each with `adhesion_energy_ev` and `adhesion_energy_jm2`; `corrugation_ev` and `corrugation_jm2` |
+| `structure.init.short.bot_slab`, `.top_slab`, `.interface` | only with `short`: the reduced slabs and the interface at the lowest site, written with the rest |
+
+The adhesion energy at a site is the energy of the interface at that site
+minus those of the top slab and of the bottom slab: **negative for an
+interface that binds**. The corrugation is the energy of the interface at
+the highest site minus that at the lowest one. The energies are in eV; the
+J/m^2 divide them by the area of the cell of the final structure of
+`adhesion/interface_min`. The empty dicts of the structures (`properties:
+{}`) are not stored; the structures are read back the same.
+
+Everything is written together, at the end: when any part fails, nothing is
+written. The writes replace the same keys at every analysis, so nothing of an
+earlier one is left, and the entries of the other kind (`regular` or `short`)
+are not touched. Each entry of the table (`data.<label>` and the other
+entries by label) records its provenance: the parameters of the step (the
+surface, the kind, the `calc_type` of each calculation, the k-point density),
+the calculations with their fingerprints and the results used, and the
+content of the entries read.
+
+### Message
+
+```text
+<system>: adhesion: <type> adhesion <on the complete slabs|on the reduced slabs>, from the PES <pes> (<relaxed along z|static>), at <site> (lowest energy) and <site> (highest energy)
+<system>: adhesion energy at <site>: <energy> eV, <energy> J/m^2
+<system>: adhesion energy at <site>: <energy> eV, <energy> J/m^2
+<system>: corrugation (maximum - minimum): <difference> eV, <difference> J/m^2
+```
+
+The energies have 6 decimals. What the code that builds the structures
+prints goes to the log at debug level only.
+
+### When the step runs again
+
+The step is done when its entries exist and their provenance is the one that
+the settings, the calculations and the entries read give now. Changing
+`[interface.adhesion]`, `kdens`, a parameter of the calculations (e.g.
+`ecutwfc`), or analysing the PES or `match` again (new calculations, other
+settings) makes it run again: the structures of the calculations differ, so
+`prepare adhesion` stops with the list and `prepare adhesion --replace`
+prepares them again. New results of a calculation, run again with the same
+input, make the step run again at the next `analyse` or pass.
+
+Notes
+-----
+To remove: port of TribChem's `FT_StartAdhesion` (with
+`FireTaskInterface.query_interface`), `InterfaceWF.adhesion_energy`, the
+`FT_MoveTagResults` of its four calculations and `FT_AdhesionEnergy`
+(`calculate_adhesion`, `_change_slabs`). TribChem read the surface and the
+kind of adhesion as two options, `pes_type` (`pes` by default) and
+`adhesion_type` (`regular`), with `regular` on `pes` and `short` on `pes_scf`
+reachable from its command line, `regular` on `pes_scf` only in the code, and
+`short` on `pes` refused (D56). The golden cases `adhesion_step_*` compare the
+structures, `calc_type` and k-points of the four calculations and the database
+writes with those of the Firetasks, for the three variants. Differences:
+DEV-35 (the k-point density from the settings, not from `comp_params` of the
+document), DEV-39 (the writes use the ids of the document of `match`); the
+adhesion was never found done there, since `check_entry` was not passed
+(A57), and here it is done when its entries and their provenance are current;
+`structure.init.short` is written with the results, not before the
+calculations. The distance of the interface of `pes_scf` with `regular` is
+that of the function that stacks the slabs, as there (A86). Not ported:
+`override`, `run_vasp`, `get_main_folder` (A47), `FT_SaveVASPOutputs` (the
+files of each calculation stay in its directory) and the other `calc_type`
+that `adhesion_energy` accepts at one's own risk.

@@ -461,9 +461,12 @@ graph of the entries they read: `match` → {`pes` → {`plotpes` → `shear`;
 `adhesion` → {`ppes`; `charge`}}; `pes_scf` → `plotpes_scf`}, `plotpes` and
 `plotpes_scf` reading also `match`, `shear` reading also `pes` and `match`.
 The two PES, `pes` and `pes_scf`, need only `match`; `plotpes` interpolates
-`pes` and `plotpes_scf` interpolates `pes_scf`. Which of the two PES `shear`
-and `adhesion` read is decided with those steps, and until then they depend
-on `pes`.
+`pes` and `plotpes_scf` interpolates `pes_scf`. `adhesion` reads the PES
+chosen in `[interface.adhesion]` and `match`: the graph of a run is built
+from the settings (`interface_graph`, used by `build_orchestrator`), so with
+`pes = "pes_scf"` it depends on `pes_scf` and not on `pes`, and `ppes` and
+`charge` stay on `adhesion`. Which of the two PES `shear` reads is decided
+with that step, and until then it depends on `pes`.
 Each pass:
 
 1. runs a cycle of the job manager;

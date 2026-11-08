@@ -60,6 +60,14 @@ short = false                      # Default: complete slabs.
 # layers = [3, 2]                  # With short = true: layers kept in the bottom and in the
                                    # top slab; by default 3 for a (111) slab, 2 for the others.
 
+# Adhesion (step adhesion): the surface that gives the minimum and the maximum,
+# and the slabs of the four calculations. One choice for the whole run; the
+# step waits for the surface that it names.
+[interface.adhesion]
+pes = "pes"                        # Default: pes (relaxed along z) or pes_scf (static).
+type = "regular"                   # Default: regular; short only with pes = "pes_scf" and
+                                   # short = true in [interface.pes_scf].
+
 [namelists.CONTROL]
 nstep = 150                        # Relax; recommended 150, at most 250. Raised by the relaunches.
 max_seconds = 84600                # Seconds; upper limit of the value set from the walltime left.

@@ -15,7 +15,9 @@ it if its standard input and output are a terminal, and stops with an error
 otherwise, so that a command started by a script never waits for an answer.
 
 ``build_orchestrator`` gives the orchestrator of the run, with the steps of
-``[interface].steps`` from the registry of the steps; ``daemon_factory`` is
+``[interface].steps`` from the registry of the steps and the graph of the
+steps for the surface that ``[interface.adhesion]`` names
+(``interface_graph``); ``daemon_factory`` is
 the factory that the orchestrator in the background calls
 (``execution/daemon.py``), with the number of jobs decided by ``start``.
 """
@@ -31,7 +33,7 @@ from triboworkflow.core.settings import load_settings
 from triboworkflow.core.store.atomic import read_json
 from triboworkflow.execution.jobs import analysis_jobscript_path, jobscript_path
 from triboworkflow.execution.manager import JobManager
-from triboworkflow.execution.orchestrator import STATE_FILE, Orchestrator
+from triboworkflow.execution.orchestrator import STATE_FILE, Orchestrator, interface_graph
 from triboworkflow.execution.scheduler import JobScheduler
 from triboworkflow.workflows.interface.registry import get_step
 
@@ -224,6 +226,7 @@ def build_orchestrator(run_dir, groups=None, steps=None, dry_run=False, step_obj
     manager = JobManager(run_dir, make_scheduler(settings, dry_run), execution.job_report_wait)
     return Orchestrator(run_dir, [system_name(settings)], objects, manager, execution,
                         jobscript_path(settings),
+                        graph=interface_graph(settings.interface.adhesion.pes),
                         analysis_jobscript=analysis_jobscript_path(settings))
 
 

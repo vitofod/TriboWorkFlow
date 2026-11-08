@@ -14,7 +14,10 @@ the interpolation with the steps plotpes and plotpes_scf
 (triboworkflow.workflows.interface.plotpes), starting from the document that
 the match_step and pes_step golden calls build; the key image that TribChem
 writes (the PNG of the figure encoded again) is compared by its pixels with
-the figure of the port, which writes no image (DEV-42).
+the figure of the port, which writes no image (DEV-42), and the adhesion_step
+cases the Firetasks of the adhesion with the step adhesion
+(triboworkflow.workflows.interface.adhesion), starting from the document that
+the match_step and pes_step golden calls build.
 The golden values are the results obtained in the
 historic environment, stored in tests/golden/<case>.json:
 tests/historic/test_golden.py checks that they are reproduced there and
@@ -902,10 +905,11 @@ def pes_step_historic(tc, pair, step, short):
             'calls': calls}
 
 
-def port_settings(pair, mids, steps, short):
+def port_settings(pair, mids, steps, short, adhesion=None):
     """Settings of a run of the port on the slabs of a pair of MATCH_STEPS,
     written as JSON files in the current folder, with the parameters of the
-    PES of the golden cases (distance, k-points of COMP_PARAMS, short slabs)."""
+    PES of the golden cases (distance, k-points of COMP_PARAMS, short slabs)
+    and, when given, [interface.adhesion]."""
     import tomllib
 
     from triboworkflow.core.settings.loader import settings_from_dict
@@ -922,6 +926,8 @@ def port_settings(pair, mids, steps, short):
     data['interface'].update({'slabs': slabs, 'set_bm': False, 'steps': list(steps),
                               'pes_scf': pes_scf})
     data['interface']['inter_params']['interface_distance'] = PES_STEP_DISTANCE
+    if adhesion is not None:
+        data['interface']['adhesion'] = dict(adhesion)
     data['k_points'].update({'mode': 'kdens', 'kdens': float(COMP_PARAMS['kdens'])})
     return settings_from_dict(data)
 
@@ -1118,6 +1124,184 @@ def case_plotpes_step(tc, name):
     if tc.root == HISTORIC:
         return plotpes_step_historic(tc, name)
     return plotpes_step_port(tc, name)
+
+
+# Step adhesion: FT_StartAdhesion up to InterfaceWF.adhesion_energy, the
+# FT_MoveTagResults of its four calculations and FT_AdhesionEnergy (historic)
+# against adhesion_inputs and run_adhesion_analysis of the step (port), on the
+# document that the golden calls of the step match and of the PES of the case
+# build (plotpes_document, with the comp_params of TribChem's document: DEV-35).
+# Each case is a PES case of PES_STEPS: the relaxed PES gives the regular
+# adhesion, the static one on complete slabs the regular adhesion on the slabs
+# stacked at its sites (without a distance: A86), the static one on reduced
+# slabs the short adhesion, which TribChem's command line pairs with it. The
+# results of the four calculations come from task documents made by the case
+# (pes_task_document), the same in both: the energies of ADHESION_ENERGIES, the
+# structure of each calculation as input and final structure, and the calc_id
+# adhesion/<label> as task_label, task_id and dir_name. The cases compare the
+# structures, calc_types and k-points of the four calculations and the database
+# writes, the structure.init.short ones included.
+ADHESION_LABELS = ['bot_slab', 'top_slab', 'interface_min', 'interface_max']
+ADHESION_CALC_TYPES = ['slab_pos_relax', 'slab_pos_relax', 'slab_pos_relax', 'interface_z_relax']
+ADHESION_ENERGIES = {'bot_slab': -1000.25, 'top_slab': -1008.5, 'interface_min': -2010.125,
+                     'interface_max': -2009.0}
+ADHESION_STEPS = tuple(PES_STEPS)
+
+
+def adhesion_kind(short):
+    """Kind of adhesion paired with a PES case: short for reduced slabs, else regular."""
+    return 'regular' if short is None else 'short'
+
+
+def emulated_database(tc, document, tasks, calls):
+    """The query_db and update_db of FireTaskTribChem on a database emulated with the
+    document: queries give a copy of it, or the task document with the given tag,
+    and the updates are recorded in calls and applied with TribChem's
+    prepare_data_to_update ($set of the update dicts)."""
+    query = tc['highput.database.query']
+    dbtools = tc['highput.database.dbtools']
+
+    def matching(fltr):
+        if any(document.get(k) != v for k, v in fltr.items()):
+            raise AssertionError(f'filter {fltr} does not match the document')
+
+    def query_db(self, collection, db_file=None, database=None, entry=None, fltr=None,
+                 **kwargs):
+        if collection == 'tasks':
+            field = copy.deepcopy(tasks[fltr['task_label']])
+        elif collection == MATCH_COLLECTION:
+            matching(fltr)
+            field = copy.deepcopy(document)
+        else:
+            raise AssertionError(f'unexpected query of {collection}')
+        return field, dbtools.read_multiple_entry(field, entry)
+
+    def update_db(self, data, collection, entry=None, db_file=None, database=None, fltr=None,
+                  update_op='$set', upsert=False, to_mongodb=True, **kwargs):
+        if collection != MATCH_COLLECTION:
+            raise AssertionError(f'unexpected update of {collection}')
+        matching(fltr)
+        calls.append(update_call(data, collection, entry, fltr, update_op, to_mongodb))
+        updates = query.prepare_data_to_update(copy.deepcopy(data), entry, update_op, to_mongodb)
+        for update in updates if isinstance(updates, list) else [updates]:
+            (op, values), = update.items()
+            if op != '$set':
+                raise AssertionError(f'unexpected update operator {op}')
+            for key, value in values.items():
+                *parents, last = key.split('.')
+                node = document
+                for k in parents:
+                    node = node.setdefault(k, {})
+                node[last] = value
+
+    return query_db, update_db
+
+
+def adhesion_inputs_data(labels, calc_types, structures, kpoints):
+    return {'labels': list(labels), 'calc_types': list(calc_types),
+            'structures': structures, 'kpoints': kpoints}
+
+
+def adhesion_step_historic(tc, name):
+    """FT_StartAdhesion up to InterfaceWF.adhesion_energy, then the FT_MoveTagResults
+    of the four calculations and the FT_AdhesionEnergy of its workflow, on a
+    database emulated with TribChem's prepare_data_to_update."""
+    run_ft = tc['highput.firetasks.run']
+    core = tc['highput.firetasks.core']
+    interface_wf = tc['highput.workflows.interface'].InterfaceWF
+    pair, step, short = PES_STEPS[name]
+    document = plotpes_document(name)
+    tasks, calls = {}, []
+    query_db, update_db = emulated_database(tc, document, tasks, calls)
+    saved = core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db
+    core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db = query_db, update_db
+    try:
+        # calc_interface.py:192-199 (check_entry not given), set_adh of the command line
+        start = run_ft.FT_StartAdhesion(
+            mid=document['mid'].split('_'), miller=document['miller'],
+            collection=MATCH_COLLECTION, pes_type=step, adhesion_type=adhesion_kind(short),
+            db_file='golden')
+        params = start.read_runtask('StartAdhesion', {})
+        params['main_folder'] = 'golden'  # get_main_folder reads the database directly (A47)
+        _, params = start.query_interface(params)
+        wf = start.run_func(interface_wf.adhesion_energy, **params)
+        fw_tasks = [t for fw in wf.fws for t in fw.tasks]
+        run_vasp = [t for t in fw_tasks if type(t).__name__ == 'FT_RunVaspOnTheFly']
+        for label, task in zip(ADHESION_LABELS, run_vasp):
+            if f'_{label}_' not in task['tag']:
+                raise AssertionError(f'{task["tag"]} is not the calculation {label}')
+            tasks[task['tag']] = pes_task_document('adhesion', label, task['structure'],
+                                                   ADHESION_ENERGIES[label])
+        for kind in ('FT_MoveTagResults', 'FT_AdhesionEnergy'):
+            for task in fw_tasks:
+                if type(task).__name__ == kind:
+                    task.run_task({})
+    finally:
+        core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db = saved
+    return {'inputs': adhesion_inputs_data(ADHESION_LABELS, [t['calc_type'] for t in run_vasp],
+                                           [t['structure'] for t in run_vasp],
+                                           [t['vis'].kpoints for t in run_vasp]),
+            'calls': calls}
+
+
+def adhesion_step_port(tc, name):
+    """adhesion_inputs of the step from settings and a run with the document
+    after match and the PES, then run_adhesion_analysis on a store that records
+    the database calls and gives the task documents."""
+    from triboworkflow.core.store import SystemWriter
+    from triboworkflow.core.store.legacy import TASKS, LegacyStore
+    from triboworkflow.execution.layout import system_dir
+    from triboworkflow.workflows.interface import adhesion
+
+    dbtools = tc['highput.database.dbtools']
+    tasks = {}
+
+    class Recording(LegacyStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = []
+
+        def query_db(self, collection, *, entry=None, fltr=None):
+            if collection == TASKS:
+                field = copy.deepcopy(tasks[fltr['task_label']])
+                return field, dbtools.read_multiple_entry(field, entry)
+            return super().query_db(collection, entry=entry, fltr=fltr)
+
+        def update_db(self, data, collection, *, entry=None, fltr=None, update_op='$set',
+                      to_mongodb=True):
+            self.calls.append(update_call(data, collection, entry, fltr, update_op, to_mongodb))
+            super().update_db(data, collection, entry=entry, fltr=fltr, update_op=update_op,
+                              to_mongodb=to_mongodb)
+
+    pair, step, short = PES_STEPS[name]
+    document = plotpes_document(name)
+    settings = port_settings(pair, document['mid'].split('_'), ['match', step, 'adhesion'], short,
+                             adhesion={'pes': step, 'type': adhesion_kind(short)})
+    system = document['mid']
+    sdir = system_dir(Path('run'), system)
+    with SystemWriter(sdir) as writer:
+        writer.document.create(document)
+        writer.save()
+    inputs = adhesion.adhesion_inputs(Path('run'), system, settings)
+    for label, _, structure, _ in inputs.points:
+        tasks[f'adhesion/{label}'] = pes_task_document('adhesion', label, structure,
+                                                       ADHESION_ENERGIES[label])
+    with SystemWriter(sdir) as writer:
+        store = Recording(sdir, writer.document, adhesion.COLLECTION)
+        adhesion.run_adhesion_analysis(inputs, store,
+                                       [f'adhesion/{label}' for label in ADHESION_LABELS])
+    return {'inputs': adhesion_inputs_data([p[0] for p in inputs.points],
+                                           [p[1] for p in inputs.points],
+                                           [p[2] for p in inputs.points],
+                                           [p[3] for p in inputs.points]),
+            'calls': store.calls}
+
+
+def case_adhesion_step(tc, name):
+    """Calculations and database writes of the step adhesion."""
+    if tc.root == HISTORIC:
+        return adhesion_step_historic(tc, name)
+    return adhesion_step_port(tc, name)
 
 
 # Charge density. The workflow reads three densities on the same grid and in
@@ -1366,6 +1550,8 @@ for _name in PES_STEPS:
     CASES[f'pes_step_{_name}'] = (case_pes_step, {'name': _name})
 for _name in PLOTPES_STEPS:
     CASES[f'plotpes_step_{_name}'] = (case_plotpes_step, {'name': _name})
+for _name in ADHESION_STEPS:
+    CASES[f'adhesion_step_{_name}'] = (case_adhesion_step, {'name': _name})
 for _cell in CHARGE_CELLS:
     for _case, _func in (('chgcar_average', case_chgcar_average),
                          ('chgcar_displacement', case_chgcar_displacement),

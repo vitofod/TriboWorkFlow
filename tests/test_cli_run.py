@@ -6,11 +6,12 @@
 A run is the folder of its ``config.toml``; the system is the interface of
 its two slabs; the number of jobs per group comes from the command line,
 then from the settings, then from a question in a terminal, else an error;
-the steps come from the registry, with only ``match``, ``pes`` and ``pes_scf``
-in this version.
+the steps come from the registry, with only ``match``, ``pes``, ``pes_scf``, the
+two interpolations and ``adhesion`` in this version.
 """
 
 import io
+import re
 import shutil
 
 import pytest
@@ -84,13 +85,14 @@ def test_step_not_in_the_registry(tmp_path):
 
 
 def test_steps_in_the_registry(tmp_path):
+    from triboworkflow.workflows.interface.adhesion import AdhesionStep
     from triboworkflow.workflows.interface.match import MatchStep
     from triboworkflow.workflows.interface.pes import RelaxedPesStep, StaticPesStep
     from triboworkflow.workflows.interface.plotpes import RelaxedPlotPesStep, StaticPlotPesStep
-    names = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf')
+    names = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf', 'adhesion')
     assert {name: type(get_step(name)) for name in names} == {
         'match': MatchStep, 'pes': RelaxedPesStep, 'pes_scf': StaticPesStep,
-        'plotpes': RelaxedPlotPesStep, 'plotpes_scf': StaticPlotPesStep}
+        'plotpes': RelaxedPlotPesStep, 'plotpes_scf': StaticPlotPesStep, 'adhesion': AdhesionStep}
     # Only the interpolations are left to the user.
     assert [name for name in names if get_step(name).manual_analysis] == ['plotpes',
                                                                           'plotpes_scf']
@@ -101,6 +103,20 @@ def test_steps_in_the_registry(tmp_path):
                         name='plotpes')
     assert build_orchestrator(run_dir).order == ['match', 'pes', 'plotpes', 'pes_scf',
                                                  'plotpes_scf']
+
+
+def test_graph_of_the_run_follows_the_surface_of_the_adhesion(tmp_path, fake_steps):
+    run_dir = write_run(tmp_path, steps=('adhesion', 'pes_scf', 'pes', 'match'))
+    orch = build_orchestrator(run_dir)
+    assert orch.graph['adhesion'] == ('pes', 'match')
+    assert orch.order == ['match', 'pes_scf', 'pes', 'adhesion']
+    config = run_dir / CONFIG_FILE
+    config.write_text(re.sub(r'^pes = "pes"', 'pes = "pes_scf"', config.read_text(encoding='utf-8'),
+                             count=1, flags=re.M), encoding='utf-8')
+    orch = build_orchestrator(run_dir)
+    assert load_run(run_dir).interface.adhesion.pes == 'pes_scf'
+    assert orch.graph['adhesion'] == ('pes_scf', 'match')
+    assert orch.order == ['match', 'pes_scf', 'adhesion', 'pes']
 
 
 def test_daemon_factory_takes_the_groups_of_start(tmp_path, fake_steps):

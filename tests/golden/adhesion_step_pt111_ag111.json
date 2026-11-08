@@ -1,0 +1,5932 @@
+{
+ "inputs": {
+  "labels": [
+   "bot_slab",
+   "top_slab",
+   "interface_min",
+   "interface_max"
+  ],
+  "calc_types": [
+   "slab_pos_relax",
+   "slab_pos_relax",
+   "slab_pos_relax",
+   "interface_z_relax"
+  ],
+  "structures": [
+   {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.8769763692356762,
+       0.0,
+       -4.626530861952345e-16
+      ],
+      [
+       1.4384881846178377,
+       2.491534621845615,
+       -4.626530861952345e-16
+      ],
+      [
+       0.0,
+       0.0,
+       40.490413689
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.8769763692356762,
+     "b": 2.8769763692356767,
+     "c": 40.490413689,
+     "alpha": 90.00000000000001,
+     "beta": 90.00000000000001,
+     "gamma": 60.00000000000002,
+     "volume": 290.2387768185091
+    },
+    "properties": {},
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.33333333333333337,
+       0.3333333333333331,
+       -0.3082197738428283
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Pt",
+      "xyz": [
+       1.4384881846178377,
+       0.8305115406152045,
+       -12.479946150026139
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999994,
+       1.1102230246251568e-16,
+       -0.19481074583731903
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356745,
+       2.766159103823735e-16,
+       -7.887967690015683
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666663,
+       0.6666666666666671,
+       -0.2515152598400736
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356753,
+       1.6610230812304112,
+       -10.18395692002091
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333332,
+       0.33333333333333287,
+       -0.13810623183456452
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Pt",
+      "xyz": [
+       1.438488184617837,
+       0.8305115406152039,
+       -5.591978460010459
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       4.996003610813204e-16,
+       1.0,
+       -0.024697203829055193
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Pt",
+      "xyz": [
+       1.438488184617839,
+       2.491534621845615,
+       -1.0000000000000002
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666672,
+       0.6666666666666667,
+       -0.08140171783180986
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356776,
+       1.6610230812304103,
+       -3.2959892300052296
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        1.9883849999999998,
+        -1.988385,
+        -0.0
+       ],
+       [
+        2.220446049250313e-16,
+        1.988385,
+        -1.9883849999999998
+       ],
+       [
+        3.9767700000000006,
+        3.97677,
+        3.9767700000000006
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.8120010342192265,
+      "b": 2.8120010342192265,
+      "c": 6.887967690015685,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000000000001,
+      "volume": 47.168567294345806
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333333333333326,
+        0.6666666666666667,
+        0.33333333333333326
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.9883849999999996,
+        1.988385,
+        -2.220446049250313e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999998,
+        0.0,
+        6.195649072435257e-17
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.9883849999999996,
+        -1.9883849999999994,
+        2.463867136178836e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666663,
+        0.3333333333333336,
+        0.6666666666666666
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        3.9767699999999992,
+        1.9883850000000014,
+        1.9883849999999996
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0.16666666666666677,
+    "scale_factor": [
+     [
+      -1,
+      1,
+      0
+     ],
+     [
+      -1,
+      0,
+      1
+     ],
+     [
+      -1,
+      -1,
+      -1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.8769763692356762,
+       0.0,
+       -4.626530861952345e-16
+      ],
+      [
+       1.4384881846178377,
+       2.491534621845615,
+       -4.626530861952345e-16
+      ],
+      [
+       0.0,
+       0.0,
+       40.490413689
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.8769763692356762,
+     "b": 2.8769763692356767,
+     "c": 40.490413689,
+     "alpha": 90.00000000000001,
+     "beta": 90.00000000000001,
+     "gamma": 60.00000000000002,
+     "volume": 290.2387768185091
+    },
+    "properties": {},
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333327,
+       0.3333333333333342,
+       0.32132216871906993
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Ag",
+      "xyz": [
+       1.4384881846178375,
+       0.8305115406152073,
+       13.010467538881796
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999999,
+       3.3306690738754696e-16,
+       0.20267218276306434
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Ag",
+      "xyz": [
+       2.8769763692356762,
+       8.298477311471204e-16,
+       8.20628052332909
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666663,
+       0.6666666666666674,
+       0.26199717574106696
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Ag",
+      "xyz": [
+       2.876976369235676,
+       1.6610230812304119,
+       10.608374031105436
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333329,
+       0.3333333333333338,
+       0.1433471897850611
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Ag",
+      "xyz": [
+       1.4384881846178375,
+       0.8305115406152063,
+       5.80418701555272
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999994,
+       3.3306690738754696e-16,
+       0.024697203829055214
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Ag",
+      "xyz": [
+       2.876976369235675,
+       8.298477311471204e-16,
+       1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666661,
+       0.666666666666667,
+       0.08402219680705815
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Ag",
+      "xyz": [
+       2.8769763692356745,
+       1.6610230812304108,
+       3.402093507776359
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.0802739999999997,
+        -2.080274,
+        -0.0
+       ],
+       [
+        4.440892098500626e-16,
+        2.080274,
+        -2.080274
+       ],
+       [
+        4.160548000000001,
+        4.160548,
+        4.160548000000001
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.9419517042521277,
+      "b": 2.941951704252128,
+      "c": 7.206280523329078,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000000000001,
+      "volume": 54.01481261576888
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333333333333326,
+        0.6666666666666667,
+        0.33333333333333326
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Ag",
+       "xyz": [
+        2.080274,
+        2.080274,
+        -2.220446049250313e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        2.220446049250313e-16,
+        2.220446049250313e-16,
+        1.0
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Ag",
+       "xyz": [
+        4.160548000000002,
+        4.160548,
+        4.160548
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666665,
+        0.3333333333333335,
+        0.6666666666666667
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Ag",
+       "xyz": [
+        4.160548,
+        2.080274000000001,
+        2.0802740000000006
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0.16666666666666666,
+    "scale_factor": [
+     [
+      -1,
+      1,
+      0
+     ],
+     [
+      -1,
+      0,
+      1
+     ],
+     [
+      -1,
+      -1,
+      -1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.8769763692356762,
+       0.0,
+       -4.626530861952345e-16
+      ],
+      [
+       1.4384881846178377,
+       2.491534621845615,
+       -4.626530861952345e-16
+      ],
+      [
+       0.0,
+       0.0,
+       40.490413689
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.8769763692356762,
+     "b": 2.8769763692356767,
+     "c": 40.490413689,
+     "alpha": 90.00000000000001,
+     "beta": 90.00000000000001,
+     "gamma": 60.00000000000002,
+     "volume": 290.2387768185091
+    },
+    "properties": {},
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.33333333333333337,
+       0.3333333333333331,
+       -0.30821977384282834
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       1.4384881846178377,
+       0.8305115406152045,
+       -12.47994615002614
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999994,
+       1.1102230246251568e-16,
+       -0.19481074583731905
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356745,
+       2.766159103823735e-16,
+       -7.887967690015684
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666663,
+       0.6666666666666671,
+       -0.25151525984007367
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356753,
+       1.6610230812304112,
+       -10.183956920020911
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333332,
+       0.33333333333333287,
+       -0.13810623183456452
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       1.438488184617837,
+       0.8305115406152039,
+       -5.591978460010459
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       4.996003610813204e-16,
+       1.0,
+       -0.024697203829055193
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       1.438488184617839,
+       2.491534621845615,
+       -1.0000000000000002
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666672,
+       0.6666666666666667,
+       -0.08140171783180986
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356776,
+       1.6610230812304103,
+       -3.2959892300052296
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.0,
+       1.0000000000000007,
+       0.32132216871906993
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       4.315464553853515,
+       2.491534621845617,
+       13.010467538881795
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.6666666666666672,
+       0.6666666666666669,
+       0.20267218276306437
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       5.753952738471353,
+       1.6610230812304105,
+       8.20628052332909
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.3333333333333333,
+       1.333333333333334,
+       0.261997175741067
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       5.7539527384713525,
+       3.3220461624608215,
+       10.608374031105436
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.0000000000000002,
+       1.0000000000000004,
+       0.14334718978506114
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       4.315464553853515,
+       2.491534621845616,
+       5.80418701555272
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.6666666666666665,
+       0.6666666666666669,
+       0.02469720382905523
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       5.753952738471352,
+       1.6610230812304105,
+       1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.3333333333333333,
+       1.3333333333333333,
+       0.08402219680705818
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       5.753952738471352,
+       3.32204616246082,
+       3.4020935077763594
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        1.9883849999999998,
+        -1.988385,
+        -0.0
+       ],
+       [
+        2.220446049250313e-16,
+        1.988385,
+        -1.9883849999999998
+       ],
+       [
+        3.9767700000000006,
+        3.97677,
+        3.9767700000000006
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.8120010342192265,
+      "b": 2.8120010342192265,
+      "c": 6.887967690015685,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000000000001,
+      "volume": 47.168567294345806
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333333333333326,
+        0.6666666666666667,
+        0.33333333333333326
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.9883849999999996,
+        1.988385,
+        -2.220446049250313e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999998,
+        0.0,
+        6.195649072435257e-17
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.9883849999999996,
+        -1.9883849999999994,
+        2.463867136178836e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666663,
+        0.3333333333333336,
+        0.6666666666666666
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        3.9767699999999992,
+        1.9883850000000014,
+        1.9883849999999996
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0.16666666666666677,
+    "scale_factor": [
+     [
+      -1,
+      1,
+      0
+     ],
+     [
+      -1,
+      0,
+      1
+     ],
+     [
+      -1,
+      -1,
+      -1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.8769763692356762,
+       0.0,
+       -4.626530861952345e-16
+      ],
+      [
+       1.4384881846178377,
+       2.491534621845615,
+       -4.626530861952345e-16
+      ],
+      [
+       0.0,
+       0.0,
+       40.490413689
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.8769763692356762,
+     "b": 2.8769763692356767,
+     "c": 40.490413689,
+     "alpha": 90.00000000000001,
+     "beta": 90.00000000000001,
+     "gamma": 60.00000000000002,
+     "volume": 290.2387768185091
+    },
+    "properties": {},
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.33333333333333337,
+       0.3333333333333331,
+       -0.30821977384282834
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       1.4384881846178377,
+       0.8305115406152045,
+       -12.47994615002614
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999994,
+       1.1102230246251568e-16,
+       -0.19481074583731905
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356745,
+       2.766159103823735e-16,
+       -7.887967690015684
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666663,
+       0.6666666666666671,
+       -0.25151525984007367
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356753,
+       1.6610230812304112,
+       -10.183956920020911
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333332,
+       0.33333333333333287,
+       -0.13810623183456452
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       1.438488184617837,
+       0.8305115406152039,
+       -5.591978460010459
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       4.996003610813204e-16,
+       1.0,
+       -0.024697203829055193
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       1.438488184617839,
+       2.491534621845615,
+       -1.0000000000000002
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666672,
+       0.6666666666666667,
+       -0.08140171783180986
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356776,
+       1.6610230812304103,
+       -3.2959892300052296
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333317,
+       0.33333333333333454,
+       0.32132216871906993
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       1.438488184617835,
+       0.830511540615208,
+       13.010467538881796
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999988,
+       6.661338147750939e-16,
+       0.20267218276306434
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       2.8769763692356736,
+       1.6596954622942408e-15,
+       8.20628052332909
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666652,
+       0.6666666666666677,
+       0.26199717574106696
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       2.876976369235673,
+       1.6610230812304128,
+       10.608374031105436
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333319,
+       0.33333333333333415,
+       0.1433471897850611
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       1.4384881846178352,
+       0.830511540615207,
+       5.80418701555272
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999983,
+       6.661338147750939e-16,
+       0.024697203829055214
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       2.8769763692356722,
+       1.6596954622942408e-15,
+       1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.666666666666665,
+       0.6666666666666673,
+       0.08402219680705816
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       2.876976369235672,
+       1.6610230812304116,
+       3.4020935077763594
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        1.9883849999999998,
+        -1.988385,
+        -0.0
+       ],
+       [
+        2.220446049250313e-16,
+        1.988385,
+        -1.9883849999999998
+       ],
+       [
+        3.9767700000000006,
+        3.97677,
+        3.9767700000000006
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.8120010342192265,
+      "b": 2.8120010342192265,
+      "c": 6.887967690015685,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000000000001,
+      "volume": 47.168567294345806
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333333333333326,
+        0.6666666666666667,
+        0.33333333333333326
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.9883849999999996,
+        1.988385,
+        -2.220446049250313e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999998,
+        0.0,
+        6.195649072435257e-17
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.9883849999999996,
+        -1.9883849999999994,
+        2.463867136178836e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666663,
+        0.3333333333333336,
+        0.6666666666666666
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        3.9767699999999992,
+        1.9883850000000014,
+        1.9883849999999996
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0.16666666666666677,
+    "scale_factor": [
+     [
+      -1,
+      1,
+      0
+     ],
+     [
+      -1,
+      0,
+      1
+     ],
+     [
+      -1,
+      -1,
+      -1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   }
+  ],
+  "kpoints": [
+   {
+    "@module": "pymatgen.io.vasp.inputs",
+    "@class": "Kpoints",
+    "comment": "Automatic kpoint scheme",
+    "nkpoints": 0,
+    "generation_style": "Gamma",
+    "kpoints": [
+     [
+      15,
+      15,
+      1
+     ]
+    ],
+    "usershift": [
+     0,
+     0,
+     0
+    ],
+    "kpts_weights": null,
+    "coord_type": null,
+    "labels": null,
+    "tet_number": 0,
+    "tet_weight": 0,
+    "tet_connections": null
+   },
+   {
+    "@module": "pymatgen.io.vasp.inputs",
+    "@class": "Kpoints",
+    "comment": "Automatic kpoint scheme",
+    "nkpoints": 0,
+    "generation_style": "Gamma",
+    "kpoints": [
+     [
+      15,
+      15,
+      1
+     ]
+    ],
+    "usershift": [
+     0,
+     0,
+     0
+    ],
+    "kpts_weights": null,
+    "coord_type": null,
+    "labels": null,
+    "tet_number": 0,
+    "tet_weight": 0,
+    "tet_connections": null
+   },
+   {
+    "@module": "pymatgen.io.vasp.inputs",
+    "@class": "Kpoints",
+    "comment": "Automatic kpoint scheme",
+    "nkpoints": 0,
+    "generation_style": "Gamma",
+    "kpoints": [
+     [
+      15,
+      15,
+      1
+     ]
+    ],
+    "usershift": [
+     0,
+     0,
+     0
+    ],
+    "kpts_weights": null,
+    "coord_type": null,
+    "labels": null,
+    "tet_number": 0,
+    "tet_weight": 0,
+    "tet_connections": null
+   },
+   {
+    "@module": "pymatgen.io.vasp.inputs",
+    "@class": "Kpoints",
+    "comment": "Automatic kpoint scheme",
+    "nkpoints": 0,
+    "generation_style": "Gamma",
+    "kpoints": [
+     [
+      15,
+      15,
+      1
+     ]
+    ],
+    "usershift": [
+     0,
+     0,
+     0
+    ],
+    "kpts_weights": null,
+    "coord_type": null,
+    "labels": null,
+    "tet_number": 0,
+    "tet_weight": 0,
+    "tet_connections": null
+   }
+  ]
+ },
+ "calls": [
+  {
+   "call": "update_db",
+   "data": [
+    6,
+    6.696788213199273,
+    -1000.25,
+    -166.70833333333334,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "adhesion/bot_slab",
+    "adhesion/bot_slab",
+    "adhesion/bot_slab",
+    {
+     "@module": "pymatgen.core.surface",
+     "@class": "Slab",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.8769763692356762,
+        0.0,
+        -4.626530861952345e-16
+       ],
+       [
+        1.4384881846178377,
+        2.491534621845615,
+        -4.626530861952345e-16
+       ],
+       [
+        0.0,
+        0.0,
+        40.490413689
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.8769763692356762,
+      "b": 2.8769763692356767,
+      "c": 40.490413689,
+      "alpha": 90.00000000000001,
+      "beta": 90.00000000000001,
+      "gamma": 60.00000000000002,
+      "volume": 290.2387768185091
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333333333333337,
+        0.3333333333333331,
+        -0.3082197738428283
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab",
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Pt",
+       "xyz": [
+        1.4384881846178377,
+        0.8305115406152045,
+        -12.479946150026139
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999994,
+        1.1102230246251568e-16,
+        -0.19481074583731903
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab",
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Pt",
+       "xyz": [
+        2.8769763692356745,
+        2.766159103823735e-16,
+        -7.887967690015683
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666663,
+        0.6666666666666671,
+        -0.2515152598400736
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab",
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Pt",
+       "xyz": [
+        2.8769763692356753,
+        1.6610230812304112,
+        -10.18395692002091
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.3333333333333332,
+        0.33333333333333287,
+        -0.13810623183456452
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab",
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Pt",
+       "xyz": [
+        1.438488184617837,
+        0.8305115406152039,
+        -5.591978460010459
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        4.996003610813204e-16,
+        1.0,
+        -0.024697203829055193
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab",
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Pt",
+       "xyz": [
+        1.438488184617839,
+        2.491534621845615,
+        -1.0000000000000002
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666672,
+        0.6666666666666667,
+        -0.08140171783180986
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab",
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Pt",
+       "xyz": [
+        2.8769763692356776,
+        1.6610230812304103,
+        -3.2959892300052296
+       ]
+      }
+     ],
+     "oriented_unit_cell": {
+      "@module": "pymatgen.core.structure",
+      "@class": "Structure",
+      "charge": 0,
+      "lattice": {
+       "matrix": [
+        [
+         1.9883849999999998,
+         -1.988385,
+         -0.0
+        ],
+        [
+         2.220446049250313e-16,
+         1.988385,
+         -1.9883849999999998
+        ],
+        [
+         3.9767700000000006,
+         3.97677,
+         3.9767700000000006
+        ]
+       ],
+       "pbc": [
+        true,
+        true,
+        true
+       ],
+       "a": 2.8120010342192265,
+       "b": 2.8120010342192265,
+       "c": 6.887967690015685,
+       "alpha": 90.0,
+       "beta": 90.0,
+       "gamma": 120.00000000000001,
+       "volume": 47.168567294345806
+      },
+      "properties": {},
+      "sites": [
+       {
+        "species": [
+         {
+          "element": "Pt",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.33333333333333326,
+         0.6666666666666667,
+         0.33333333333333326
+        ],
+        "properties": {
+         "bulk_equivalent": 0,
+         "bulk_wyckoff": "a"
+        },
+        "label": "Pt",
+        "xyz": [
+         1.9883849999999996,
+         1.988385,
+         -2.220446049250313e-16
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Pt",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.9999999999999998,
+         0.0,
+         6.195649072435257e-17
+        ],
+        "properties": {
+         "bulk_equivalent": 0,
+         "bulk_wyckoff": "a"
+        },
+        "label": "Pt",
+        "xyz": [
+         1.9883849999999996,
+         -1.9883849999999994,
+         2.463867136178836e-16
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Pt",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.6666666666666663,
+         0.3333333333333336,
+         0.6666666666666666
+        ],
+        "properties": {
+         "bulk_equivalent": 0,
+         "bulk_wyckoff": "a"
+        },
+        "label": "Pt",
+        "xyz": [
+         3.9767699999999992,
+         1.9883850000000014,
+         1.9883849999999996
+        ]
+       }
+      ]
+     },
+     "miller_index": [
+      1,
+      1,
+      1
+     ],
+     "shift": 0.16666666666666677,
+     "scale_factor": [
+      [
+       -1,
+       1,
+       0
+      ],
+      [
+       -1,
+       0,
+       1
+      ],
+      [
+       -1,
+       -1,
+       -1
+      ]
+     ],
+     "reconstruction": null,
+     "energy": null
+    }
+   ],
+   "collection": "PBE.interface_elements",
+   "entry": [
+    [
+     "data",
+     "bot_slab",
+     "nsites"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "density"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "energy"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "energy_per_atom"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "bandgap"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "cbm"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "vbm"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "is_gap_direct"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "forces"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "stress"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "pseudo_potential"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "dir_name"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "task_id"
+    ],
+    [
+     "data",
+     "bot_slab",
+     "task_label"
+    ],
+    [
+     "structure",
+     "opt",
+     "regular",
+     "bot_slab"
+    ]
+   ],
+   "fltr": {
+    "mid": "mp-126_mp-124",
+    "formula": "Pt_Ag",
+    "name": "Pt111-Ag111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": [
+    6,
+    3.702868971002347,
+    -1008.5,
+    -168.08333333333334,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "adhesion/top_slab",
+    "adhesion/top_slab",
+    "adhesion/top_slab",
+    {
+     "@module": "pymatgen.core.surface",
+     "@class": "Slab",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.8769763692356762,
+        0.0,
+        -4.626530861952345e-16
+       ],
+       [
+        1.4384881846178377,
+        2.491534621845615,
+        -4.626530861952345e-16
+       ],
+       [
+        0.0,
+        0.0,
+        40.490413689
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.8769763692356762,
+      "b": 2.8769763692356767,
+      "c": 40.490413689,
+      "alpha": 90.00000000000001,
+      "beta": 90.00000000000001,
+      "gamma": 60.00000000000002,
+      "volume": 290.2387768185091
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.3333333333333327,
+        0.3333333333333342,
+        0.32132216871906993
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab",
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Ag",
+       "xyz": [
+        1.4384881846178375,
+        0.8305115406152073,
+        13.010467538881796
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999999,
+        3.3306690738754696e-16,
+        0.20267218276306434
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab",
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Ag",
+       "xyz": [
+        2.8769763692356762,
+        8.298477311471204e-16,
+        8.20628052332909
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666663,
+        0.6666666666666674,
+        0.26199717574106696
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab",
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Ag",
+       "xyz": [
+        2.876976369235676,
+        1.6610230812304119,
+        10.608374031105436
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.3333333333333329,
+        0.3333333333333338,
+        0.1433471897850611
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab",
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Ag",
+       "xyz": [
+        1.4384881846178375,
+        0.8305115406152063,
+        5.80418701555272
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999994,
+        3.3306690738754696e-16,
+        0.024697203829055214
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab",
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Ag",
+       "xyz": [
+        2.876976369235675,
+        8.298477311471204e-16,
+        1.0
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666661,
+        0.666666666666667,
+        0.08402219680705815
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab",
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ]
+       },
+       "label": "Ag",
+       "xyz": [
+        2.8769763692356745,
+        1.6610230812304108,
+        3.402093507776359
+       ]
+      }
+     ],
+     "oriented_unit_cell": {
+      "@module": "pymatgen.core.structure",
+      "@class": "Structure",
+      "charge": 0,
+      "lattice": {
+       "matrix": [
+        [
+         2.0802739999999997,
+         -2.080274,
+         -0.0
+        ],
+        [
+         4.440892098500626e-16,
+         2.080274,
+         -2.080274
+        ],
+        [
+         4.160548000000001,
+         4.160548,
+         4.160548000000001
+        ]
+       ],
+       "pbc": [
+        true,
+        true,
+        true
+       ],
+       "a": 2.9419517042521277,
+       "b": 2.941951704252128,
+       "c": 7.206280523329078,
+       "alpha": 90.0,
+       "beta": 90.0,
+       "gamma": 120.00000000000001,
+       "volume": 54.01481261576888
+      },
+      "properties": {},
+      "sites": [
+       {
+        "species": [
+         {
+          "element": "Ag",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.33333333333333326,
+         0.6666666666666667,
+         0.33333333333333326
+        ],
+        "properties": {
+         "bulk_equivalent": 0,
+         "bulk_wyckoff": "a"
+        },
+        "label": "Ag",
+        "xyz": [
+         2.080274,
+         2.080274,
+         -2.220446049250313e-16
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Ag",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         2.220446049250313e-16,
+         2.220446049250313e-16,
+         1.0
+        ],
+        "properties": {
+         "bulk_equivalent": 0,
+         "bulk_wyckoff": "a"
+        },
+        "label": "Ag",
+        "xyz": [
+         4.160548000000002,
+         4.160548,
+         4.160548
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Ag",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.6666666666666665,
+         0.3333333333333335,
+         0.6666666666666667
+        ],
+        "properties": {
+         "bulk_equivalent": 0,
+         "bulk_wyckoff": "a"
+        },
+        "label": "Ag",
+        "xyz": [
+         4.160548,
+         2.080274000000001,
+         2.0802740000000006
+        ]
+       }
+      ]
+     },
+     "miller_index": [
+      1,
+      1,
+      1
+     ],
+     "shift": 0.16666666666666666,
+     "scale_factor": [
+      [
+       -1,
+       1,
+       0
+      ],
+      [
+       -1,
+       0,
+       1
+      ],
+      [
+       -1,
+       -1,
+       -1
+      ]
+     ],
+     "reconstruction": null,
+     "energy": null
+    }
+   ],
+   "collection": "PBE.interface_elements",
+   "entry": [
+    [
+     "data",
+     "top_slab",
+     "nsites"
+    ],
+    [
+     "data",
+     "top_slab",
+     "density"
+    ],
+    [
+     "data",
+     "top_slab",
+     "energy"
+    ],
+    [
+     "data",
+     "top_slab",
+     "energy_per_atom"
+    ],
+    [
+     "data",
+     "top_slab",
+     "bandgap"
+    ],
+    [
+     "data",
+     "top_slab",
+     "cbm"
+    ],
+    [
+     "data",
+     "top_slab",
+     "vbm"
+    ],
+    [
+     "data",
+     "top_slab",
+     "is_gap_direct"
+    ],
+    [
+     "data",
+     "top_slab",
+     "forces"
+    ],
+    [
+     "data",
+     "top_slab",
+     "stress"
+    ],
+    [
+     "data",
+     "top_slab",
+     "pseudo_potential"
+    ],
+    [
+     "data",
+     "top_slab",
+     "dir_name"
+    ],
+    [
+     "data",
+     "top_slab",
+     "task_id"
+    ],
+    [
+     "data",
+     "top_slab",
+     "task_label"
+    ],
+    [
+     "structure",
+     "opt",
+     "regular",
+     "top_slab"
+    ]
+   ],
+   "fltr": {
+    "mid": "mp-126_mp-124",
+    "formula": "Pt_Ag",
+    "name": "Pt111-Ag111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": [
+    12,
+    10.39965718420162,
+    -2010.125,
+    -167.51041666666666,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "adhesion/interface_min",
+    "adhesion/interface_min",
+    "adhesion/interface_min",
+    {
+     "@module": "pymatgen.core.surface",
+     "@class": "Slab",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.8769763692356762,
+        0.0,
+        -4.626530861952345e-16
+       ],
+       [
+        1.4384881846178377,
+        2.491534621845615,
+        -4.626530861952345e-16
+       ],
+       [
+        0.0,
+        0.0,
+        40.490413689
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.8769763692356762,
+      "b": 2.8769763692356767,
+      "c": 40.490413689,
+      "alpha": 90.00000000000001,
+      "beta": 90.00000000000001,
+      "gamma": 60.00000000000002,
+      "volume": 290.2387768185091
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333333333333337,
+        0.3333333333333331,
+        -0.30821977384282834
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.4384881846178377,
+        0.8305115406152045,
+        -12.47994615002614
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999994,
+        1.1102230246251568e-16,
+        -0.19481074583731905
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab"
+       },
+       "label": "Pt",
+       "xyz": [
+        2.8769763692356745,
+        2.766159103823735e-16,
+        -7.887967690015684
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666663,
+        0.6666666666666671,
+        -0.25151525984007367
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab"
+       },
+       "label": "Pt",
+       "xyz": [
+        2.8769763692356753,
+        1.6610230812304112,
+        -10.183956920020911
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.3333333333333332,
+        0.33333333333333287,
+        -0.13810623183456452
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.438488184617837,
+        0.8305115406152039,
+        -5.591978460010459
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        4.996003610813204e-16,
+        1.0,
+        -0.024697203829055193
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.438488184617839,
+        2.491534621845615,
+        -1.0000000000000002
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666672,
+        0.6666666666666667,
+        -0.08140171783180986
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab"
+       },
+       "label": "Pt",
+       "xyz": [
+        2.8769763692356776,
+        1.6610230812304103,
+        -3.2959892300052296
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        1.0,
+        1.0000000000000007,
+        0.32132216871906993
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab"
+       },
+       "label": "Ag",
+       "xyz": [
+        4.315464553853515,
+        2.491534621845617,
+        13.010467538881795
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        1.6666666666666672,
+        0.6666666666666669,
+        0.20267218276306437
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab"
+       },
+       "label": "Ag",
+       "xyz": [
+        5.753952738471353,
+        1.6610230812304105,
+        8.20628052332909
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        1.3333333333333333,
+        1.333333333333334,
+        0.261997175741067
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab"
+       },
+       "label": "Ag",
+       "xyz": [
+        5.7539527384713525,
+        3.3220461624608215,
+        10.608374031105436
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        1.0000000000000002,
+        1.0000000000000004,
+        0.14334718978506114
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab"
+       },
+       "label": "Ag",
+       "xyz": [
+        4.315464553853515,
+        2.491534621845616,
+        5.80418701555272
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        1.6666666666666665,
+        0.6666666666666669,
+        0.02469720382905523
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab"
+       },
+       "label": "Ag",
+       "xyz": [
+        5.753952738471352,
+        1.6610230812304105,
+        1.0
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        1.3333333333333333,
+        1.3333333333333333,
+        0.08402219680705818
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         true,
+         true,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab"
+       },
+       "label": "Ag",
+       "xyz": [
+        5.753952738471352,
+        3.32204616246082,
+        3.4020935077763594
+       ]
+      }
+     ],
+     "oriented_unit_cell": {
+      "@module": "pymatgen.core.structure",
+      "@class": "Structure",
+      "charge": 0,
+      "lattice": {
+       "matrix": [
+        [
+         1.9883849999999998,
+         -1.988385,
+         -0.0
+        ],
+        [
+         2.220446049250313e-16,
+         1.988385,
+         -1.9883849999999998
+        ],
+        [
+         3.9767700000000006,
+         3.97677,
+         3.9767700000000006
+        ]
+       ],
+       "pbc": [
+        true,
+        true,
+        true
+       ],
+       "a": 2.8120010342192265,
+       "b": 2.8120010342192265,
+       "c": 6.887967690015685,
+       "alpha": 90.0,
+       "beta": 90.0,
+       "gamma": 120.00000000000001,
+       "volume": 47.168567294345806
+      },
+      "properties": {},
+      "sites": [
+       {
+        "species": [
+         {
+          "element": "Pt",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.33333333333333326,
+         0.6666666666666667,
+         0.33333333333333326
+        ],
+        "properties": {
+         "bulk_equivalent": 0,
+         "bulk_wyckoff": "a"
+        },
+        "label": "Pt",
+        "xyz": [
+         1.9883849999999996,
+         1.988385,
+         -2.220446049250313e-16
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Pt",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.9999999999999998,
+         0.0,
+         6.195649072435257e-17
+        ],
+        "properties": {
+         "bulk_equivalent": 0,
+         "bulk_wyckoff": "a"
+        },
+        "label": "Pt",
+        "xyz": [
+         1.9883849999999996,
+         -1.9883849999999994,
+         2.463867136178836e-16
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Pt",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.6666666666666663,
+         0.3333333333333336,
+         0.6666666666666666
+        ],
+        "properties": {
+         "bulk_equivalent": 0,
+         "bulk_wyckoff": "a"
+        },
+        "label": "Pt",
+        "xyz": [
+         3.9767699999999992,
+         1.9883850000000014,
+         1.9883849999999996
+        ]
+       }
+      ]
+     },
+     "miller_index": [
+      1,
+      1,
+      1
+     ],
+     "shift": 0.16666666666666677,
+     "scale_factor": [
+      [
+       -1,
+       1,
+       0
+      ],
+      [
+       -1,
+       0,
+       1
+      ],
+      [
+       -1,
+       -1,
+       -1
+      ]
+     ],
+     "reconstruction": null,
+     "energy": null
+    }
+   ],
+   "collection": "PBE.interface_elements",
+   "entry": [
+    [
+     "data",
+     "interface_min",
+     "nsites"
+    ],
+    [
+     "data",
+     "interface_min",
+     "density"
+    ],
+    [
+     "data",
+     "interface_min",
+     "energy"
+    ],
+    [
+     "data",
+     "interface_min",
+     "energy_per_atom"
+    ],
+    [
+     "data",
+     "interface_min",
+     "bandgap"
+    ],
+    [
+     "data",
+     "interface_min",
+     "cbm"
+    ],
+    [
+     "data",
+     "interface_min",
+     "vbm"
+    ],
+    [
+     "data",
+     "interface_min",
+     "is_gap_direct"
+    ],
+    [
+     "data",
+     "interface_min",
+     "forces"
+    ],
+    [
+     "data",
+     "interface_min",
+     "stress"
+    ],
+    [
+     "data",
+     "interface_min",
+     "pseudo_potential"
+    ],
+    [
+     "data",
+     "interface_min",
+     "dir_name"
+    ],
+    [
+     "data",
+     "interface_min",
+     "task_id"
+    ],
+    [
+     "data",
+     "interface_min",
+     "task_label"
+    ],
+    [
+     "structure",
+     "opt",
+     "regular",
+     "interface_min"
+    ]
+   ],
+   "fltr": {
+    "mid": "mp-126_mp-124",
+    "formula": "Pt_Ag",
+    "name": "Pt111-Ag111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": [
+    12,
+    10.39965718420162,
+    -2009.0,
+    -167.41666666666666,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "adhesion/interface_max",
+    "adhesion/interface_max",
+    "adhesion/interface_max",
+    {
+     "@module": "pymatgen.core.surface",
+     "@class": "Slab",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.8769763692356762,
+        0.0,
+        -4.626530861952345e-16
+       ],
+       [
+        1.4384881846178377,
+        2.491534621845615,
+        -4.626530861952345e-16
+       ],
+       [
+        0.0,
+        0.0,
+        40.490413689
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.8769763692356762,
+      "b": 2.8769763692356767,
+      "c": 40.490413689,
+      "alpha": 90.00000000000001,
+      "beta": 90.00000000000001,
+      "gamma": 60.00000000000002,
+      "volume": 290.2387768185091
+     },
+     "properties": {},
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333333333333337,
+        0.3333333333333331,
+        -0.30821977384282834
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.4384881846178377,
+        0.8305115406152045,
+        -12.47994615002614
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999994,
+        1.1102230246251568e-16,
+        -0.19481074583731905
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab"
+       },
+       "label": "Pt",
+       "xyz": [
+        2.8769763692356745,
+        2.766159103823735e-16,
+        -7.887967690015684
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666663,
+        0.6666666666666671,
+        -0.25151525984007367
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab"
+       },
+       "label": "Pt",
+       "xyz": [
+        2.8769763692356753,
+        1.6610230812304112,
+        -10.183956920020911
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.3333333333333332,
+        0.33333333333333287,
+        -0.13810623183456452
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.438488184617837,
+        0.8305115406152039,
+        -5.591978460010459
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        4.996003610813204e-16,
+        1.0,
+        -0.024697203829055193
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.438488184617839,
+        2.491534621845615,
+        -1.0000000000000002
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666672,
+        0.6666666666666667,
+        -0.08140171783180986
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "bot_slab"
+       },
+       "label": "Pt",
+       "xyz": [
+        2.8769763692356776,
+        1.6610230812304103,
+        -3.2959892300052296
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.3333333333333317,
+        0.33333333333333454,
+        0.32132216871906993
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab"
+       },
+       "label": "Ag",
+       "xyz": [
+        1.438488184617835,
+        0.830511540615208,
+        13.010467538881796
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999988,
+        6.661338147750939e-16,
+        0.20267218276306434
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab"
+       },
+       "label": "Ag",
+       "xyz": [
+        2.8769763692356736,
+        1.6596954622942408e-15,
+        8.20628052332909
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666652,
+        0.6666666666666677,
+        0.26199717574106696
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab"
+       },
+       "label": "Ag",
+       "xyz": [
+        2.876976369235673,
+        1.6610230812304128,
+        10.608374031105436
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.3333333333333319,
+        0.33333333333333415,
+        0.1433471897850611
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab"
+       },
+       "label": "Ag",
+       "xyz": [
+        1.4384881846178352,
+        0.830511540615207,
+        5.80418701555272
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999983,
+        6.661338147750939e-16,
+        0.024697203829055214
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab"
+       },
+       "label": "Ag",
+       "xyz": [
+        2.8769763692356722,
+        1.6596954622942408e-15,
+        1.0
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.666666666666665,
+        0.6666666666666673,
+        0.08402219680705816
+       ],
+       "properties": {
+        "bulk_wyckoff": "a",
+        "selective_dynamics": [
+         false,
+         false,
+         true
+        ],
+        "bulk_equivalent": 0,
+        "interface_region": "top_slab"
+       },
+       "label": "Ag",
+       "xyz": [
+        2.876976369235672,
+        1.6610230812304116,
+        3.4020935077763594
+       ]
+      }
+     ],
+     "oriented_unit_cell": {
+      "@module": "pymatgen.core.structure",
+      "@class": "Structure",
+      "charge": 0,
+      "lattice": {
+       "matrix": [
+        [
+         1.9883849999999998,
+         -1.988385,
+         -0.0
+        ],
+        [
+         2.220446049250313e-16,
+         1.988385,
+         -1.9883849999999998
+        ],
+        [
+         3.9767700000000006,
+         3.97677,
+         3.9767700000000006
+        ]
+       ],
+       "pbc": [
+        true,
+        true,
+        true
+       ],
+       "a": 2.8120010342192265,
+       "b": 2.8120010342192265,
+       "c": 6.887967690015685,
+       "alpha": 90.0,
+       "beta": 90.0,
+       "gamma": 120.00000000000001,
+       "volume": 47.168567294345806
+      },
+      "properties": {},
+      "sites": [
+       {
+        "species": [
+         {
+          "element": "Pt",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.33333333333333326,
+         0.6666666666666667,
+         0.33333333333333326
+        ],
+        "properties": {
+         "bulk_equivalent": 0,
+         "bulk_wyckoff": "a"
+        },
+        "label": "Pt",
+        "xyz": [
+         1.9883849999999996,
+         1.988385,
+         -2.220446049250313e-16
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Pt",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.9999999999999998,
+         0.0,
+         6.195649072435257e-17
+        ],
+        "properties": {
+         "bulk_equivalent": 0,
+         "bulk_wyckoff": "a"
+        },
+        "label": "Pt",
+        "xyz": [
+         1.9883849999999996,
+         -1.9883849999999994,
+         2.463867136178836e-16
+        ]
+       },
+       {
+        "species": [
+         {
+          "element": "Pt",
+          "occu": 1
+         }
+        ],
+        "abc": [
+         0.6666666666666663,
+         0.3333333333333336,
+         0.6666666666666666
+        ],
+        "properties": {
+         "bulk_equivalent": 0,
+         "bulk_wyckoff": "a"
+        },
+        "label": "Pt",
+        "xyz": [
+         3.9767699999999992,
+         1.9883850000000014,
+         1.9883849999999996
+        ]
+       }
+      ]
+     },
+     "miller_index": [
+      1,
+      1,
+      1
+     ],
+     "shift": 0.16666666666666677,
+     "scale_factor": [
+      [
+       -1,
+       1,
+       0
+      ],
+      [
+       -1,
+       0,
+       1
+      ],
+      [
+       -1,
+       -1,
+       -1
+      ]
+     ],
+     "reconstruction": null,
+     "energy": null
+    }
+   ],
+   "collection": "PBE.interface_elements",
+   "entry": [
+    [
+     "data",
+     "interface_max",
+     "nsites"
+    ],
+    [
+     "data",
+     "interface_max",
+     "density"
+    ],
+    [
+     "data",
+     "interface_max",
+     "energy"
+    ],
+    [
+     "data",
+     "interface_max",
+     "energy_per_atom"
+    ],
+    [
+     "data",
+     "interface_max",
+     "bandgap"
+    ],
+    [
+     "data",
+     "interface_max",
+     "cbm"
+    ],
+    [
+     "data",
+     "interface_max",
+     "vbm"
+    ],
+    [
+     "data",
+     "interface_max",
+     "is_gap_direct"
+    ],
+    [
+     "data",
+     "interface_max",
+     "forces"
+    ],
+    [
+     "data",
+     "interface_max",
+     "stress"
+    ],
+    [
+     "data",
+     "interface_max",
+     "pseudo_potential"
+    ],
+    [
+     "data",
+     "interface_max",
+     "dir_name"
+    ],
+    [
+     "data",
+     "interface_max",
+     "task_id"
+    ],
+    [
+     "data",
+     "interface_max",
+     "task_label"
+    ],
+    [
+     "structure",
+     "opt",
+     "regular",
+     "interface_max"
+    ]
+   ],
+   "fltr": {
+    "mid": "mp-126_mp-124",
+    "formula": "Pt_Ag",
+    "name": "Pt111-Ag111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.8769763692356762,
+       0.0,
+       -4.626530861952345e-16
+      ],
+      [
+       1.4384881846178377,
+       2.491534621845615,
+       -4.626530861952345e-16
+      ],
+      [
+       0.0,
+       0.0,
+       40.490413689
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.8769763692356762,
+     "b": 2.8769763692356767,
+     "c": 40.490413689,
+     "alpha": 90.00000000000001,
+     "beta": 90.00000000000001,
+     "gamma": 60.00000000000002,
+     "volume": 290.2387768185091
+    },
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.33333333333333337,
+       0.3333333333333331,
+       -0.3082197738428283
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Pt",
+      "xyz": [
+       1.4384881846178377,
+       0.8305115406152045,
+       -12.479946150026139
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999994,
+       1.1102230246251568e-16,
+       -0.19481074583731903
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356745,
+       2.766159103823735e-16,
+       -7.887967690015683
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666663,
+       0.6666666666666671,
+       -0.2515152598400736
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356753,
+       1.6610230812304112,
+       -10.18395692002091
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333332,
+       0.33333333333333287,
+       -0.13810623183456452
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Pt",
+      "xyz": [
+       1.438488184617837,
+       0.8305115406152039,
+       -5.591978460010459
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       4.996003610813204e-16,
+       1.0,
+       -0.024697203829055193
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Pt",
+      "xyz": [
+       1.438488184617839,
+       2.491534621845615,
+       -1.0000000000000002
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666672,
+       0.6666666666666667,
+       -0.08140171783180986
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356776,
+       1.6610230812304103,
+       -3.2959892300052296
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        1.9883849999999998,
+        -1.988385,
+        -0.0
+       ],
+       [
+        2.220446049250313e-16,
+        1.988385,
+        -1.9883849999999998
+       ],
+       [
+        3.9767700000000006,
+        3.97677,
+        3.9767700000000006
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.8120010342192265,
+      "b": 2.8120010342192265,
+      "c": 6.887967690015685,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000000000001,
+      "volume": 47.168567294345806
+     },
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333333333333326,
+        0.6666666666666667,
+        0.33333333333333326
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.9883849999999996,
+        1.988385,
+        -2.220446049250313e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999998,
+        0.0,
+        6.195649072435257e-17
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.9883849999999996,
+        -1.9883849999999994,
+        2.463867136178836e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666663,
+        0.3333333333333336,
+        0.6666666666666666
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        3.9767699999999992,
+        1.9883850000000014,
+        1.9883849999999996
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0.16666666666666677,
+    "scale_factor": [
+     [
+      -1,
+      1,
+      0
+     ],
+     [
+      -1,
+      0,
+      1
+     ],
+     [
+      -1,
+      -1,
+      -1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   "collection": "PBE.interface_elements",
+   "entry": [
+    "structure",
+    "opt",
+    "regular",
+    "bot_slab"
+   ],
+   "fltr": {
+    "mid": "mp-126_mp-124",
+    "formula": "Pt_Ag",
+    "name": "Pt111-Ag111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.8769763692356762,
+       0.0,
+       -4.626530861952345e-16
+      ],
+      [
+       1.4384881846178377,
+       2.491534621845615,
+       -4.626530861952345e-16
+      ],
+      [
+       0.0,
+       0.0,
+       40.490413689
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.8769763692356762,
+     "b": 2.8769763692356767,
+     "c": 40.490413689,
+     "alpha": 90.00000000000001,
+     "beta": 90.00000000000001,
+     "gamma": 60.00000000000002,
+     "volume": 290.2387768185091
+    },
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333327,
+       0.3333333333333342,
+       0.32132216871906993
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Ag",
+      "xyz": [
+       1.4384881846178375,
+       0.8305115406152073,
+       13.010467538881796
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999999,
+       3.3306690738754696e-16,
+       0.20267218276306434
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Ag",
+      "xyz": [
+       2.8769763692356762,
+       8.298477311471204e-16,
+       8.20628052332909
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666663,
+       0.6666666666666674,
+       0.26199717574106696
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Ag",
+      "xyz": [
+       2.876976369235676,
+       1.6610230812304119,
+       10.608374031105436
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333329,
+       0.3333333333333338,
+       0.1433471897850611
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Ag",
+      "xyz": [
+       1.4384881846178375,
+       0.8305115406152063,
+       5.80418701555272
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999994,
+       3.3306690738754696e-16,
+       0.024697203829055214
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Ag",
+      "xyz": [
+       2.876976369235675,
+       8.298477311471204e-16,
+       1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666661,
+       0.666666666666667,
+       0.08402219680705815
+      ],
+      "properties": {
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab",
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ]
+      },
+      "label": "Ag",
+      "xyz": [
+       2.8769763692356745,
+       1.6610230812304108,
+       3.402093507776359
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        2.0802739999999997,
+        -2.080274,
+        -0.0
+       ],
+       [
+        4.440892098500626e-16,
+        2.080274,
+        -2.080274
+       ],
+       [
+        4.160548000000001,
+        4.160548,
+        4.160548000000001
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.9419517042521277,
+      "b": 2.941951704252128,
+      "c": 7.206280523329078,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000000000001,
+      "volume": 54.01481261576888
+     },
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333333333333326,
+        0.6666666666666667,
+        0.33333333333333326
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Ag",
+       "xyz": [
+        2.080274,
+        2.080274,
+        -2.220446049250313e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        2.220446049250313e-16,
+        2.220446049250313e-16,
+        1.0
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Ag",
+       "xyz": [
+        4.160548000000002,
+        4.160548,
+        4.160548
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Ag",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666665,
+        0.3333333333333335,
+        0.6666666666666667
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Ag",
+       "xyz": [
+        4.160548,
+        2.080274000000001,
+        2.0802740000000006
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0.16666666666666666,
+    "scale_factor": [
+     [
+      -1,
+      1,
+      0
+     ],
+     [
+      -1,
+      0,
+      1
+     ],
+     [
+      -1,
+      -1,
+      -1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   "collection": "PBE.interface_elements",
+   "entry": [
+    "structure",
+    "opt",
+    "regular",
+    "top_slab"
+   ],
+   "fltr": {
+    "mid": "mp-126_mp-124",
+    "formula": "Pt_Ag",
+    "name": "Pt111-Ag111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.8769763692356762,
+       0.0,
+       -4.626530861952345e-16
+      ],
+      [
+       1.4384881846178377,
+       2.491534621845615,
+       -4.626530861952345e-16
+      ],
+      [
+       0.0,
+       0.0,
+       40.490413689
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.8769763692356762,
+     "b": 2.8769763692356767,
+     "c": 40.490413689,
+     "alpha": 90.00000000000001,
+     "beta": 90.00000000000001,
+     "gamma": 60.00000000000002,
+     "volume": 290.2387768185091
+    },
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.33333333333333337,
+       0.3333333333333331,
+       -0.30821977384282834
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       1.4384881846178377,
+       0.8305115406152045,
+       -12.47994615002614
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999994,
+       1.1102230246251568e-16,
+       -0.19481074583731905
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356745,
+       2.766159103823735e-16,
+       -7.887967690015684
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666663,
+       0.6666666666666671,
+       -0.25151525984007367
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356753,
+       1.6610230812304112,
+       -10.183956920020911
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333332,
+       0.33333333333333287,
+       -0.13810623183456452
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       1.438488184617837,
+       0.8305115406152039,
+       -5.591978460010459
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       4.996003610813204e-16,
+       1.0,
+       -0.024697203829055193
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       1.438488184617839,
+       2.491534621845615,
+       -1.0000000000000002
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666672,
+       0.6666666666666667,
+       -0.08140171783180986
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356776,
+       1.6610230812304103,
+       -3.2959892300052296
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.0,
+       1.0000000000000007,
+       0.32132216871906993
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       4.315464553853515,
+       2.491534621845617,
+       13.010467538881795
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.6666666666666672,
+       0.6666666666666669,
+       0.20267218276306437
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       5.753952738471353,
+       1.6610230812304105,
+       8.20628052332909
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.3333333333333333,
+       1.333333333333334,
+       0.261997175741067
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       5.7539527384713525,
+       3.3220461624608215,
+       10.608374031105436
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.0000000000000002,
+       1.0000000000000004,
+       0.14334718978506114
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       4.315464553853515,
+       2.491534621845616,
+       5.80418701555272
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.6666666666666665,
+       0.6666666666666669,
+       0.02469720382905523
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       5.753952738471352,
+       1.6610230812304105,
+       1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       1.3333333333333333,
+       1.3333333333333333,
+       0.08402219680705818
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        true,
+        true,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       5.753952738471352,
+       3.32204616246082,
+       3.4020935077763594
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        1.9883849999999998,
+        -1.988385,
+        -0.0
+       ],
+       [
+        2.220446049250313e-16,
+        1.988385,
+        -1.9883849999999998
+       ],
+       [
+        3.9767700000000006,
+        3.97677,
+        3.9767700000000006
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.8120010342192265,
+      "b": 2.8120010342192265,
+      "c": 6.887967690015685,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000000000001,
+      "volume": 47.168567294345806
+     },
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333333333333326,
+        0.6666666666666667,
+        0.33333333333333326
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.9883849999999996,
+        1.988385,
+        -2.220446049250313e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999998,
+        0.0,
+        6.195649072435257e-17
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.9883849999999996,
+        -1.9883849999999994,
+        2.463867136178836e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666663,
+        0.3333333333333336,
+        0.6666666666666666
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        3.9767699999999992,
+        1.9883850000000014,
+        1.9883849999999996
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0.16666666666666677,
+    "scale_factor": [
+     [
+      -1,
+      1,
+      0
+     ],
+     [
+      -1,
+      0,
+      1
+     ],
+     [
+      -1,
+      -1,
+      -1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   "collection": "PBE.interface_elements",
+   "entry": [
+    "structure",
+    "opt",
+    "regular",
+    "interface_min"
+   ],
+   "fltr": {
+    "mid": "mp-126_mp-124",
+    "formula": "Pt_Ag",
+    "name": "Pt111-Ag111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": {
+    "@module": "pymatgen.core.surface",
+    "@class": "Slab",
+    "charge": 0,
+    "lattice": {
+     "matrix": [
+      [
+       2.8769763692356762,
+       0.0,
+       -4.626530861952345e-16
+      ],
+      [
+       1.4384881846178377,
+       2.491534621845615,
+       -4.626530861952345e-16
+      ],
+      [
+       0.0,
+       0.0,
+       40.490413689
+      ]
+     ],
+     "pbc": [
+      true,
+      true,
+      true
+     ],
+     "a": 2.8769763692356762,
+     "b": 2.8769763692356767,
+     "c": 40.490413689,
+     "alpha": 90.00000000000001,
+     "beta": 90.00000000000001,
+     "gamma": 60.00000000000002,
+     "volume": 290.2387768185091
+    },
+    "sites": [
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.33333333333333337,
+       0.3333333333333331,
+       -0.30821977384282834
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       1.4384881846178377,
+       0.8305115406152045,
+       -12.47994615002614
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999994,
+       1.1102230246251568e-16,
+       -0.19481074583731905
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356745,
+       2.766159103823735e-16,
+       -7.887967690015684
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666663,
+       0.6666666666666671,
+       -0.25151525984007367
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356753,
+       1.6610230812304112,
+       -10.183956920020911
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333332,
+       0.33333333333333287,
+       -0.13810623183456452
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       1.438488184617837,
+       0.8305115406152039,
+       -5.591978460010459
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       4.996003610813204e-16,
+       1.0,
+       -0.024697203829055193
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       1.438488184617839,
+       2.491534621845615,
+       -1.0000000000000002
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Pt",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666672,
+       0.6666666666666667,
+       -0.08140171783180986
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "bot_slab"
+      },
+      "label": "Pt",
+      "xyz": [
+       2.8769763692356776,
+       1.6610230812304103,
+       -3.2959892300052296
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333317,
+       0.33333333333333454,
+       0.32132216871906993
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       1.438488184617835,
+       0.830511540615208,
+       13.010467538881796
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999988,
+       6.661338147750939e-16,
+       0.20267218276306434
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       2.8769763692356736,
+       1.6596954622942408e-15,
+       8.20628052332909
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.6666666666666652,
+       0.6666666666666677,
+       0.26199717574106696
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       2.876976369235673,
+       1.6610230812304128,
+       10.608374031105436
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.3333333333333319,
+       0.33333333333333415,
+       0.1433471897850611
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       1.4384881846178352,
+       0.830511540615207,
+       5.80418701555272
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.9999999999999983,
+       6.661338147750939e-16,
+       0.024697203829055214
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       2.8769763692356722,
+       1.6596954622942408e-15,
+       1.0
+      ]
+     },
+     {
+      "species": [
+       {
+        "element": "Ag",
+        "occu": 1
+       }
+      ],
+      "abc": [
+       0.666666666666665,
+       0.6666666666666673,
+       0.08402219680705816
+      ],
+      "properties": {
+       "bulk_wyckoff": "a",
+       "selective_dynamics": [
+        false,
+        false,
+        true
+       ],
+       "bulk_equivalent": 0,
+       "interface_region": "top_slab"
+      },
+      "label": "Ag",
+      "xyz": [
+       2.876976369235672,
+       1.6610230812304116,
+       3.4020935077763594
+      ]
+     }
+    ],
+    "oriented_unit_cell": {
+     "@module": "pymatgen.core.structure",
+     "@class": "Structure",
+     "charge": 0,
+     "lattice": {
+      "matrix": [
+       [
+        1.9883849999999998,
+        -1.988385,
+        -0.0
+       ],
+       [
+        2.220446049250313e-16,
+        1.988385,
+        -1.9883849999999998
+       ],
+       [
+        3.9767700000000006,
+        3.97677,
+        3.9767700000000006
+       ]
+      ],
+      "pbc": [
+       true,
+       true,
+       true
+      ],
+      "a": 2.8120010342192265,
+      "b": 2.8120010342192265,
+      "c": 6.887967690015685,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 120.00000000000001,
+      "volume": 47.168567294345806
+     },
+     "sites": [
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.33333333333333326,
+        0.6666666666666667,
+        0.33333333333333326
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.9883849999999996,
+        1.988385,
+        -2.220446049250313e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.9999999999999998,
+        0.0,
+        6.195649072435257e-17
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        1.9883849999999996,
+        -1.9883849999999994,
+        2.463867136178836e-16
+       ]
+      },
+      {
+       "species": [
+        {
+         "element": "Pt",
+         "occu": 1
+        }
+       ],
+       "abc": [
+        0.6666666666666663,
+        0.3333333333333336,
+        0.6666666666666666
+       ],
+       "properties": {
+        "bulk_equivalent": 0,
+        "bulk_wyckoff": "a"
+       },
+       "label": "Pt",
+       "xyz": [
+        3.9767699999999992,
+        1.9883850000000014,
+        1.9883849999999996
+       ]
+      }
+     ]
+    },
+    "miller_index": [
+     1,
+     1,
+     1
+    ],
+    "shift": 0.16666666666666677,
+    "scale_factor": [
+     [
+      -1,
+      1,
+      0
+     ],
+     [
+      -1,
+      0,
+      1
+     ],
+     [
+      -1,
+      -1,
+      -1
+     ]
+    ],
+    "reconstruction": null,
+    "energy": null
+   },
+   "collection": "PBE.interface_elements",
+   "entry": [
+    "structure",
+    "opt",
+    "regular",
+    "interface_max"
+   ],
+   "fltr": {
+    "mid": "mp-126_mp-124",
+    "formula": "Pt_Ag",
+    "name": "Pt111-Ag111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  },
+  {
+   "call": "update_db",
+   "data": {
+    "regular": {
+     "min_site": {
+      "adhesion_energy_ev": -1.375,
+      "adhesion_energy_jm2": -3.073334647676174
+     },
+     "max_site": {
+      "adhesion_energy_ev": -0.25,
+      "adhesion_energy_jm2": -0.5587881177593044
+     },
+     "corrugation_ev": 1.125,
+     "corrugation_jm2": 2.5145465299168697
+    }
+   },
+   "collection": "PBE.interface_elements",
+   "entry": "adhesion",
+   "fltr": {
+    "mid": "mp-126_mp-124",
+    "formula": "Pt_Ag",
+    "name": "Pt111-Ag111",
+    "miller": [
+     [
+      1,
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      1
+     ]
+    ]
+   },
+   "update_op": "$set",
+   "to_mongodb": true
+  }
+ ]
+}
