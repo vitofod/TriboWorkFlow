@@ -1,4 +1,4 @@
-# Interface workflow: steps `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `adhesion` and `ppes`
+# Interface workflow: steps `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `adhesion`, `ppes` and `charge`
 
 The interface workflow starts from two slabs, given in `[interface]` of the
 settings ([configuration.md](configuration.md)). Its first step, `match`,
@@ -10,8 +10,10 @@ interface from those points, relaxed along z and static; `plotpes` and
 `adhesion` computes the adhesion energy of the interface at the site of
 lowest and at the site of highest energy of one of the two surfaces; `ppes`
 computes the energy of the interface that `adhesion` relaxed as its two slabs
-move apart or closer along z. In this version these seven steps are
-available, so a run lists only them in `[interface].steps`:
+move apart or closer along z; `charge` computes the charge density of that
+interface and of its two slabs, and the charge displacement they give. In this
+version these eight steps are available, so a run lists only them in
+`[interface].steps`:
 
 ```bash
 triboworkflow analyse match
@@ -721,3 +723,197 @@ the operations on the structures, the translation of the atoms and the input set
 among them, are the original ones. Not ported: `override`, `run_vasp`, `get_main_folder`
 (A47), `FT_SaveVASPOutputs`, the other values of `ppes_type` and the figure and
 the csv of the PPES.
+
+## Step `charge`
+
+The charge displacement of an interface is the charge that the contact moves
+between its two slabs: the density of the interface minus those of its two
+slabs, computed in the same cell with the atoms where they are in the interface,
+averaged in the plane and integrated in the region between the slabs. The step
+starts from the interface that `adhesion` relaxed and runs three static pw.x
+calculations, each followed by pp.x, which writes the charge density of the
+calculation ([qe_charge.md](qe_charge.md)). It runs when listed in
+`[interface].steps`, and has its own commands:
+
+```bash
+triboworkflow prepare charge
+triboworkflow submit charge
+triboworkflow analyse charge
+```
+
+### Which interface
+
+The step waits for `adhesion` and, behind it, for its PES and `match`. One run
+covers one kind and one site, chosen as for `ppes`:
+
+| Setting | Chooses | Entry read |
+|---|---|---|
+| `type` of `[interface.adhesion]` (`regular` or `short`) | the kind of interface, the one that `adhesion` computed | `structure.opt.<type>.interface_min` or `.interface_max` |
+| `site` of `[interface.charge]` (`min_site` or `max_site`) | the interface at the site of lowest energy or of highest energy | `interface_min` for `min_site`, `interface_max` for `max_site` |
+
+The entry must be written by `adhesion` and current, otherwise the step is
+blocked with what is missing. To compute the other site, change `site` and run
+again: the calculations are named after the site, so they are other ones, and
+the results of the two sites stay side by side in the document. For the other
+kind make another run. The other setting of the table, `operations`, is the
+algebra of the three densities (*Analysis*).
+
+### Calculations
+
+Three calculations, `charge/<site>_interface`, `charge/<site>_bot_slab` and
+`charge/<site>_top_slab`: `charge/min_site_interface`. All are `scf`
+calculations (`calc_type` `slab_from_scratch`) of the same cell, none with atoms
+fixed, of the interface relaxed by `adhesion`, of its bottom slab and of its top
+slab, the slabs with their atoms where they are in the interface. The interface
+is first brought around z = 0, where the two slabs touch (the atoms beyond the
+middle of the cell lose one cell along z: the interface that comes back from a
+relaxation can have its bottom slab in the upper half of the cell), and the
+three structures are then moved by half a cell along z, without wrapping any
+atom, so that the contact plane is in the middle of the cell. The k-point grid
+is that of the interface for the three (`[k_points] mode = "kdens"` is
+required, and the same cell means the same grid), and the pw.x input is written
+as for every calculation of the workflow.
+
+Each calculation also gives its charge density: pp.x runs after pw.x in the same
+job and writes `density.filplot` ([qe_charge.md](qe_charge.md)). That needs
+`[execution] pp_command` and a `disk_io` with which pw.x writes the charge
+density, otherwise nothing is prepared and the error says so. A record of these
+calculations is complete only with the density `ok`.
+
+The two slabs are told by the slab each atom belongs to and not by the sign of
+z: the site property `interface_region` (`bot_slab` or `top_slab`) that `match`
+gives to every atom of an interface and that the pw.x adapter returns with the
+final structure, checked before any calculation is prepared as for `ppes`
+(*Step `ppes`*): the interface of the document must carry it, with the atoms,
+the species in order and the slab of each atom of the input of the calculation
+of the adhesion that gave it, which the record of that calculation keeps. A
+slab thicker than half the cell does not change the atoms of each fragment.
+Otherwise nothing is prepared and the step says why, with the same messages as
+`ppes`; in a run it is `failed`, with the message among its errors, and no job
+is submitted.
+
+The region between the slabs, where the density is integrated, is found from
+the interface around z = 0: from the highest atom below the contact plane to the
+lowest above it. That needs the contact plane at z = 0 once the interface is
+brought around it, as the interfaces of `match` have it. When an atom lies
+exactly at z = 0 (on neither side of the plane, where the original stops too),
+or the highest atom below it is not of the bottom slab, or the lowest above it
+is not of the top slab, or no atom lies on one side, the step stops, prepares
+nothing and says so:
+
+```text
+structure.opt.regular.interface_min: the contact plane of the slabs cannot be placed at z = 0 once the interface is brought around it (the highest atom below z = 0 (atom 10) is of the slab 'top_slab'; …): the region between the slabs cannot be told
+structure.opt.regular.interface_min: the contact plane of the slabs cannot be placed at z = 0 once the interface is brought around it (the plane z = 0 passes through the atoms 23, on neither side of it): the region between the slabs cannot be told
+```
+
+Results computed with other atoms in a fragment are not reused: the structure of
+a fragment changes with its atoms, and so does its fingerprint, so a step whose
+results were computed before is no longer done and `prepare charge --replace`
+computes it again.
+
+### Analysis
+
+`analyse charge`, or the orchestrator once the three calculations are completed,
+uses the results only when each calculation is complete with the fingerprint
+that the settings give now and its density is `ok`, the three share one energy
+model (engine, pseudopotentials, cutoffs, k-points, smearing, spin, vdW), and
+the three densities are on the same grid, in the same cell, from the same
+cutoffs: otherwise the step stops with the calculations or the differences at
+fault and writes nothing. Then it writes, with `<type>` the `type` of
+`[interface.adhesion]`, `<site>` the `site` of `[interface.charge]` and `<part>`
+one of `interface`, `bot_slab` and `top_slab`:
+
+| Entry of `system.json` | Content |
+|---|---|
+| `charge.<type>.data.<site>.<part>` | the results of the calculation (`nsites`, `density` in g/cm^3, `energy` and `energy_per_atom` in eV, `forces`, `stress`, `dir_name`, `task_id`, `task_label`; the keys that pw.x does not give are null) and its final `structure` |
+| `charge.<type>.average.<site>.<part>.<axis>` | `[x, density]` for the density averaged in the plane perpendicular to the axis `x`, `y` or `z`: `x` in angstrom, from the origin of the cell and, for z, from the contact plane (half a cell less), the density in e/angstrom^3 |
+| `charge.<type>.displacement.<site>.z.interface` | `integral` and `width`: the average of the absolute value of the planar average of the combined density in the region between the slabs, in e/angstrom^3 (the integral divided by the width), and the width of that region in angstrom |
+| `charge.<type>.displacement.<site>.z.all` | the same over the whole cell |
+| `charge.<type>.displacement.<site>.z.grid` | `[x, density]` of the combined density averaged in the plane, `x` as in the averages of z |
+| `charge.<type>.displacement.<site>.z.rescale` | 1000, the number of points of the integration |
+
+The combined density is that of the interface with the density of the bottom
+slab and then that of the top slab combined by the two `operations` of
+`[interface.charge]`, `"-"` and `"-"` by default: the interface minus the bottom
+slab minus the top slab. The integration range, the axis (z) and the number of
+points are not settings. The abscissa of the curves is `linspace(0, L, n)` for a
+grid of `n` points along a vector of length `L`, as in the original, although the
+points of a periodic grid are at `k L / n`. Everything is written together, at
+the end: when any part fails, nothing is written. The keys are fixed, so there
+is nothing to empty first. Each of the three entries (`data.<site>`,
+`average.<site>` and `displacement.<site>`) records its provenance: the
+parameters of the step (type, site, operations, `calc_type`, range of the
+integration, number of points, k-point density), the calculations with their
+fingerprints and the results used, the content of the interface read, and the
+digests of the three files of the densities, which the results of the records do
+not cover.
+
+The analysis reads three text files and works on arrays of their size: on a
+grid of 4 million points (100 x 100 x 400) it takes about 4 seconds and about
+0.5 GiB over what the process already held, measured on synthetic files; it runs
+in the orchestrator like the other steps with calculations, not by hand.
+
+### Message
+
+```text
+<system>: charge: <type> charge displacement at <site>: interface <op> bottom slab <op> top slab (slab_from_scratch)
+<system>: integral of the planar average of the difference, over the region of the interface (<width> angstrom): <integral> e/angstrom^3; over the cell: <integral> e/angstrom^3
+```
+
+What the code that builds the structures prints goes to the log at debug level
+only.
+
+### When the step runs again
+
+The step is done when its three entries exist and their provenance is the one
+that the settings, the calculations, the interface read and the files of the
+densities give now. It is not done, and its analysis stops with the steps to run
+first, when `adhesion`, the PES it reads or `match` is not done and current. It
+is not done either when a file of a density is gone or has changed.
+
+- Changing only `operations` computes nothing again: the fingerprints of the
+  calculations do not depend on it, so no calculation is prepared or submitted,
+  and the step only analyses the same results anew.
+- Changing `site` makes the step not done and asks for the three calculations of
+  the other site; those of the site left keep their results and entries.
+- Changing `kdens` or a parameter of the calculations (e.g. `ecutwfc`), or
+  analysing `adhesion` again (a new interface), changes the calculations
+  already prepared: `prepare charge` stops with the list and `prepare charge
+  --replace` prepares them again.
+- New results of a calculation, run again with the same input, make the step
+  run again at the next `analyse` or pass.
+
+Notes
+-----
+To remove: port of TribChem's `FT_StartChargeDisplacement` (with
+`FireTaskInterface.query_interface`), `ElectronicsWF.charge_displacement`,
+`generate_chargedisp_inputs`, the `FT_MoveTagResults` of its calculations,
+`FT_AverageCharge` and `FT_ChargeDisplacement`. The golden cases
+`charge_step_*` compare the structures, k-points and range of integration of
+the calculations and the database writes, the planar averages and the
+displacement included, with those of the Firetasks, on the lowest site of the
+relaxed PES, on the highest site with the interface wrapped into the cell and on
+the lowest site of the static PES with reduced slabs; the densities reach the
+original as CHGCAR files and the step as pp.x files, so the numbers of the
+analysis agree to the digits of the files (D32). Differences: DEV-35 (the k-point
+density from the settings, not from `comp_params` of the document), DEV-39 (the
+writes use the ids of the document of `match`), DEV-45 (the two fragments are the
+slabs, told by the slab each atom belongs to and checked against the input of the
+adhesion). TribChem took them with `decompose_structure`, by the sign of z once
+`fix_interface` had brought the atoms beyond half the cell below the origin: with
+the slab on top thicker than half the cell some of its atoms landed in the bottom
+fragment, so the density of the "slab" had an atom of another material and the
+difference did not remove the charge of the slabs, without an error (A92).
+`fix_interface` is still used to bring the interface around z = 0, as in the
+original; it moves atoms by a cell vector, which does not change a periodic
+calculation. The operations and the site came from the command line (`-op`,
+`-s`); the integration range (`integrate_in`), the axis and the number of points
+were not options, and an `integrate_in` given made the workflow fail (A32); the
+number of points is 1000 in `defaults.json` and 10000 in the signatures of the
+functions (A93). The type of the charge was an option independent of the
+adhesion in TribChem; here it is the one of `[interface.adhesion]`, and the
+charge of a site was skipped there once the other site was done (A59), where
+here "done" is the entries of the site with their provenance (D59). Not ported:
+`to_plot` (the figure), `override`, `run_vasp`, `get_main_folder` (A47),
+`FT_SaveVASPOutputs`, the `gunzip` and `rm` of the CHGCAR files and the
+analysis of `analyzer.py` (Q18, [qe_charge.md](qe_charge.md)).

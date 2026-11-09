@@ -80,6 +80,17 @@ site = "min_site"                  # Default: min_site or max_site, the interfac
 fit = "none"                       # Default: none (energies only) or uber (also g, in eV per cell,
                                    # and l, in angstrom, with their deviations).
 
+# Charge displacement (step charge): the charge density of the interface relaxed by
+# the adhesion (of the kind chosen in [interface.adhesion]) and of its two slabs, in
+# the same cell, computed by pp.x after each pw.x (it needs pp_command in [execution]
+# and [k_points] with mode = "kdens"). One site per run: change site and run again to
+# compute the other.
+[interface.charge]
+site = "min_site"                  # Default: min_site or max_site, the interface at the minimum
+                                   # or at the maximum of the surface.
+# operations = ["-", "-"]          # Default: the interface minus the bottom slab minus the top
+                                   # slab; each one "+" or "-". Changing them computes nothing again.
+
 [namelists.CONTROL]
 nstep = 150                        # Relax; recommended 150, at most 250. Raised by the relaunches.
 max_seconds = 84600                # Seconds; upper limit of the value set from the walltime left.

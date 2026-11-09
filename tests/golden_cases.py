@@ -170,11 +170,27 @@ def numbers_differ(a, b, tolerance):
     return not math.isclose(a, b, rel_tol=tolerance['rtol'], abs_tol=tolerance['atol'])
 
 
+def tolerated(tolerance, path):
+    """The tolerance that applies to the number at a path, or None for an exact comparison.
+
+    A tolerance with ``paths`` (regular expressions that match the whole path, such as
+    ``/calls/3/data/average/min_site/interface/z/1/7``) covers only the numbers at those paths;
+    without ``paths`` it covers every number.
+    """
+    if tolerance is None:
+        return None
+    patterns = tolerance.get('paths')
+    if patterns is None or any(re.fullmatch(pattern, path) for pattern in patterns):
+        return tolerance
+    return None
+
+
 def compare(expected, actual, tolerance=None, path=''):
     """Differences between two JSON data trees, as 'path: message' strings.
 
     Numbers must be equal; with tolerance = {'rtol': ..., 'atol': ...} floats
-    may differ within math.isclose. Integers and floats are told apart.
+    may differ within math.isclose, all of them or, when the tolerance has ``paths``, those at
+    these paths (``tolerated``). Integers and floats are told apart.
     """
     if isinstance(expected, dict) and isinstance(actual, dict):
         diffs = [f'{path}/{k}: missing' for k in expected if k not in actual]
@@ -194,7 +210,7 @@ def compare(expected, actual, tolerance=None, path=''):
         return [f'{path}: {actual!r} instead of {expected!r}']
     if isinstance(expected, (int, float)) and not isinstance(expected, bool):
         return [f'{path}: {actual!r} instead of {expected!r}'] \
-            if numbers_differ(expected, actual, tolerance) else []
+            if numbers_differ(expected, actual, tolerated(tolerance, path)) else []
     return [] if expected == actual else [f'{path}: {actual!r} instead of {expected!r}']
 
 
@@ -905,11 +921,12 @@ def pes_step_historic(tc, pair, step, short):
             'calls': calls}
 
 
-def port_settings(pair, mids, steps, short, adhesion=None, ppes=None):
+def port_settings(pair, mids, steps, short, adhesion=None, ppes=None, charge=None):
     """Settings of a run of the port on the slabs of a pair of MATCH_STEPS,
     written as JSON files in the current folder, with the parameters of the
     PES of the golden cases (distance, k-points of COMP_PARAMS, short slabs)
-    and, when given, [interface.adhesion] and [interface.ppes]."""
+    and, when given, [interface.adhesion], [interface.ppes] and
+    [interface.charge]."""
     import tomllib
 
     from triboworkflow.core.settings.loader import settings_from_dict
@@ -930,6 +947,8 @@ def port_settings(pair, mids, steps, short, adhesion=None, ppes=None):
         data['interface']['adhesion'] = dict(adhesion)
     if ppes is not None:
         data['interface']['ppes'] = dict(ppes)
+    if charge is not None:
+        data['interface']['charge'] = dict(charge)
     data['k_points'].update({'mode': 'kdens', 'kdens': float(COMP_PARAMS['kdens'])})
     return settings_from_dict(data)
 
@@ -1341,23 +1360,29 @@ def ppes_energy(shift):
             + 1e-4 * math.sin(40 * shift))
 
 
-def ppes_document(name):
+def adhered_document(pes_case, wrapped=False):
     """Document of the interface after match, the PES of the case and an adhesion
     of its kind: the interfaces at the lowest and at the highest site are the
-    interface of match moved by 0.01 and 0.02 angstrom along z."""
+    interface of match moved by 0.01 and 0.02 angstrom along z, with the atoms
+    wrapped back into the cell when ``wrapped`` (as an interface comes back from a
+    relaxation, with its bottom slab in the upper half of the cell)."""
     from monty.json import jsanitize
     from pymatgen.core.structure import Structure
-    pes_case = PPES_STEPS[name][0]
     kind = adhesion_kind(PES_STEPS[pes_case][2])
     document = plotpes_document(pes_case)
     base = Structure.from_dict(document['structure']['init']['interface'])
     for label, dz in (('interface_min', 0.01), ('interface_max', 0.02)):
         moved = base.copy()
         moved.translate_sites(list(range(len(moved))), [0.0, 0.0, dz], frac_coords=False,
-                              to_unit_cell=False)
+                              to_unit_cell=wrapped)
         mongo_set(document, jsanitize(moved.as_dict(), strict=False),
                   ['structure', 'opt', kind, label], True)
     return document
+
+
+def ppes_document(name):
+    """Document of the case ppes_step_<name>: ``adhered_document`` of its PES case."""
+    return adhered_document(PPES_STEPS[name][0])
 
 
 def ppes_inputs_data(labels, shifts, structures, kpoints):
@@ -1477,6 +1502,234 @@ def case_ppes_step(tc, name):
     if tc.root == HISTORIC:
         return ppes_step_historic(tc, name)
     return ppes_step_port(tc, name)
+
+
+# Step charge: FT_StartChargeDisplacement up to ElectronicsWF.charge_displacement as
+# TribChem's command line builds it (calc_interface.py:219-225), the FT_MoveTagResults of
+# the three calculations, FT_AverageCharge and FT_ChargeDisplacement (historic) against
+# charge_inputs and run_charge_analysis of the step (port), on the document after match,
+# the PES of the case and the adhesion of its kind. The adhesion is not run (adhered_document):
+# the interfaces are those of match moved along z, wrapped back into the cell in one case, as
+# an interface that comes back from a relaxation can be, so that fix_interface works; the port
+# also finds in the record of each the input it would have been relaxed from, which it checks
+# the slab of every atom against (DEV-45, the original needs no such record). The task
+# documents come from the case (pes_task_document), the same in both, with a dir_name that
+# the historic Firetasks read the CHGCAR of the calculation from. The densities are the same
+# in both: a Gaussian sheet of charge along the third vector of the cell for every atom,
+# with 0.4 electrons more at the contact plane in the interface, written in the CHGCAR of the
+# historic calculations (12 digits) and in the pp.x filplot of the port (10 digits), which
+# the port turns into its Chgcar: the numbers that come from the density agree to those
+# digits (D32, TOLERANCES of tests/test_golden.py, which lists them by path); the structures,
+# k-points, range, grids, abscissae, widths and entries agree exactly.
+# Cases: the lowest site of the relaxed PES (regular), the highest site with the interface
+# wrapped, and the lowest site of the static PES on reduced slabs (short).
+CHARGE_STEP_OPERATIONS = ['-', '-']
+CHARGE_STEP_LABELS = ('interface', 'bot_slab', 'top_slab')
+CHARGE_STEP_GRID = (4, 4, 80)
+CHARGE_STEP_VALENCE = {'Cu': 11.0, 'Al': 3.0}
+CHARGE_STEP_SIGMA = 0.6
+# (PES case of PES_STEPS, site, interface wrapped into the cell)
+CHARGE_STEPS = {
+    'cu111_al111': ('cu111_al111', 'min_site', False),
+    'cu111_al111_max_wrapped': ('cu111_al111', 'max_site', True),
+    'scf_short_cu111_al111': ('scf_short_cu111_al111', 'min_site', False),
+}
+
+
+def charge_step_density(structure, transfer=None):
+    """Toy density (e/A^3) of a structure, shape (n3, n2, n1): a Gaussian sheet for every atom.
+
+    Uniform in the plane, a Gaussian of CHARGE_STEP_SIGMA along the third vector of the cell,
+    integrating to the valence of the element; ``transfer`` is the position (fraction of the
+    third vector), the width (A) and the electrons of one more sheet, compensated by a uniform
+    background."""
+    n1, n2, n3 = CHARGE_STEP_GRID
+    c, volume = structure.lattice.c, structure.volume
+    area = volume / c
+    along = np.arange(n3) / n3
+
+    def sheet(position, sigma, electrons):
+        distance = ((along - position + 0.5) % 1.0 - 0.5) * c
+        g = np.exp(-0.5 * (distance / sigma) ** 2)
+        return electrons * g / (g.sum() * c / n3) / area
+
+    profile = np.zeros(n3)
+    for site in structure:
+        profile += sheet(site.frac_coords[2], CHARGE_STEP_SIGMA,
+                         CHARGE_STEP_VALENCE[site.specie.symbol])
+    if transfer is not None:
+        position, sigma, electrons = transfer
+        profile += sheet(position, sigma, electrons) - electrons / volume
+    return np.broadcast_to(profile[:, None, None], (n3, n2, n1)).copy()
+
+
+def charge_step_part_density(label, structure):
+    """Density of a calculation of the step: the interface has charge moved to its contact plane."""
+    return charge_step_density(structure, (0.5, 0.5, 0.4) if label == 'interface' else None)
+
+
+def charge_step_document(name):
+    """Document of the case charge_step_<name>: ``adhered_document`` of its PES case."""
+    pes_case, _, wrapped = CHARGE_STEPS[name]
+    return adhered_document(pes_case, wrapped)
+
+
+def charge_task_document(label, structure):
+    """Task document of the calculation of a part: ``pes_task_document``, with the directory
+    that the CHGCAR of the original is read from (``host:path``, here relative to the working
+    folder of the case)."""
+    calc_id = f'charge/{label}'
+    task = pes_task_document('charge', label, structure, -1000.0 - 0.1 * len(structure))
+    task['dir_name'] = f'golden:{calc_id}'
+    return task
+
+
+def charge_inputs_data(labels, structures, kpoints, integrate_in):
+    return {'labels': list(labels), 'structures': structures, 'kpoints': kpoints,
+            'integrate_in': [float(x) for x in integrate_in]}
+
+
+def write_step_chgcar(label_dir, label, structure):
+    """The CHGCAR of a calculation of the case, gzipped as VASP leaves it (the original
+    unzips it with ``gunzip --keep`` and removes it after each use)."""
+    import gzip
+    import itertools
+
+    import charge_files
+    symbols = [site.specie.symbol for site in structure]
+    runs = [(symbol, len(list(group))) for symbol, group in itertools.groupby(symbols)]
+    text = charge_files.chgcar_text(
+        lattice=structure.lattice.matrix, species=[symbol for symbol, _ in runs],
+        counts=[n for _, n in runs], frac=structure.frac_coords.tolist(),
+        values=charge_step_part_density(label, structure))
+    folder = Path(label_dir)
+    folder.mkdir(parents=True)
+    with gzip.open(folder / 'CHGCAR.gz', 'wb') as f:
+        f.write(text.encode())
+
+
+def charge_step_historic(tc, name):
+    """FT_StartChargeDisplacement up to ElectronicsWF.charge_displacement, then the
+    FT_MoveTagResults of the three calculations, FT_AverageCharge and
+    FT_ChargeDisplacement of its workflow, on a database emulated with TribChem's
+    prepare_data_to_update and the CHGCAR files of the case."""
+    run_ft = tc['highput.firetasks.run']
+    core = tc['highput.firetasks.core']
+    electronics = tc['highput.workflows.electronics'].ElectronicsWF
+    pes_case, site, _ = CHARGE_STEPS[name]
+    kind = adhesion_kind(PES_STEPS[pes_case][2])
+    document = charge_step_document(name)
+    tasks, calls = {}, []
+    query_db, update_db = emulated_database(tc, document, tasks, calls)
+    saved = core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db
+    core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db = query_db, update_db
+    try:
+        # calc_interface.py:219-225 (set_charge of the command line); the type of the charge
+        # is the one of the adhesion, the operations the default '[-, -]'
+        start = run_ft.FT_StartChargeDisplacement(
+            mid=document['mid'].split('_'), miller=document['miller'],
+            collection=MATCH_COLLECTION, operations=list(CHARGE_STEP_OPERATIONS), site=site,
+            check_entry=kind, db_file='golden')
+        params = start.read_runtask('StartChargeDisplacement', {})
+        params['main_folder'] = 'golden'  # get_main_folder reads the database directly (A47)
+        _, params = start.query_interface(params)
+        wf = start.run_func(electronics.charge_displacement, **params)
+        fw_tasks = [t for fw in wf.fws for t in fw.tasks]
+        run_vasp = next(t for t in fw_tasks if type(t).__name__ == 'FT_RunVaspOnTheFly')
+        displacement = next(t for t in fw_tasks if type(t).__name__ == 'FT_ChargeDisplacement')
+        for label, structure, tag in zip(CHARGE_STEP_LABELS, run_vasp['structure'],
+                                         run_vasp['tag']):
+            if f'_{label}_' not in tag:
+                raise AssertionError(f'{tag} is not the calculation {label}')
+            tasks[tag] = charge_task_document(f'{site}_{label}', structure)
+            write_step_chgcar(f'charge/{site}_{label}', label, structure)
+        for kind_of_task in ('FT_MoveTagResults', 'FT_AverageCharge', 'FT_ChargeDisplacement'):
+            for task in fw_tasks:
+                if type(task).__name__ == kind_of_task:
+                    task.run_task({})
+    finally:
+        core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db = saved
+    return {'inputs': charge_inputs_data([f'{site}_{label}' for label in CHARGE_STEP_LABELS],
+                                         run_vasp['structure'],
+                                         [v.kpoints for v in run_vasp['vis']],
+                                         displacement['integrate_in']),
+            'calls': calls}
+
+
+def charge_step_port(tc, name):
+    """charge_inputs of the step from settings and a run with the document after match, the
+    PES and the adhesion, then run_charge_analysis on a store that records the database
+    calls and gives the task documents, with the Chgcar of the pp.x file of every density."""
+    import charge_files
+    from triboworkflow.core.store import Engine, Record, SystemWriter, write_record
+    from triboworkflow.core.store.legacy import TASKS, LegacyStore
+    from triboworkflow.engines.qe import density
+    from triboworkflow.execution.layout import system_dir
+    from triboworkflow.workflows.interface import charge, ppes
+
+    dbtools = tc['highput.database.dbtools']
+    tasks = {}
+
+    class Recording(LegacyStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = []
+
+        def query_db(self, collection, *, entry=None, fltr=None):
+            if collection == TASKS:
+                field = copy.deepcopy(tasks[fltr['task_label']])
+                return field, dbtools.read_multiple_entry(field, entry)
+            return super().query_db(collection, entry=entry, fltr=fltr)
+
+        def update_db(self, data, collection, *, entry=None, fltr=None, update_op='$set',
+                      to_mongodb=True):
+            self.calls.append(update_call(data, collection, entry, fltr, update_op, to_mongodb))
+            super().update_db(data, collection, entry=entry, fltr=fltr, update_op=update_op,
+                              to_mongodb=to_mongodb)
+
+    pes_case, site, _ = CHARGE_STEPS[name]
+    pair, step, short = PES_STEPS[pes_case]
+    kind = adhesion_kind(short)
+    document = charge_step_document(name)
+    settings = port_settings(pair, document['mid'].split('_'), ['match', step, 'adhesion', 'charge'],
+                             short, adhesion={'pes': step, 'type': kind},
+                             charge={'site': site, 'operations': list(CHARGE_STEP_OPERATIONS)})
+    system = document['mid']
+    sdir = system_dir(Path('run'), system)
+    with SystemWriter(sdir) as writer:
+        writer.document.create(document)
+        writer.save()
+    # The step checks the slab of each atom against the input of the adhesion that gave the
+    # interface, which stays in the record of that calculation: here the interface of match,
+    # of which the interfaces of the document are the moved (and wrapped) copies.
+    for interface_label in ppes.INTERFACE_OF.values():
+        write_record(sdir, Record(
+            system=system, step='adhesion', label=interface_label, calc_type='slab_from_scratch',
+            engine=Engine('qe', 'pw.x'), energy_model={'ecutwfc': 40.0},
+            fingerprint='sha256:' + 'a' * 64,
+            results={'input': {'structure': document['structure']['init']['interface']}}))
+    inputs = charge.charge_inputs(Path('run'), system, settings)
+    chgcars = []
+    for label, part, structure, _ in inputs.points:
+        tasks[f'charge/{label}'] = charge_task_document(label, structure)
+        values = charge_step_part_density(part, structure) * charge_files.BOHR_TO_ANGSTROM ** 3
+        text = charge_files.structure_filplot(structure, grid=CHARGE_STEP_GRID, values=values)
+        chgcars.append(density.to_chgcar(density.parse_filplot(text), structure))
+    with SystemWriter(sdir) as writer:
+        store = Recording(sdir, writer.document, charge.COLLECTION)
+        charge.run_charge_analysis(inputs, store, [f'charge/{p[0]}' for p in inputs.points],
+                                   chgcars)
+    return {'inputs': charge_inputs_data([p[0] for p in inputs.points],
+                                         [p[2] for p in inputs.points],
+                                         [p[3] for p in inputs.points], inputs.integrate_in),
+            'calls': store.calls}
+
+
+def case_charge_step(tc, name):
+    """Calculations and database writes of the step charge."""
+    if tc.root == HISTORIC:
+        return charge_step_historic(tc, name)
+    return charge_step_port(tc, name)
 
 
 # Charge density. The workflow reads three densities on the same grid and in
@@ -1729,6 +1982,8 @@ for _name in ADHESION_STEPS:
     CASES[f'adhesion_step_{_name}'] = (case_adhesion_step, {'name': _name})
 for _name in PPES_STEPS:
     CASES[f'ppes_step_{_name}'] = (case_ppes_step, {'name': _name})
+for _name in CHARGE_STEPS:
+    CASES[f'charge_step_{_name}'] = (case_charge_step, {'name': _name})
 for _cell in CHARGE_CELLS:
     for _case, _func in (('chgcar_average', case_chgcar_average),
                          ('chgcar_displacement', case_chgcar_displacement),

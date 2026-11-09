@@ -16,10 +16,11 @@ import pytest
 
 from triboworkflow.core.settings import (Settings, SettingsError, load_settings,
                                          settings_from_dict, validate)
-from triboworkflow.core.settings.schema import (INTER_PARAMS_DEFAULTS, INTERFACE_STEPS,
+from triboworkflow.core.settings.schema import (CHARGE_OPERATIONS, CHARGE_SITES,
+                                                INTER_PARAMS_DEFAULTS, INTERFACE_STEPS,
                                                 PPES_SHIFTS, AdhesionParams, AnalysisParams,
-                                                GenerationParams, InterParams, PesScfParams,
-                                                PpesParams, key_name)
+                                                ChargeParams, GenerationParams, InterParams,
+                                                PesScfParams, PpesParams, key_name)
 from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
 from triboworkflow.vendored.highput.utils.tasktools import read_default_params
 
@@ -409,6 +410,38 @@ def test_ppes_does_not_change_the_other_tables():
     assert settings.interface.engine_for('ppes') == 'qe'
 
 
+def test_charge_defaults_are_the_command_line_of_the_original_workflow():
+    # The minimum site and the operations '[-, -]' of the command line: interface minus the
+    # bottom slab minus the top slab.
+    default = ChargeParams(site='min_site', operations=['-', '-'])
+    assert (CHARGE_SITES, CHARGE_OPERATIONS) == (('min_site', 'max_site'), ('+', '-'))
+    assert settings_from_dict(WORKFLOW).interface.charge == default
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.charge': DELETE}))
+    assert settings.interface.charge == default
+    # The defaults of a table are not shared between the runs.
+    assert ChargeParams().operations == ['-', '-']
+    assert ChargeParams().operations is not ChargeParams().operations
+
+
+@pytest.mark.parametrize('edits, expected', [
+    ({'interface.charge.site': 'max_site'}, ChargeParams(site='max_site', operations=['-', '-'])),
+    ({'interface.charge.operations': ['+', '-']},
+     ChargeParams(site='min_site', operations=['+', '-'])),
+    ({'interface.charge.site': 'max_site', 'interface.charge.operations': ['-', '+']},
+     ChargeParams(site='max_site', operations=['-', '+'])),
+])
+def test_charge_choices_allowed(edits, expected):
+    assert settings_from_dict(edited(WORKFLOW, edits)).interface.charge == expected
+
+
+def test_charge_does_not_change_the_other_tables():
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.charge.site': 'max_site'}))
+    reference = settings_from_dict(WORKFLOW)
+    assert settings.interface.adhesion == reference.interface.adhesion
+    assert settings.interface.ppes == reference.interface.ppes
+    assert settings.interface.engine_for('charge') == 'qe'
+
+
 def test_groups_optional():
     assert settings_from_dict(edited(WORKFLOW, {'execution.groups': DELETE})).execution.groups is None
 
@@ -667,6 +700,34 @@ ERRORS = [
      'expected a list of float, got 0.5'),
     ('ppes-key', W, {'interface.ppes.type': 'short'}, 'interface.ppes.type',
      'allowed keys: site, shifts, fit'),
+    # [interface.charge]: one site, the two operations of the algebra of the three densities.
+    ('charge-site', W, {'interface.charge.site': 'both'}, 'interface.charge.site',
+     "'both' is not allowed; allowed values: 'min_site', 'max_site'"),
+    ('charge-site-number', W, {'interface.charge.site': 1}, 'interface.charge.site',
+     'expected str, got 1'),
+    ('charge-operations-one', W, {'interface.charge.operations': ['-']},
+     'interface.charge.operations', "give two operations, one between the interface and the "
+     "bottom slab and one with the top slab; got ['-']"),
+    ('charge-operations-three', W, {'interface.charge.operations': ['-', '-', '-']},
+     'interface.charge.operations', 'give two operations'),
+    ('charge-operations-empty', W, {'interface.charge.operations': []},
+     'interface.charge.operations', 'give two operations'),
+    ('charge-operation-other', W, {'interface.charge.operations': ['-', '*']},
+     'interface.charge.operations[1]', "'*' is not allowed; allowed values: '+', '-'"),
+    ('charge-operation-both', W, {'interface.charge.operations': ['+-', '-']},
+     'interface.charge.operations[0]', "'+-' is not allowed; allowed values: '+', '-'"),
+    ('charge-operations-text', W, {'interface.charge.operations': '[-, -]'},
+     'interface.charge.operations', 'expected a list of str'),
+    ('charge-operations-number', W, {'interface.charge.operations': ['-', 1]},
+     'interface.charge.operations', 'expected a list of str'),
+    # The integration range, the axis and the number of points are the ones of the original
+    # command line: they are not settings.
+    ('charge-integrate-in', W, {'interface.charge.integrate_in': [8.0, 10.0]},
+     'interface.charge.integrate_in', 'allowed keys: site, operations'),
+    ('charge-rescale', W, {'interface.charge.rescale': 10000}, 'interface.charge.rescale',
+     'allowed keys: site, operations'),
+    ('charge-type', W, {'interface.charge.type': 'short'}, 'interface.charge.type',
+     'allowed keys: site, operations'),
     # [qe]
     ('qe-version', W, {'qe.version': '7.2MaX'}, 'qe.version',
      "'7.2MaX' is not a version of pw.x: give major.minor or major.minor.patch"),

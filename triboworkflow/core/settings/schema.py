@@ -96,6 +96,14 @@ ADHESION_TYPES = ('regular', 'short')
 PPES_SITES = ('min_site', 'max_site')
 PPES_FITS = ('none', 'uber')
 PPES_SHIFTS = (-0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.75, 3.0)
+# Sites of the surface that the step charge can start from and the operations that combine the
+# densities of the interface and of its two slabs, as in [interface.charge]: by default the
+# interface minus the bottom slab minus the top slab.
+# To remove: TribChem's command line passed the operations as the text '[-, -]' (-op,
+# entrypoints/parsers/utils.py:753-757) and the code accepted any text that contains '+' or '-'.
+CHARGE_SITES = ('min_site', 'max_site')
+CHARGE_OPERATIONS = ('+', '-')
+CHARGE_OPERATIONS_DEFAULT = ('-', '-')
 
 # &CONTROL keys of a single calculation: in the workflow the code sets them
 # for every calculation (own prefix and outdir, calculation from calc_type).
@@ -902,6 +910,52 @@ class PpesParams:
 
 
 @dataclass
+class ChargeParams:
+    """``[interface.charge]``: the site and the operations of the charge displacement.
+
+    The step ``charge`` computes the charge density of the interface relaxed by the
+    step ``adhesion`` and of its two slabs, in the same cell and with the atoms where
+    they are in the interface, and integrates the difference between them in the
+    region of the interface. The kind of interface (``regular`` or ``short``) is the
+    one of ``[interface.adhesion]``. One site holds for the whole run: to compute the
+    other, change ``site`` and run again; the results of the two sites live side by
+    side. The range of integration, the axis (z) and the number of points of the
+    integration are not settings.
+
+    Attributes
+    ----------
+    site : str
+        ``min_site`` (default) or ``max_site``: the interface relaxed at the minimum
+        or at the maximum of the surface.
+    operations : list of str
+        Two operations, ``+`` or ``-``, that combine the density of the interface
+        with those of the bottom slab and of the top slab, in this order: ``['-',
+        '-']`` (default) is interface minus bottom slab minus top slab. Changing them
+        computes nothing again: the calculations are the same.
+
+    Notes
+    -----
+    To remove: TribChem's command line passed ``operations`` as the text ``'[-, -]'``
+    (``-op``) and the site as ``-s``; it passed neither the integration range
+    (``integrate_in``, which the workflow estimates from the interface and which
+    fails if it is given, A32) nor the axis nor ``rescale``.
+    """
+
+    site: str = 'min_site'
+    operations: list[str] = field(default_factory=lambda: list(CHARGE_OPERATIONS_DEFAULT))
+
+    def check(self, path):
+        """Validate the table; errors name ``path``."""
+        _choice(f'{path}.site', self.site, CHARGE_SITES)
+        if len(self.operations) != 2:
+            raise SettingsError(f'{path}.operations', 'give two operations, one between the '
+                                'interface and the bottom slab and one with the top slab; got '
+                                f'{self.operations}')
+        for i, operation in enumerate(self.operations):
+            _choice(f'{path}.operations[{i}]', operation, CHARGE_OPERATIONS)
+
+
+@dataclass
 class InterfaceParams:
     """``[interface]``: inputs of the interface workflow.
 
@@ -929,6 +983,8 @@ class InterfaceParams:
         Surface and slabs of the step ``adhesion``.
     ppes : PpesParams
         Site, shifts and fit of the step ``ppes``.
+    charge : ChargeParams
+        Site and operations of the step ``charge``.
     """
 
     slabs: list[SlabParams]
@@ -940,6 +996,7 @@ class InterfaceParams:
     pes_scf: PesScfParams = field(default_factory=PesScfParams)
     adhesion: AdhesionParams = field(default_factory=AdhesionParams)
     ppes: PpesParams = field(default_factory=PpesParams)
+    charge: ChargeParams = field(default_factory=ChargeParams)
 
     def engine_for(self, step):
         """Engine of a step that runs calculations.

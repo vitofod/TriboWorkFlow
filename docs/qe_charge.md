@@ -172,6 +172,44 @@ difference:
   for any difference of energies (`core.store.check_energy_model`,
   [store.md](store.md)).
 
+## The analysis of the step `charge`
+
+The step `charge` ([interface.md](interface.md)) asks for the density of the
+interface and of its two slabs (the calculations above), reads the file of the
+last attempt of each (`density.filplot` of `density.density.path`, with the
+final structure `structure_out.extxyz` next to it), checks that the three can be
+combined (`check_comparable`, with the records) and turns each into a `Chgcar`
+(`to_chgcar`). It averages the density in the plane, combines the three by the
+operations of `[interface.charge]` (the interface minus the bottom slab minus
+the top slab by default), takes the absolute value of the planar average of the
+result and integrates it in the region between the slabs, divided by the width
+of the region, and over the whole cell (`chgcar_integrator`). The abscissa of
+the curves is `linspace(0, L, n)` for a grid of `n` points along a vector of
+length `L`, although the points of a periodic grid are at `k L / n`; the
+integral is computed on 1000 points.
+
+Only this analysis enters the step. The module `analyzer` of the vendored code
+has another one, `QEChargeAnalyzer` and `QEChargeProcessor`, which reads the same
+file of pp.x and is not used by the step.
+
+To remove: the two analyses of TribChem differ in what they divide by. The
+Firetasks of the charge displacement use only `chgcar_integrator`: the integral
+of the absolute value of the planar average over the region of the interface,
+divided by its width. `analyzer.py` is used by a script and its tests, not by
+the workflow, and `QEChargeProcessor` divides the profile of each file by the
+mean valence of its own file (7 for the interface, 11 for Cu and 3 for Al in the
+golden cases) before subtracting, so that the subtraction does not remove the
+charge of the slabs (A70). On the synthetic cell of the golden cases
+(orthorhombic, Cu and Al layers, 2.4 angstrom between the slabs) the density
+averaged in the region of the interface comes out as 0.02686 e/Å³ with
+`chgcar_integrator` (`chgcar_displacement_orthorhombic`), 0.0301 with
+`QEChargeProcessor` and 0.003772 per unit of valence, 0.0264 once multiplied by
+the valence of 7, with the difference of two `QEChargeAnalyzer` objects
+(`qecharge_processor_orthorhombic`). The numbers tell that the two analyses give
+different values, not which one is the more apt: the step uses
+`chgcar_integrator`, as TribChem's workflow does (Q18, D59), and the choice
+between the two is a question for those who use the quantity.
+
 ## Tests
 
 `tests/test_qe_density.py` uses synthetic files written in the formats of
@@ -184,4 +222,5 @@ folder of the pp.x example of QE (`PP/examples/example01`, never stored in the
 repository), it also reads `reference/sicharge` (silicon, `ibrav = 2`, 20³
 points, 8 electrons). The golden cases `chgcar_*` and `qecharge_*` of
 `tests/golden_cases.py` characterise the charge analysis on files of the
-same kind.
+same kind; `tests/test_charge.py` and the golden cases `charge_step_*` the step
+that uses it.

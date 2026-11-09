@@ -86,15 +86,16 @@ def test_step_not_in_the_registry(tmp_path):
 
 def test_steps_in_the_registry(tmp_path):
     from triboworkflow.workflows.interface.adhesion import AdhesionStep
+    from triboworkflow.workflows.interface.charge import ChargeStep
     from triboworkflow.workflows.interface.match import MatchStep
     from triboworkflow.workflows.interface.pes import RelaxedPesStep, StaticPesStep
     from triboworkflow.workflows.interface.plotpes import RelaxedPlotPesStep, StaticPlotPesStep
     from triboworkflow.workflows.interface.ppes import PpesStep
-    names = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf', 'adhesion', 'ppes')
+    names = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf', 'adhesion', 'ppes', 'charge')
     assert {name: type(get_step(name)) for name in names} == {
         'match': MatchStep, 'pes': RelaxedPesStep, 'pes_scf': StaticPesStep,
         'plotpes': RelaxedPlotPesStep, 'plotpes_scf': StaticPlotPesStep, 'adhesion': AdhesionStep,
-        'ppes': PpesStep}
+        'ppes': PpesStep, 'charge': ChargeStep}
     # Only the interpolations are left to the user.
     assert [name for name in names if get_step(name).manual_analysis] == ['plotpes',
                                                                           'plotpes_scf']

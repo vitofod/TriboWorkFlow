@@ -483,3 +483,31 @@ passed `fit`, so `FT_StartPPES` ran no fit (A88): here too `"none"` is the
 default, and `"uber"` has to be asked for. In `fit_ppes` only `"uber"` works:
 `"uber0"` raises an error (A06) and any other name too (A89), so they are
 refused when the settings are read, not after the calculations.
+
+`[interface.charge]`: the site and the operations of the charge displacement
+(step `charge`, [interface.md](interface.md)); other keys are errors. One site
+for the whole run. There is no `type`: the kind of interface, `regular` or
+`short`, is the `type` of `[interface.adhesion]`, since the step starts from
+the interface that `adhesion` of that kind relaxed. The step needs
+`[execution] pp_command` and `[k_points]` with `mode = "kdens"`
+([qe_charge.md](qe_charge.md)).
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `site` | str | `"min_site"` | `"min_site"` or `"max_site"`: the interface relaxed at the site of lowest or of highest energy of the surface chosen in `[interface.adhesion]`. To compute the other site, change `site` and run again: the calculations are named after the site and the results of the two sites stay side by side |
+| `operations` | 2 str | `["-", "-"]` | `"+"` or `"-"` each: the density of the interface combined with that of the bottom slab and then with that of the top slab, so the default is interface − bottom slab − top slab. Any other text, and any number of operations but two, is an error. Changing them computes nothing again: the calculations are the same, and the step only analyses them anew |
+
+The integration range, the axis and the number of points are not settings.
+The range is the region between the two slabs, estimated from the interface;
+the axis is z; the integral is computed on 1000 points. The step runs three
+`scf` calculations in the same cell, each with its charge density: the
+interface and, with the atoms where they are in the interface, its bottom and
+its top slab.
+
+To remove: TribChem's command line passed the operations as the text
+`'[-, -]'` (`-op`) and the site (`-s`, default `min_site`), and nothing more:
+the integration range is always estimated (a range given by the user makes the
+workflow fail, A32), the axis is 2 and the number of points is 1000, which
+`defaults.json` says and the signatures of the functions contradict with 10000
+(A93). The original did not run the other site once one was done (A59): here
+the site is part of the calculations and of what is done (D59).
