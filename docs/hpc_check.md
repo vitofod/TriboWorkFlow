@@ -4,15 +4,15 @@
 whole chain of the package on an HPC machine: preparation, groups of jobs,
 the orchestrator in the background, polling, relaunches and restarts,
 parsing, the charge density, the actions of the user. Of the steps of the
-interface workflow only `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`,
-`adhesion` and `ppes` are in this version: the
-script gives the command line test steps in place of all of them, whose
+interface workflow the script gives the command line test steps in place of
+all of them, whose
 calculations are those of a case of the check (module
 docstring of the script). It complements `tests/hpc/hpc_check.py` (fake
 engine: claims, exit codes, locks; `execution.md`, "Checking a new
 machine"). The jobs of the analyses (`[execution.analysis]`, the
-interpolation of the PES) run no pw.x and are not part of this check: they
-are checked with a run of the interface workflow that interpolates its PES
+interpolation of the PES and the shear strength) run no pw.x and are not part
+of this check: they are checked with a run of the interface workflow that
+interpolates its PES and analyses the shear strength
 (`execution.md`, "Analyses in a job of their own").
 
 Everything runs by hand, from a login node, in the virtual environment of

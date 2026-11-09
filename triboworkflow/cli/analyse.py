@@ -18,21 +18,22 @@ written and the error says, for each calculation, what is missing. A step of
 analysis only (match, plotpes, plotpes_scf, shear) is done here whole. It
 works on any machine.
 
-plotpes and plotpes_scf are never analysed by the orchestrator in the
-background: the interpolation of a large PES needs much memory. With
-[execution.analysis] the orchestrator, or "submit", analyses them in a job of
-their own on a compute node; without it the orchestrator leaves them manual
-once ready, and this command analyses them, where there is enough memory,
-with the orchestrator stopped or ended (it holds the run). It is refused
-while the job of the step may still run, according to the last query of the
-scheduler. The step is saved as running while it is analysed; an analysis
-stopped before its end writes nothing, and the next one starts it again from
-the beginning.
+plotpes, plotpes_scf and shear are never analysed by the orchestrator in the
+background: the interpolation of a large PES needs much memory, and the
+string method of the shear strength takes long. With [execution.analysis]
+the orchestrator, or "submit", analyses them in a job of their own on a
+compute node; without it the orchestrator leaves them manual once ready, and
+this command analyses them, where there is enough memory, with the
+orchestrator stopped or ended (it holds the run). It is refused while the job
+of the step may still run, according to the last query of the scheduler. The
+step is saved as running while it is analysed; an analysis stopped before its
+end writes nothing, and the next one starts it again from the beginning.
 
 Example:
  $ triboworkflow analyse match
  $ triboworkflow analyse pes
  $ triboworkflow analyse plotpes
+ $ triboworkflow analyse shear
     """
 
     locks_run = True

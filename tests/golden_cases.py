@@ -14,7 +14,10 @@ the interpolation with the steps plotpes and plotpes_scf
 (triboworkflow.workflows.interface.plotpes), starting from the document that
 the match_step and pes_step golden calls build; the key image that TribChem
 writes (the PNG of the figure encoded again) is compared by its pixels with
-the figure of the port, which writes no image (DEV-42), and the adhesion_step
+the figure of the port, which writes no image (DEV-42), the shear_step cases
+the Firetasks of the shear strength with the step shear
+(triboworkflow.workflows.interface.shear), starting from the document that the
+match_step, pes_step and plotpes_step golden calls build, and the adhesion_step
 cases the Firetasks of the adhesion with the step adhesion
 (triboworkflow.workflows.interface.adhesion), starting from the document that
 the match_step and pes_step golden calls build.
@@ -921,12 +924,12 @@ def pes_step_historic(tc, pair, step, short):
             'calls': calls}
 
 
-def port_settings(pair, mids, steps, short, adhesion=None, ppes=None, charge=None):
+def port_settings(pair, mids, steps, short, adhesion=None, ppes=None, charge=None, shear=None):
     """Settings of a run of the port on the slabs of a pair of MATCH_STEPS,
     written as JSON files in the current folder, with the parameters of the
     PES of the golden cases (distance, k-points of COMP_PARAMS, short slabs)
-    and, when given, [interface.adhesion], [interface.ppes] and
-    [interface.charge]."""
+    and, when given, [interface.adhesion], [interface.ppes],
+    [interface.charge] and [interface.shear] (with its table mep)."""
     import tomllib
 
     from triboworkflow.core.settings.loader import settings_from_dict
@@ -949,6 +952,8 @@ def port_settings(pair, mids, steps, short, adhesion=None, ppes=None, charge=Non
         data['interface']['ppes'] = dict(ppes)
     if charge is not None:
         data['interface']['charge'] = dict(charge)
+    if shear is not None:
+        data['interface']['shear'] = copy.deepcopy(shear)
     data['k_points'].update({'mode': 'kdens', 'kdens': float(COMP_PARAMS['kdens'])})
     return settings_from_dict(data)
 
@@ -1145,6 +1150,177 @@ def case_plotpes_step(tc, name):
     if tc.root == HISTORIC:
         return plotpes_step_historic(tc, name)
     return plotpes_step_port(tc, name)
+
+
+# Step shear: FT_StartShearStrength (its get_pes) and the FT_CalcShearStrength of its
+# workflow (historic) against shear_inputs, compute_shear and write_shear of the step
+# (port), on the document that the golden calls of match, of the PES and of plotpes build
+# (plotpes_document, with the calls of the case plotpes_step_<case>). The Navigator that
+# get_pes reads the document with is replaced by a copy of it (A47). The cases compare
+# the inputs (the PES in J/m^2 and the cell), the three writes to the database (one for each
+# string, in their order) and every number of the strings, which are exact: the same
+# packages, one thread of BLAS and the same seed. np.random is seeded once before the three
+# strings in the historic arm and before each one in the port: only the first string draws
+# random numbers, so they are the same.
+# Each case is (case of PLOTPES_STEPS, settings of [interface.shear] or None). With None the
+# step runs with its defaults, which are the values that the Firetask used (A94): the
+# historic arm is the Firetask as the command line calls it, whose options for the string
+# method are ignored. With settings the historic arm gives those of the string method to the
+# strings (DEV-47: the Firetask does not pass them), and delta and the points of the string
+# to get_shear_strenght, which the Firetask does pass; the seed is set before the strings
+# (DEV-46).
+SHEAR_STEPS = {
+    'cu111_cu111': ('cu111_cu111', None),
+    'cu111_cu111_other': ('cu111_cu111', {
+        'delta': 0.02, 'seed': 3,
+        'mep': {'npts': 51, 'extent': [1.0, 1.25], 'h': 0.02, 'nstepmax': 300, 'tol': 1e-6,
+                'delta': 1e-3}}),
+}
+# Options of the command line of TribChem (-meth, -opt, -npts, -fac, -hs, -nstepmax, -tol,
+# -delta, -ess), which FT_StartShearStrength takes; the string method ignores all but delta.
+SHEAR_CLI = {'method': 'zerotemp', 'optimization': 'bs_line', 'npts': 101, 'fac': [1.5, 1.5],
+             'h': 0.001, 'nstepmax': 99999, 'tol': 1e-7, 'delta': 0.01, 'entry': 'shearstr'}
+
+
+def shear_document(name):
+    """Document of the interface after match, the relaxed PES and plotpes of the case
+    plotpes_step_<case>, built from the golden calls of the three."""
+    document = plotpes_document(SHEAR_STEPS[name][0])
+    for call in read_golden(f'plotpes_step_{SHEAR_STEPS[name][0]}')['calls']:
+        mongo_set(document, call['data'], call['entry'], call['to_mongodb'])
+    return document
+
+
+def shear_step_historic(tc, name):
+    """FT_StartShearStrength as the command line of TribChem builds it, then the
+    FT_CalcShearStrength of its detour, on the document emulated as for the PES."""
+    run_ft = tc['highput.firetasks.run']
+    core = tc['highput.firetasks.core']
+    dbtools = tc['highput.database.dbtools']
+    string_method = tc['physics.tribology.mep'].MEP
+    case, settings = SHEAR_STEPS[name]
+    document = shear_document(name)
+    options = {} if settings is None else settings['mep']
+    cli = dict(SHEAR_CLI) if settings is None else {
+        **SHEAR_CLI, 'delta': settings['delta'], 'npts': settings['mep']['npts']}
+    calls, read = [], []
+
+    def matching(fltr):
+        if any(document.get(k) != v for k, v in fltr.items()):
+            raise AssertionError(f'filter {fltr} does not match the document')
+
+    def query_db(self, collection, db_file=None, database=None, entry=None, fltr=None,
+                 **kwargs):
+        if collection != MATCH_COLLECTION:
+            raise AssertionError(f'unexpected query of {collection}')
+        matching(fltr)
+        field = copy.deepcopy(document)
+        return field, dbtools.read_multiple_entry(field, entry)
+
+    def update_db(self, data, collection, entry=None, db_file=None, database=None, fltr=None,
+                  update_op='$set', upsert=False, to_mongodb=True, **kwargs):
+        if collection != MATCH_COLLECTION:
+            raise AssertionError(f'unexpected update of {collection}')
+        matching(fltr)
+        calls.append(update_call(data, collection, entry, fltr, update_op, to_mongodb))
+
+    def is_done(self, collection, db_file=None, database=None, entry=None, fltr=None, **kwargs):
+        # core.py:202-211: the entry is in the document and not empty.
+        if collection != MATCH_COLLECTION:
+            raise AssertionError(f'unexpected query of {collection}')
+        matching(fltr)
+        return bool(dbtools.read_multiple_entry(document, entry))
+
+    class Navigator:
+        """What get_pes reads the document with (A47): a copy of the emulated document."""
+
+        def __init__(self, db_file=None, high_level=None):
+            pass
+
+        def find_data(self, collection, fltr):
+            if collection != MATCH_COLLECTION:
+                raise AssertionError(f'unexpected read of {collection}')
+            matching(fltr)
+            return copy.deepcopy(document)
+
+    get_pes = run_ft.FT_StartShearStrength.get_pes
+
+    def recording_get_pes(self, p, fltr):
+        read.append(get_pes(self, p, fltr))
+        return read[-1]
+
+    get_mep = string_method.get_mep
+
+    def get_mep_with_options(self, method='zerotemp', optimization='bs_line', **kwargs):
+        return get_mep(self, method=method, optimization=optimization, **{**kwargs, **options})
+
+    saved = (core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db,
+             core.FireTaskTribChem.is_done, run_ft.Navigator,
+             run_ft.FT_StartShearStrength.get_pes)
+    core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db = query_db, update_db
+    core.FireTaskTribChem.is_done = is_done
+    run_ft.Navigator = Navigator
+    run_ft.FT_StartShearStrength.get_pes = recording_get_pes
+    string_method.get_mep = get_mep_with_options
+    try:
+        # calc_interface.py:201-209
+        start = run_ft.FT_StartShearStrength(
+            mid=document['mid'].split('_'), miller=document['miller'],
+            collection=MATCH_COLLECTION, rbf=None, override=False, db_file='golden', **cli)
+        detours = start.run_task({}).detours
+        (wf,) = detours if isinstance(detours, (list, tuple)) else [detours]
+        (task,) = [t for fw in wf.fws for t in fw.tasks]
+        np.random.seed(SEED if settings is None else settings['seed'])
+        task.run_task({})
+    finally:
+        string_method.get_mep = get_mep
+        (core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db,
+         core.FireTaskTribChem.is_done, run_ft.Navigator,
+         run_ft.FT_StartShearStrength.get_pes) = saved
+    (_, _, cell, pes_jm2), = read
+    return {'inputs': {'pes_jm2': pes_jm2, 'cell': np.array(cell)}, 'calls': calls}
+
+
+def shear_step_port(tc, name):
+    """shear_inputs of the step from settings and a run with the document after plotpes, then
+    compute_shear and write_shear on a store that records the database calls."""
+    from triboworkflow.core.store import SystemWriter
+    from triboworkflow.core.store.legacy import LegacyStore
+    from triboworkflow.execution.layout import system_dir
+    from triboworkflow.workflows.interface import shear
+
+    class Recording(LegacyStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = []
+
+        def update_db(self, data, collection, *, entry=None, fltr=None, update_op='$set',
+                      to_mongodb=True):
+            self.calls.append(update_call(data, collection, entry, fltr, update_op, to_mongodb))
+            super().update_db(data, collection, entry=entry, fltr=fltr, update_op=update_op,
+                              to_mongodb=to_mongodb)
+
+    case, settings_ = SHEAR_STEPS[name]
+    pair, step, short = PES_STEPS[case]
+    document = shear_document(name)
+    settings = port_settings(pair, document['mid'].split('_'),
+                             ['match', step, 'plotpes', 'shear'], short, shear=settings_)
+    sdir = system_dir(Path('run'), document['mid'])
+    with SystemWriter(sdir) as writer:
+        writer.document.create(document)
+        inputs = shear.shear_inputs(sdir, writer.document, settings)
+        result = shear.compute_shear(inputs, settings.interface.shear)
+        store = Recording(sdir, writer.document, shear.COLLECTION)
+        shear.write_shear(store, inputs, result)
+    return {'inputs': {'pes_jm2': inputs.pes_jm2, 'cell': np.array(inputs.cell)},
+            'calls': store.calls}
+
+
+def case_shear_step(tc, name):
+    """Inputs and database writes of the step shear."""
+    if tc.root == HISTORIC:
+        return shear_step_historic(tc, name)
+    return shear_step_port(tc, name)
 
 
 # Step adhesion: FT_StartAdhesion up to InterfaceWF.adhesion_energy, the
@@ -1978,6 +2154,8 @@ for _name in PES_STEPS:
     CASES[f'pes_step_{_name}'] = (case_pes_step, {'name': _name})
 for _name in PLOTPES_STEPS:
     CASES[f'plotpes_step_{_name}'] = (case_plotpes_step, {'name': _name})
+for _name in SHEAR_STEPS:
+    CASES[f'shear_step_{_name}'] = (case_shear_step, {'name': _name})
 for _name in ADHESION_STEPS:
     CASES[f'adhesion_step_{_name}'] = (case_adhesion_step, {'name': _name})
 for _name in PPES_STEPS:

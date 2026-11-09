@@ -15,15 +15,13 @@ a command the help is printed and the code is 2. `triboworkflow <command>
 
 The steps themselves (`match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`,
 `shear`, `adhesion`, `ppes`, `charge`) come from a registry that each step
-joins once it is implemented. In this version `match`, `pes`, `pes_scf`,
-`plotpes`, `plotpes_scf`, `adhesion`, `ppes` and `charge` are implemented
-([interface.md](interface.md)), `plotpes` and `plotpes_scf` analysed in a job
-of their own or by hand, never by the orchestrator (*The interpolation of the
-PES*): a
-command on a run whose `[interface].steps` lists another step answers
-`step 'shear' not available in this version`, and nothing is prepared or
-submitted; `check`, `status`, `stop` and the actions on jobs and groups work
-on any run.
+joins once it is implemented. In this version they are all implemented
+([interface.md](interface.md)), `plotpes`, `plotpes_scf` and `shear` analysed
+in a job of their own or by hand, never by the orchestrator (*The
+interpolation of the PES*); a step that the registry lacked would make a
+command answer `step '<name>' not available in this version`, with nothing
+prepared or submitted. `check`, `status`, `stop` and the actions on jobs and
+groups work on any run.
 
 ## The run
 
@@ -71,7 +69,7 @@ CuAl/                       the run
 | `gen SETTINGS.toml` | one calculation, not a run: writes the pw.x input of `[structure]` and the extxyz of its structure next to the settings file (see *One calculation*); nothing is run |
 | `status [--calcs]` | the orchestrator (running, stopped, on another host), who holds the lock of the run, each step with its state, reason and time of its last update, the calculations that need the user and why, the jobs. **It reads only the files: it is the state last saved, not a query to the scheduler.** `--calcs` lists every calculation with its state (`pending`, `running`, `completed`, `not_converged`, `crashed`, `unknown`) |
 | `prepare <step> [--replace]` | phase 1: checks the entries the step reads and writes its calculations (directories, inputs, extxyz of the structures, records). A missing or stale entry blocks the step with what is missing; nothing is computed in its place. A calculation already prepared is never overwritten: one that differs from the settings stops the preparation with the list, one that differs only in keys of the attempts (e.g. `mixing_beta`, `max_seconds`) is kept with the values logged. `--replace` moves every calculation that differs, with its attempts, to `replaced/` and prepares it again (`execution.md`, *Preparation and replacement*) |
-| `analyse <step>` | phase 3, from the files only: every calculation of the step must be done according to its claim, its record and the groups of jobs, with the fingerprint the settings give now; otherwise nothing is written and the error says what is missing for each calculation. For `match`, `plotpes`, `plotpes_scf` and `shear` it is the whole step; `plotpes` and `plotpes_scf` are analysed by this command where there is enough memory, or in a job of their own with `[execution.analysis]`, and the command is refused while that job may run (*The interpolation of the PES*) |
+| `analyse <step>` | phase 3, from the files only: every calculation of the step must be done according to its claim, its record and the groups of jobs, with the fingerprint the settings give now; otherwise nothing is written and the error says what is missing for each calculation. For `match`, `plotpes`, `plotpes_scf` and `shear` it is the whole step; `plotpes`, `plotpes_scf` and `shear` are analysed by this command where there is enough memory, or in a job of their own with `[execution.analysis]`, and the command is refused while that job may run (*The interpolation of the PES*) |
 | `retry <step>` | a step failed for an error of its own (while it was prepared or analysed, because the settings changed after its preparation, or because the job of its analysis ended without completing it) starts again; for a job of an analysis, the next `submit` or pass submits a new one |
 | `clear-refusal <group>` | a group whose submission the scheduler refused is submitted again by the next `submit` or pass, once its copy of the jobscript (`jobs/<group>/jobscript.sh`) is fixed |
 | `resolve-submission <group> --job-id ID` or `--no-job` | a submission whose answer was lost (e.g. `sbatch` timed out) created that job, or none |
@@ -285,6 +283,16 @@ triboworkflow start                   # goes on with what depends on them
 - A step already analysed and current is recognised from its entries and
   its figure, without interpolating again: `analyse plotpes` and `start`
   report it completed. Analysing `pes` again makes it no longer current.
+
+**The shear strength.** `shear` is analysed in the same two ways, with the
+same command (`analyse shear`, `submit shear`), the same job and the same
+jobscript of `[execution.analysis]`, once `plotpes` is completed: it reads the
+interpolation of `plotpes` and never the one of `plotpes_scf`. It interpolates
+the PES again and then runs the string method, which takes long even on a
+small interface: a job for it needs time more than memory
+([interface.md](interface.md), *Step `shear`*). Without `plotpes` done and
+current the step is blocked with `entries missing or not current:
+pes.energy.pes_jm2`.
 - **Stopped before its end** (Ctrl-C, a signal, the walltime of a job):
   nothing is written, neither the entries nor the figure; the step stays
   running with no calculations, `start` leaves it manual again, and the

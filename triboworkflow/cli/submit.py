@@ -21,7 +21,7 @@ completed, run "analyse". The settings must not have changed since the
 preparation.
 
 A step without calculations whose analysis needs a compute node (plotpes,
-plotpes_scf) is analysed in a job of its own with [execution.analysis]: the
+plotpes_scf, shear) is analysed in a job of its own with [execution.analysis]: the
 command writes and submits that job, and run again follows it; once the job
 is over the step is completed from its entries, or failed with the state of
 the job. Without [execution.analysis] it is analysed by hand ("analyse").

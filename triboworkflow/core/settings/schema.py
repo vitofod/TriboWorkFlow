@@ -104,6 +104,30 @@ PPES_SHIFTS = (-0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2
 CHARGE_SITES = ('min_site', 'max_site')
 CHARGE_OPERATIONS = ('+', '-')
 CHARGE_OPERATIONS_DEFAULT = ('-', '-')
+# Parameters of the step shear, as in [interface.shear] and [interface.shear.mep]. The values
+# below are the recommended ones and the defaults: ``SHEAR_DELTA`` is the step of the
+# derivative that gives the shear strength along the string, ``SHEAR_SEED`` the seed of the
+# random numbers of the starting string, ``SHEAR_MEP`` the parameters of the string method
+# (points of the string, extent of the starting string in cell lengths along x and y, time
+# step, maximum number of steps, tolerance on the displacement of the string, step of the
+# derivative of the surface inside the method). The step tells which of its parameters differ.
+# To remove: the string method of TribChem ran with the values of its own file of defaults
+# (``physics/tribology/defaults_tribo.json``), because ``FT_CalcShearStrength`` did not pass
+# it the options of the command line (``shearstr.py:122``), which announced h 0.001, tol 1e-7
+# and delta 0.01 (``entrypoints/parsers/utils.py:771-815``, ``defaults.json:536-568``); only
+# ``delta`` of the command line, 0.01, reached the shear strength (A94, DEV-47).
+SHEAR_DELTA = 0.01
+SHEAR_SEED = 0
+SHEAR_MEP = {'npts': 101, 'extent': (1.5, 1.5), 'h': 0.01, 'nstepmax': 99999, 'tol': 1e-8,
+             'delta': 1e-4}
+# The shortest string that the entries of the shear strength can be written for: they hold the
+# values at the first six points of the path (a string of fewer points fails after it is
+# computed), and the interpolation of the string by a cubic spline needs only four.
+# To remove: ``get_shear_strenght`` writes ``data[0]`` ... ``data[5]`` of a table with a row for
+# each point of the path (A98).
+SHEAR_MIN_POINTS = 6
+# Largest seed of NumPy (``numpy.random.seed`` takes 0 to 2**32 - 1).
+SHEAR_MAX_SEED = 2**32 - 1
 
 # &CONTROL keys of a single calculation: in the workflow the code sets them
 # for every calculation (own prefix and outdir, calculation from calc_type).
@@ -170,6 +194,11 @@ def _three(path, value):
 def _positive(path, value):
     if value <= 0:
         raise SettingsError(path, f'must be > 0, got {value}')
+
+
+def _finite_positive(path, value):
+    if not math.isfinite(value) or value <= 0:
+        raise SettingsError(path, f'must be a finite number > 0, got {value}')
 
 
 def _required(path, value, reason):
@@ -956,6 +985,113 @@ class ChargeParams:
 
 
 @dataclass
+class ShearMepParams:
+    """``[interface.shear.mep]``: the parameters of the string method of the step ``shear``.
+
+    The step ``shear`` finds the minimum energy path (MEP) of the interpolated surface with
+    the string method at zero temperature, and gives the shear strength along it. The
+    defaults are the recommended values; the step tells which of its parameters are not
+    the recommended ones. They apply to the three strings of the step (the best straight
+    line, the cell axes x and y), which differ in the starting string only.
+
+    Attributes
+    ----------
+    npts : int
+        Points of the string (101 by default); at least 6, because the entries of the shear
+        strength hold the values at the first six points of the path and a shorter string
+        would fail when they are written, after it is computed.
+    extent : list of float
+        Extent of the starting string along x and along y, in lengths of the cell along
+        those axes: the string goes from ``-extent`` to ``+extent`` (``[1.5, 1.5]`` by
+        default).
+    h : float
+        Time step of the evolution of the string (0.01 by default).
+    nstepmax : int
+        Maximum number of steps (99999 by default); the string method stops earlier when it
+        converges.
+    tol : float
+        Convergence tolerance: the mean displacement of the points of the string in a step
+        (1e-8 by default).
+    delta : float
+        Step of the finite-difference derivative of the surface inside the string method,
+        in angstrom (1e-4 by default). Not the ``delta`` of ``[interface.shear]``, which is
+        the step of the derivative along the path that gives the shear strength.
+
+    Notes
+    -----
+    To remove: the options ``-npts``, ``-fac``, ``-hs``, ``-nstepmax``, ``-tol`` of
+    TribChem's command line never reached the string method (A94); its defaults were those of
+    ``defaults_tribo.json`` (``SHEAR_MEP``), which are the defaults here (DEV-47).
+    """
+
+    npts: int = SHEAR_MEP['npts']
+    extent: list[float] = field(default_factory=lambda: list(SHEAR_MEP['extent']))
+    h: float = SHEAR_MEP['h']
+    nstepmax: int = SHEAR_MEP['nstepmax']
+    tol: float = SHEAR_MEP['tol']
+    delta: float = SHEAR_MEP['delta']
+
+    def check(self, path):
+        """Validate the table; errors name ``path``."""
+        if self.npts < SHEAR_MIN_POINTS:
+            raise SettingsError(f'{path}.npts', f'must be >= {SHEAR_MIN_POINTS} (the entries of '
+                                'the shear strength hold the first six points of the string), '
+                                f'got {self.npts}')
+        if len(self.extent) != 2:
+            raise SettingsError(f'{path}.extent', 'give two numbers, one for x and one for y; '
+                                f'got {self.extent}')
+        for i, side in enumerate(self.extent):
+            _finite_positive(f'{path}.extent[{i}]', side)
+        _finite_positive(f'{path}.h', self.h)
+        if self.nstepmax < 1:
+            raise SettingsError(f'{path}.nstepmax', f'must be >= 1, got {self.nstepmax}')
+        _finite_positive(f'{path}.tol', self.tol)
+        _finite_positive(f'{path}.delta', self.delta)
+
+
+@dataclass
+class ShearParams:
+    """``[interface.shear]``: the shear strength of the step ``shear``.
+
+    The step ``shear`` reads the surface relaxed along z that ``plotpes`` interpolated and
+    computes the shear strength along three paths of minimum energy, one from each starting
+    string (the best straight line, the axis x and the axis y of the cell). The surface is not
+    a setting. The parameters of the string method are in ``[interface.shear.mep]``.
+
+    Attributes
+    ----------
+    delta : float
+        Step of the finite-difference derivative of the surface along each path, in
+        angstrom, that gives the force and so the shear strength (0.01 by default). Not the
+        ``delta`` of ``[interface.shear.mep]``.
+    seed : int
+        Seed of the random numbers (0 by default; from 0 to 4294967295, the range of the seed
+        of NumPy). The best straight line starts from a
+        string perturbed by a random noise of about 1e-4 of the cell: the seed is set before
+        each string, so a run can be repeated, and another seed is another sample of the
+        same noise. Changing it computes the shear strength again.
+    mep : ShearMepParams
+        Parameters of the string method.
+
+    Notes
+    -----
+    To remove: the noise of TribChem was not seeded, so two runs differed slightly (Q02,
+    DEV-46); ``delta`` is ``-delta`` of its command line (0.01).
+    """
+
+    delta: float = SHEAR_DELTA
+    seed: int = SHEAR_SEED
+    mep: ShearMepParams = field(default_factory=ShearMepParams)
+
+    def check(self, path):
+        """Validate the table; errors name ``path``."""
+        _finite_positive(f'{path}.delta', self.delta)
+        if not 0 <= self.seed <= SHEAR_MAX_SEED:
+            raise SettingsError(f'{path}.seed', f'must be between 0 and {SHEAR_MAX_SEED} (the '
+                                f'seed of NumPy), got {self.seed}')
+
+
+@dataclass
 class InterfaceParams:
     """``[interface]``: inputs of the interface workflow.
 
@@ -985,6 +1121,8 @@ class InterfaceParams:
         Site, shifts and fit of the step ``ppes``.
     charge : ChargeParams
         Site and operations of the step ``charge``.
+    shear : ShearParams
+        Seed and parameters of the step ``shear``.
     """
 
     slabs: list[SlabParams]
@@ -997,6 +1135,7 @@ class InterfaceParams:
     adhesion: AdhesionParams = field(default_factory=AdhesionParams)
     ppes: PpesParams = field(default_factory=PpesParams)
     charge: ChargeParams = field(default_factory=ChargeParams)
+    shear: ShearParams = field(default_factory=ShearParams)
 
     def engine_for(self, step):
         """Engine of a step that runs calculations.

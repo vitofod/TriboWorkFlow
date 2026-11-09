@@ -294,11 +294,14 @@ def test_start_passes_the_factory_and_groups(tmp_path, monkeypatch, fake_schedul
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='the orchestrator in the background is POSIX only')
-def test_start_reports_a_step_not_available(tmp_path, fake_scheduler_bin, capsys):
+def test_start_reports_an_orchestrator_that_cannot_be_built(tmp_path, fake_scheduler_bin, capsys):
+    # What the process in the background fails to build is told in its log: here a state file of
+    # another version.
     run_dir = write_run(tmp_path, steps=('match', 'pes', 'plotpes', 'shear'))
+    (run_dir / 'orchestrator.json').write_text('{"schema_version": 99, "systems": {}}\n')
     assert cli(run_dir, 'start') == 1
     assert 'orchestrator.log' in capsys.readouterr().err
-    assert "step 'shear' not available" in (run_dir / 'orchestrator.log').read_text()
+    assert 'this version reads 2' in (run_dir / 'orchestrator.log').read_text()
     assert not (run_dir / 'orchestrator.pid').exists() and not (run_dir / 'run.lock').exists()
     assert not fake_scheduler_bin.exists()
 

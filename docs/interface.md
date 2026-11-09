@@ -1,4 +1,4 @@
-# Interface workflow: steps `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `adhesion`, `ppes` and `charge`
+# Interface workflow: steps `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes` and `charge`
 
 The interface workflow starts from two slabs, given in `[interface]` of the
 settings ([configuration.md](configuration.md)). Its first step, `match`,
@@ -7,13 +7,13 @@ high-symmetry points of the two facing surfaces, which the next steps use.
 The steps `pes` and `pes_scf` compute the potential energy surface of the
 interface from those points, relaxed along z and static; `plotpes` and
 `plotpes_scf` interpolate the one and the other over the whole plane;
-`adhesion` computes the adhesion energy of the interface at the site of
-lowest and at the site of highest energy of one of the two surfaces; `ppes`
-computes the energy of the interface that `adhesion` relaxed as its two slabs
-move apart or closer along z; `charge` computes the charge density of that
-interface and of its two slabs, and the charge displacement they give. In this
-version these eight steps are available, so a run lists only them in
-`[interface].steps`:
+`shear` computes the shear strength of the interface from the interpolation of
+the relaxed PES; `adhesion` computes the adhesion energy of the interface at
+the site of lowest and at the site of highest energy of one of the two
+surfaces; `ppes` computes the energy of the interface that `adhesion` relaxed
+as its two slabs move apart or closer along z; `charge` computes the charge
+density of that interface and of its two slabs, and the charge displacement
+they give. In this version all nine steps are available:
 
 ```bash
 triboworkflow analyse match
@@ -21,8 +21,9 @@ triboworkflow prepare pes_scf
 ```
 
 In a pass of the orchestrator the step `match`, having no calculation, is
-analysed as soon as it starts. `plotpes` and `plotpes_scf` have no
-calculation either, but are analysed only by hand (*Where they run*).
+analysed as soon as it starts. `plotpes`, `plotpes_scf` and `shear` have no
+calculation either, but are never analysed by the orchestrator: in a job of
+their own or by hand (*Where they run*, *Step `shear`*).
 
 ## Step `match`
 
@@ -231,8 +232,8 @@ is done and current too: the provenance holds the content that the step read,
 so changing the settings of `match` and not analysing it again leaves the
 PES not done, even if its own settings did not change.
 
-The step `shear` is not available in this version: which of the two PES it
-reads is decided with it.
+The step `shear` reads the relaxed PES, through `plotpes`; it never reads the
+static one (*Step `shear`*).
 
 Notes
 -----
@@ -402,6 +403,204 @@ document of `match`); the analysis only by hand until the job of its own
 (D54). The figure is closed once saved (A84); the interpolation is computed
 twice, as there (A07). Not ported: `override`, `check_entry` (the provenance
 decides), `to_file` (A83), `db_file`, `database`.
+
+## Step `shear`
+
+The step computes the shear strength of the interface: the largest force that
+opposes the sliding of one slab on the other, along three paths of minimum
+energy (MEP) of the PES that `plotpes` interpolated. It runs no calculation.
+It reads the PES relaxed along z, so it needs `pes` and `plotpes`, and never
+the static one (`pes_scf`): the surface is not a setting.
+
+| Entry read | Content |
+|---|---|
+| `pes.energy.pes_jm2` | `[x, y, energy]` of the points of the PES, in J/m^2, the minimum at zero (written by `plotpes`) |
+| `structure.init.interface.lattice.matrix` | the cell of the interface (written by `match`) |
+
+The two entries must be done and current, and so must `pes`, `plotpes` and
+`match` behind them: otherwise the step is blocked with what is missing
+(`entries missing or not current: pes.energy.pes_jm2; ...`) and nothing is
+computed.
+
+### What the step does
+
+1. **Interpolation.** The points are interpolated again, once for the three
+   paths, with radial basis functions (thin-plate spline, smoothing 1e-3),
+   replicated 5 times on each side of the cell (10 x 10 copies). The
+   interpolation also builds a grid of density 20 that the step does not use.
+2. **Three strings.** For each starting string (`bs_line`, the straight line,
+   among the orientations in steps of one degree, along which the largest
+   derivative of the PES is the smallest, perturbed by a random noise of about
+   1e-4 of the cell; `x` and `y`, the axes of the cell) the string method at
+   zero temperature evolves the string until its mean displacement per step is
+   at most `tol` or `nstepmax` steps are done. Its parameters are the settings
+   `[interface.shear.mep]`.
+3. **Shear strength.** Along each path the force is minus the derivative of the
+   PES along its tangent, taken with the step `delta` of `[interface.shear]`;
+   the shear strength is the largest absolute value of the force, in GPa (J/m^2
+   per angstrom times 10).
+4. **Writing.** The three strings are written together at the end, with the
+   provenance of the step: when any of them fails, or the entries read change
+   during the analysis, nothing is written.
+
+### Settings
+
+`[interface.shear]` has `delta` (step of the derivative of the force along the
+path, 0.01 Å) and `seed` (0); `[interface.shear.mep]` has the parameters of
+the string method: `npts` (101), `extent` (`[1.5, 1.5]`), `h` (0.01),
+`nstepmax` (99999), `tol` (1e-8) and `delta` (step of the derivative of the
+surface inside the method, 1e-4 Å; not the other `delta`)
+([configuration.md](configuration.md)). The defaults are the recommended
+values, and the step tells in its message which parameters of the run are
+not the recommended ones. Every one of them changes the numbers when it
+changes, and the step is then done again. `npts` is at least 6 (the entries
+hold the first six points of the path, see below) and `seed` goes from 0 to
+4294967295, the range of the seed of NumPy: a value outside them is refused
+when the settings are read, not after the strings are computed.
+
+### Entries and files
+
+| Entry of `system.json` | Content |
+|---|---|
+| `shearstr.along_bs_line`, `shearstr.along_x`, `shearstr.along_y` | one for each string: `nstep` and `tol`, the index of the last step of the string method (the steps done minus one) and its mean displacement in it; `shear_strength_GPa`; and `lxy`, `dvx`, `dvy`, `vz`, `ve` and `force` (see below) |
+
+The three entries have the same provenance: the parameters of the step, the
+seed and the content of the entries read (the points of the PES and the cell).
+
+**`lxy`, `dvx`, `dvy`, `vz`, `ve` and `force` are not profiles along the
+path.** The table that the code of the string method builds has one row per
+point of the path and one column per quantity (length along the path,
+derivatives in x and y, integral of the force, energy of the PES, force);
+the six entries hold its first six rows, one list of six numbers each (the
+quantities at one of the first six points), under the names of the six
+columns. The numbers are written as the original code gives them, so that
+the entries have its keys and values; `shear_strength_GPa`, `nstep` and `tol`
+are correct. A change that writes the columns would change the numbers under
+these six names, and is not made. The shear strength itself is computed on the
+whole path.
+
+**A step done is not a converged string.** A string that reaches `nstepmax`
+without its displacement falling below `tol` is written like one that
+converged, and the step is done: nothing in the entries says it, except that
+`nstep` is `nstepmax - 1` and `tol` is larger than the `tol` of the settings.
+Compare the two before trusting a shear strength, in particular when
+`nstepmax` or `tol` are not the recommended values (*Cost*: on the Cu/Cu,
+stopping at 3000 steps changed the shear strengths by about 1e-3).
+
+### The seed
+
+The starting string of `bs_line` carries a random noise, drawn with the global
+generator of NumPy. The step seeds it with `[interface.shear] seed` before each
+string and puts the generator back as it found it, so an analysis can be
+repeated; only `bs_line` draws numbers. Another seed is another sample of the
+same noise, and the shear strength changes in its last digits (*Cost*).
+Changing the seed makes the step run again.
+
+### The cell
+
+The starting strings are built on the two diagonal elements of the cell, which
+are its two lengths only for a square cell with its sides along x and y. For
+any other cell (a hexagonal one, a rectangle of different sides, a square
+rotated) the step warns, with the lengths a and b of the two lateral vectors
+and the angle gamma between them, and goes on with the algorithm as it is.
+
+### Where it runs
+
+As the interpolations of the PES, never in the orchestrator: in a job of its
+own with `[execution.analysis]`, or by hand,
+
+```bash
+triboworkflow analyse shear
+```
+
+with the orchestrator ended or stopped ([execution.md](execution.md),
+*Analyses in a job of their own*). The same jobscript serves all the analyses:
+give it the memory of the heaviest and the walltime of the longest. The linear
+algebra uses the threads of NumPy's BLAS (set them in the jobscript, e.g.
+`export OMP_NUM_THREADS=8`); the numbers of a run can differ in the last digits
+with the number of threads, and the provenance does not record them.
+
+### Cost
+
+Measured with `tests/shear_cost.py` on the interfaces of the tests, with
+synthetic energies, on a laptop with the linear algebra on one thread and the
+recommended parameters. The centres are the points of the PES replicated
+10 x 10 (100 times the points); the matrix is their dense matrix (8 bytes per
+element), close to the memory of the interpolation:
+
+| Interface | Points (unique, in the cell) | Centres | Matrix | Interpolation | One step of a string | `nstep` (`bs_line`, `x`, `y`) | Analysis |
+|---|---|---|---|---|---|---|---|
+| Cu(111)/Cu(111) | 4, 8 | 800 | 0.005 GiB | 0.5 s | 6.9 ms | 13 106, 14 756, 12 040 | 274 s |
+| Pt(111)/Ag(111) | 6, 12 | 1 200 | 0.011 GiB | 0.6 s | 9.4 to 10.3 ms | 1 419, 1 426, 2 172 | 49 s |
+| Cu(111)/Al(111), `max_area` 20 | 6, 144 | 14 400 | 1.5 GiB | 106 s | 102 to 132 ms | 400 each, stopped there | 241 s for the 400 steps |
+| Cu(111)/Al(111) of the example | 6, 756 | 75 600 | 45.7 GiB | not measured | estimated 0.6 s | | |
+
+The interpolation costs little next to the strings (the same order of magnitude
+as the one of `plotpes` on the same points, 0.4 to 0.8 times it), because the
+points are replicated 5 times and not 6 and the grid of density 20 that the
+step does not use is small. **The cost is the string method**: each step asks
+the interpolation four times for the value of the PES at the 101 points of the
+string, so a step costs in proportion to the centres (6.9 ms with 800,
+about 10 ms with 1 200, 102 to 132 ms with 14 400), and the steps needed
+depend on the surface: from about 1 400 on the Pt/Ag to 12 000 to 15 000 on the
+Cu/Cu with the recommended tolerance `tol = 1e-8`. For the Cu(111)/Al(111) of
+the tests, if it needed as many steps as the Cu/Cu (13 000) at about 120 ms per
+step, a string would take about half an hour and the step more than an hour;
+for the interface of the example, whose interpolation alone needs about 46 GiB,
+the estimate is hours per string (an extrapolation from the measures above, not
+a measure). Two ways to reduce it are in the settings: a looser `tol` or a
+lower `nstepmax` (on the Cu/Cu, `nstepmax = 3000` brought the analysis from 274
+to 62 s and changed the shear strengths by about 1e-3 of their value), and
+fewer points `npts` of the string. The time per step also changes with the load
+and the threads of the machine: the same Cu/Cu took 2.8 ms per step in
+another session of the laptop.
+
+**The seed.** Six seeds of the noise of `bs_line` changed its shear strength
+by 2e-7 of its value on the Cu/Cu (2.479835 GPa on average, spread of 5.5e-7
+GPa, 13 091 to 13 107 steps) and by 3e-9 on the Pt/Ag (2.039640 GPa, 1 419
+steps in all): on these surfaces the seed matters in the seventh digit or
+less. The shear strengths along the three paths differ among themselves more
+than that (2.4798, 2.4798 and 2.4830 GPa on the Cu/Cu); more runs with other
+seeds are not needed for these surfaces.
+
+### Message
+
+```text
+interpolation of the PES: <seconds> s, <n> centres
+string <bs_line|x|y>: <n> steps, <seconds> s
+<system>: shear strength along bs_line <GPa> GPa, along x <GPa> GPa, along y <GPa> GPa
+<system>: PES of <n> points, <m> centres: interpolation <seconds> s; strings bs_line <seconds> s (<n> steps), x ..., y ...
+<system>: parameters other than the recommended ones: <key> = <value> (recommended <default>), ...
+```
+
+The last line only when some parameter is not the recommended one (the seed
+is not listed). A cell that is not a square gives a warning of its own before
+the calculation. What the code of the string method prints (the coordinates of
+the paths and the shear strength) goes to the log at debug level only.
+
+### When the step runs again
+
+The step is done when its three entries exist and their provenance is the one
+that the settings and the entries read give now. Changing `delta`, `seed` or
+any parameter of `[interface.shear.mep]`, analysing `plotpes` again (new
+points of the PES) or `match` again (another cell) makes it run again. The
+step is done only while `plotpes`, `pes` and `match` are done and current.
+
+Notes
+-----
+To remove: port of TribChem's `FT_StartShearStrength` and
+`FT_CalcShearStrength` (through `ShearstrWF.calculate_shearstr`). Deviations:
+DEV-46 (the seed of the noise), DEV-47 (the parameters of the string method act:
+in TribChem the options of the command line did not reach it, and it ran with
+the defaults of its own file, which are the defaults here, A94). The
+original read `comp_params` and the grid of the PES, which it did not use, and
+failed with the static PES alone (A58, A96); it saved after each string and was
+done after the first (A95); it moved the arrays of the path in place, by
+rounding errors (A97); the six keys of the path are the first rows of the table
+(A98). The golden cases `shear_step_*` compare the inputs, the three writes and
+every number with those of the Firetasks, with the defaults (the Firetask as the
+command line calls it) and with other parameters of the string method (the same
+string method called with them).
 
 ## Step `adhesion`
 

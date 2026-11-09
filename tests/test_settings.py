@@ -8,6 +8,7 @@ is reported with the TOML path of the field.
 """
 
 import copy
+import dataclasses
 import re
 import tomllib
 from pathlib import Path
@@ -18,11 +19,13 @@ from triboworkflow.core.settings import (Settings, SettingsError, load_settings,
                                          settings_from_dict, validate)
 from triboworkflow.core.settings.schema import (CHARGE_OPERATIONS, CHARGE_SITES,
                                                 INTER_PARAMS_DEFAULTS, INTERFACE_STEPS,
-                                                PPES_SHIFTS, AdhesionParams, AnalysisParams,
-                                                ChargeParams, GenerationParams, InterParams,
-                                                PesScfParams, PpesParams, key_name)
+                                                PPES_SHIFTS, SHEAR_DELTA, SHEAR_MEP, SHEAR_SEED,
+                                                AdhesionParams, AnalysisParams, ChargeParams,
+                                                GenerationParams, InterParams, PesScfParams,
+                                                PpesParams, ShearMepParams, ShearParams, key_name)
 from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
 from triboworkflow.vendored.highput.utils.tasktools import read_default_params
+from triboworkflow.vendored.physics.tribology.mep import MEP
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / 'examples'
@@ -442,6 +445,80 @@ def test_charge_does_not_change_the_other_tables():
     assert settings.interface.engine_for('charge') == 'qe'
 
 
+def test_shear_defaults_are_the_values_that_the_original_workflow_used():
+    # The MEP of the original ran with the values of its own file of defaults, not with those
+    # that the command line announced (h 0.001, tol 1e-7): they are the recommended ones. The
+    # delta of the shear strength is the one of the command line.
+    effective = read_default_params(MEP.defaults, 'zerotemp', {})
+    assert effective == {'npts': 101, 'extent': [1.5, 1.5], 'h': 0.01, 'nstepmax': 99999,
+                         'tol': 1e-8, 'delta': 1e-4}
+    assert dataclasses.asdict(ShearMepParams()) == effective
+    assert SHEAR_MEP == {**effective, 'extent': (1.5, 1.5)}
+    assert (SHEAR_DELTA, SHEAR_SEED) == (0.01, 0)
+    default = ShearParams(delta=0.01, seed=0, mep=ShearMepParams(**effective))
+    assert ShearParams() == default
+    assert settings_from_dict(WORKFLOW).interface.shear == default
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.shear': DELETE}))
+    assert settings.interface.shear == default
+    # The defaults of a table are not shared between the runs.
+    assert ShearParams().mep.extent == [1.5, 1.5]
+    assert ShearParams().mep.extent is not ShearParams().mep.extent
+    assert ShearParams().mep is not ShearParams().mep
+
+
+@pytest.mark.parametrize('edits, expected', [
+    ({'interface.shear.delta': 0.02}, ShearParams(delta=0.02)),
+    # An integer is read as a float.
+    ({'interface.shear.delta': 1}, ShearParams(delta=1.0)),
+    ({'interface.shear.seed': 7}, ShearParams(seed=7)),
+    # The seed of NumPy goes from 0 to 2**32 - 1.
+    ({'interface.shear.seed': 0}, ShearParams(seed=0)),
+    ({'interface.shear.seed': 4294967295}, ShearParams(seed=4294967295)),
+    ({'interface.shear.mep.npts': 51}, ShearParams(mep=ShearMepParams(npts=51))),
+    # The least that the entries of the shear strength can be written with (A98).
+    ({'interface.shear.mep.npts': 6}, ShearParams(mep=ShearMepParams(npts=6))),
+    ({'interface.shear.mep.extent': [1, 2.5]}, ShearParams(mep=ShearMepParams(extent=[1.0, 2.5]))),
+    ({'interface.shear.mep.h': 0.001, 'interface.shear.mep.tol': 1e-7,
+      'interface.shear.mep.delta': 0.01},
+     ShearParams(mep=ShearMepParams(h=0.001, tol=1e-7, delta=0.01))),
+    ({'interface.shear.mep.nstepmax': 1}, ShearParams(mep=ShearMepParams(nstepmax=1))),
+    ({'interface.shear.delta': 0.5, 'interface.shear.seed': 3, 'interface.shear.mep.npts': 11,
+      'interface.shear.mep.extent': [2.0, 2.0], 'interface.shear.mep.h': 0.1,
+      'interface.shear.mep.nstepmax': 5, 'interface.shear.mep.tol': 1e-3,
+      'interface.shear.mep.delta': 1e-3},
+     ShearParams(delta=0.5, seed=3, mep=ShearMepParams(npts=11, extent=[2.0, 2.0], h=0.1,
+                                                       nstepmax=5, tol=1e-3, delta=1e-3))),
+])
+def test_shear_choices_allowed(edits, expected):
+    shear = settings_from_dict(edited(WORKFLOW, edits)).interface.shear
+    assert shear == expected
+    assert type(shear.delta) is float and type(shear.mep.delta) is float
+    assert all(type(side) is float for side in shear.mep.extent)
+    assert type(shear.seed) is int and type(shear.mep.npts) is int
+    assert type(shear.mep.nstepmax) is int
+
+
+def test_the_two_deltas_of_the_shear_are_told_apart():
+    # [interface.shear] delta is the step of the derivative of the shear strength; the delta of
+    # the MEP, in [interface.shear.mep], the step of the derivative inside the string method.
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.shear.delta': 0.5}))
+    assert (settings.interface.shear.delta, settings.interface.shear.mep.delta) == (0.5, 1e-4)
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.shear.mep.delta': 0.5}))
+    assert (settings.interface.shear.delta, settings.interface.shear.mep.delta) == (0.01, 0.5)
+
+
+def test_shear_does_not_change_the_other_tables():
+    settings = settings_from_dict(edited(WORKFLOW, {'interface.shear.seed': 3}))
+    reference = settings_from_dict(WORKFLOW)
+    assert settings.interface.adhesion == reference.interface.adhesion
+    assert settings.interface.ppes == reference.interface.ppes
+    assert settings.interface.charge == reference.interface.charge
+    assert settings.interface.pes_scf == reference.interface.pes_scf
+    # A step that only analyses has no engine.
+    with pytest.raises(SettingsError, match="'shear' is not allowed"):
+        settings_from_dict(edited(WORKFLOW, {'interface.engines': {'shear': 'qe'}}))
+
+
 def test_groups_optional():
     assert settings_from_dict(edited(WORKFLOW, {'execution.groups': DELETE})).execution.groups is None
 
@@ -728,6 +805,74 @@ ERRORS = [
      'allowed keys: site, operations'),
     ('charge-type', W, {'interface.charge.type': 'short'}, 'interface.charge.type',
      'allowed keys: site, operations'),
+    # [interface.shear] and [interface.shear.mep]: numbers that the algorithm can use. The
+    # method, the optimizations, the surface and the entry are not settings.
+    ('shear-delta-zero', W, {'interface.shear.delta': 0.0}, 'interface.shear.delta',
+     'must be a finite number > 0, got 0.0'),
+    ('shear-delta-negative', W, {'interface.shear.delta': -0.01}, 'interface.shear.delta',
+     'must be a finite number > 0, got -0.01'),
+    ('shear-delta-nan', W, {'interface.shear.delta': float('nan')}, 'interface.shear.delta',
+     'must be a finite number > 0, got nan'),
+    ('shear-delta-inf', W, {'interface.shear.delta': float('inf')}, 'interface.shear.delta',
+     'must be a finite number > 0, got inf'),
+    ('shear-delta-text', W, {'interface.shear.delta': '0.01'}, 'interface.shear.delta',
+     "expected float, got '0.01'"),
+    ('shear-delta-bool', W, {'interface.shear.delta': True}, 'interface.shear.delta',
+     'expected float, got True'),
+    ('shear-seed-negative', W, {'interface.shear.seed': -1}, 'interface.shear.seed',
+     'must be between 0 and 4294967295 (the seed of NumPy), got -1'),
+    ('shear-seed-too-large', W, {'interface.shear.seed': 4294967296}, 'interface.shear.seed',
+     'must be between 0 and 4294967295 (the seed of NumPy), got 4294967296'),
+    ('shear-seed-float', W, {'interface.shear.seed': 1.5}, 'interface.shear.seed',
+     'expected int, got 1.5'),
+    ('shear-seed-bool', W, {'interface.shear.seed': True}, 'interface.shear.seed',
+     'expected int, got True'),
+    # Fewer than six points make the writing of the entries fail after the string is computed.
+    ('shear-npts-small', W, {'interface.shear.mep.npts': 3}, 'interface.shear.mep.npts',
+     'must be >= 6 (the entries of the shear strength hold the first six points of the '
+     'string), got 3'),
+    ('shear-npts-four', W, {'interface.shear.mep.npts': 4}, 'interface.shear.mep.npts',
+     'must be >= 6 (the entries of the shear strength hold the first six points of the '
+     'string), got 4'),
+    ('shear-npts-five', W, {'interface.shear.mep.npts': 5}, 'interface.shear.mep.npts',
+     'must be >= 6 (the entries of the shear strength hold the first six points of the '
+     'string), got 5'),
+    ('shear-npts-float', W, {'interface.shear.mep.npts': 101.0}, 'interface.shear.mep.npts',
+     'expected int, got 101.0'),
+    ('shear-npts-bool', W, {'interface.shear.mep.npts': True}, 'interface.shear.mep.npts',
+     'expected int, got True'),
+    ('shear-extent-one', W, {'interface.shear.mep.extent': [1.5]}, 'interface.shear.mep.extent',
+     'give two numbers, one for x and one for y; got [1.5]'),
+    ('shear-extent-three', W, {'interface.shear.mep.extent': [1.5, 1.5, 1.5]},
+     'interface.shear.mep.extent', 'give two numbers, one for x and one for y'),
+    ('shear-extent-zero', W, {'interface.shear.mep.extent': [1.5, 0.0]},
+     'interface.shear.mep.extent[1]', 'must be a finite number > 0, got 0.0'),
+    ('shear-extent-negative', W, {'interface.shear.mep.extent': [-1.5, 1.5]},
+     'interface.shear.mep.extent[0]', 'must be a finite number > 0, got -1.5'),
+    ('shear-extent-inf', W, {'interface.shear.mep.extent': [1.5, float('inf')]},
+     'interface.shear.mep.extent[1]', 'must be a finite number > 0, got inf'),
+    ('shear-extent-text', W, {'interface.shear.mep.extent': '1.5'}, 'interface.shear.mep.extent',
+     'expected a list of float'),
+    ('shear-extent-text-item', W, {'interface.shear.mep.extent': [1.5, 'a']},
+     'interface.shear.mep.extent', 'expected a list of float'),
+    ('shear-h-zero', W, {'interface.shear.mep.h': 0.0}, 'interface.shear.mep.h',
+     'must be a finite number > 0, got 0.0'),
+    ('shear-tol-negative', W, {'interface.shear.mep.tol': -1e-8}, 'interface.shear.mep.tol',
+     'must be a finite number > 0, got -1e-08'),
+    ('shear-mep-delta-nan', W, {'interface.shear.mep.delta': float('nan')},
+     'interface.shear.mep.delta', 'must be a finite number > 0, got nan'),
+    ('shear-nstepmax-zero', W, {'interface.shear.mep.nstepmax': 0}, 'interface.shear.mep.nstepmax',
+     'must be >= 1, got 0'),
+    ('shear-nstepmax-float', W, {'interface.shear.mep.nstepmax': 1000.0},
+     'interface.shear.mep.nstepmax', 'expected int, got 1000.0'),
+    ('shear-key', W, {'interface.shear.method': 'zerotemp'}, 'interface.shear.method',
+     'allowed keys: delta, seed, mep'),
+    ('shear-key-pes', W, {'interface.shear.pes': 'pes_scf'}, 'interface.shear.pes',
+     'allowed keys: delta, seed, mep'),
+    ('shear-mep-key', W, {'interface.shear.mep.optimization': 'x'},
+     'interface.shear.mep.optimization', 'allowed keys: npts, extent, h, nstepmax, tol, delta'),
+    ('shear-mep-scalar', W, {'interface.shear.mep': 101}, 'interface.shear.mep',
+     'expected a table'),
     # [qe]
     ('qe-version', W, {'qe.version': '7.2MaX'}, 'qe.version',
      "'7.2MaX' is not a version of pw.x: give major.minor or major.minor.patch"),

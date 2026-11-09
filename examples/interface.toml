@@ -18,7 +18,8 @@ schema_version = 1
 # between steps that are ready, the order of this list decides. pes is the
 # potential energy surface relaxed along z, pes_scf the static one: two steps,
 # run when listed, also both. plotpes interpolates pes and plotpes_scf
-# interpolates pes_scf; in this version they are analysed only by hand
+# interpolates pes_scf; shear reads the interpolation of plotpes. The three are
+# analysed in a job of their own ([execution.analysis]) or by hand
 # ("triboworkflow analyse plotpes"), where there is enough memory.
 steps = ["match", "pes", "pes_scf", "plotpes", "plotpes_scf", "shear", "adhesion", "ppes", "charge"]
 engine = "qe"                      # Engine of the steps that run calculations.
@@ -91,6 +92,28 @@ site = "min_site"                  # Default: min_site or max_site, the interfac
 # operations = ["-", "-"]          # Default: the interface minus the bottom slab minus the top
                                    # slab; each one "+" or "-". Changing them computes nothing again.
 
+# Shear strength (step shear): three minimum energy paths of the surface that plotpes
+# interpolated (the relaxed one), from the best straight line, the axis x and the axis y of
+# the cell. The values of both tables are the recommended ones, which are also the defaults;
+# the step tells which parameters of a run differ. Changing any of them computes the shear
+# strength again. It is analysed in a job of its own ([execution.analysis]) or by hand
+# ("triboworkflow analyse shear").
+[interface.shear]
+delta = 0.01                       # Default: step (angstrom) of the derivative along each path,
+                                   # which gives the force and the shear strength.
+seed = 0                           # Default: seed of the noise of the best straight line
+                                   # (0 to 4294967295).
+
+[interface.shear.mep]              # String method, the same for the three paths.
+npts = 101                         # Default: points of the string (at least 6).
+extent = [1.5, 1.5]                # Default: extent of the starting string along x and y, in
+                                   # lengths of the cell.
+h = 0.01                           # Default: time step.
+nstepmax = 99999                   # Default: maximum number of steps.
+tol = 1.0e-8                       # Default: mean displacement of the string that stops it.
+delta = 1.0e-4                     # Default: step (angstrom) of the derivative of the surface
+                                   # inside the method; not the delta above.
+
 [namelists.CONTROL]
 nstep = 150                        # Relax; recommended 150, at most 250. Raised by the relaunches.
 max_seconds = 84600                # Seconds; upper limit of the value set from the walltime left.
@@ -160,10 +183,11 @@ polling_interval = 1800            # Seconds between two checks of the jobs.
 max_seconds_margin = 600           # Seconds kept free at the end of the walltime.
 job_report_wait = 3600             # Seconds a submitted job may stay unreported by the scheduler.
 
-# Job of the interpolation of the PES (plotpes, plotpes_scf), which can need tens
-# of GiB on large interfaces: never run by the orchestrator. With this table the
-# orchestrator submits it on a compute node and follows it; without it those steps
-# wait to be analysed by hand (triboworkflow analyse plotpes).
+# Job of the analyses that need a compute node (plotpes and plotpes_scf, which can need
+# tens of GiB on large interfaces; shear, which takes long): never run by the
+# orchestrator. With this table the orchestrator submits each on a compute node and
+# follows it; without it those steps wait to be analysed by hand (triboworkflow
+# analyse plotpes).
 # [execution.analysis]
 # jobscript = "analysis.sh"        # Relative to this file; copied with the analysis line added.
 #                                  # Memory, walltime and partition in its #SBATCH lines.

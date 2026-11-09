@@ -9,9 +9,9 @@
 itself here once it is implemented; until then the command line answers that
 the step is not available, and nothing is prepared or submitted.
 
-In this version ``match``, ``pes``, ``pes_scf``, ``plotpes``, ``plotpes_scf``,
-``adhesion``, ``ppes`` and ``charge`` are available: a run lists only these in
-``[interface].steps``; with any other step the command line stops with
+In this version every step of the graph is available: ``match``, ``pes``,
+``pes_scf``, ``plotpes``, ``plotpes_scf``, ``shear``, ``adhesion``, ``ppes`` and
+``charge``. A name that the registry lacks makes the command line stop with
 ``step '<name>' not available in this version`` before doing anything.
 """
 
@@ -23,11 +23,12 @@ from .match import MatchStep
 from .pes import RelaxedPesStep, StaticPesStep
 from .plotpes import RelaxedPlotPesStep, StaticPlotPesStep
 from .ppes import PpesStep
+from .shear import ShearStep
 
 STEPS: dict[str, type[Step]] = {'match': MatchStep, 'pes': RelaxedPesStep,
                                 'pes_scf': StaticPesStep, 'plotpes': RelaxedPlotPesStep,
-                                'plotpes_scf': StaticPlotPesStep, 'adhesion': AdhesionStep,
-                                'ppes': PpesStep, 'charge': ChargeStep}
+                                'plotpes_scf': StaticPlotPesStep, 'shear': ShearStep,
+                                'adhesion': AdhesionStep, 'ppes': PpesStep, 'charge': ChargeStep}
 
 
 class StepNotAvailable(LookupError):

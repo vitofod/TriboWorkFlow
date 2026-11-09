@@ -6,8 +6,7 @@
 A run is the folder of its ``config.toml``; the system is the interface of
 its two slabs; the number of jobs per group comes from the command line,
 then from the settings, then from a question in a terminal, else an error;
-the steps come from the registry, with only ``match``, ``pes``, ``pes_scf``, the
-two interpolations, ``adhesion`` and ``ppes`` in this version.
+the steps come from the registry, which has every step of the graph.
 """
 
 import io
@@ -19,7 +18,9 @@ import pytest
 from cli_helpers import EXAMPLE, ROOT, SYSTEM, fake_steps, write_run  # noqa: F401 (fixture)
 from triboworkflow.cli.run import (CONFIG_FILE, RunError, build_orchestrator, daemon_factory,
                                    load_run, resolve_groups, system_name, terminal_ask)
-from triboworkflow.workflows.interface.registry import StepNotAvailable, get_step
+from triboworkflow.core.settings.schema import INTERFACE_STEPS
+from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
+from triboworkflow.workflows.interface.registry import STEPS, StepNotAvailable, get_step
 
 
 class Terminal(io.StringIO):
@@ -78,10 +79,18 @@ def test_terminal_without_answer_is_an_error():
 
 
 def test_step_not_in_the_registry(tmp_path):
-    with pytest.raises(StepNotAvailable, match="step 'shear' not available in this version"):
-        get_step('shear')
-    with pytest.raises(StepNotAvailable, match="step 'shear' not available"):
-        build_orchestrator(write_run(tmp_path, steps=('match', 'pes', 'plotpes', 'shear')))
+    # Every step of the graph is available: a name that the registry lacks is refused before
+    # anything is built.
+    with pytest.raises(StepNotAvailable, match="step 'bulk' not available in this version"):
+        get_step('bulk')
+    run_dir = write_run(tmp_path, steps=('match',))
+    with pytest.raises(StepNotAvailable, match="step 'bulk' not available"):
+        build_orchestrator(run_dir, steps=('match', 'bulk'))
+
+
+def test_every_step_of_the_graph_is_in_the_registry():
+    assert set(STEPS) == set(INTERFACE_STEPS) == set(INTERFACE_GRAPH)
+    assert all(get_step(name).name == name for name in INTERFACE_STEPS)
 
 
 def test_steps_in_the_registry(tmp_path):
@@ -91,14 +100,16 @@ def test_steps_in_the_registry(tmp_path):
     from triboworkflow.workflows.interface.pes import RelaxedPesStep, StaticPesStep
     from triboworkflow.workflows.interface.plotpes import RelaxedPlotPesStep, StaticPlotPesStep
     from triboworkflow.workflows.interface.ppes import PpesStep
-    names = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf', 'adhesion', 'ppes', 'charge')
+    from triboworkflow.workflows.interface.shear import ShearStep
+    names = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf', 'shear', 'adhesion', 'ppes',
+             'charge')
     assert {name: type(get_step(name)) for name in names} == {
         'match': MatchStep, 'pes': RelaxedPesStep, 'pes_scf': StaticPesStep,
-        'plotpes': RelaxedPlotPesStep, 'plotpes_scf': StaticPlotPesStep, 'adhesion': AdhesionStep,
-        'ppes': PpesStep, 'charge': ChargeStep}
-    # Only the interpolations are left to the user.
-    assert [name for name in names if get_step(name).manual_analysis] == ['plotpes',
-                                                                          'plotpes_scf']
+        'plotpes': RelaxedPlotPesStep, 'plotpes_scf': StaticPlotPesStep, 'shear': ShearStep,
+        'adhesion': AdhesionStep, 'ppes': PpesStep, 'charge': ChargeStep}
+    # Only the interpolations and the shear strength are left to the user.
+    assert [name for name in names if get_step(name).manual_analysis] == [
+        'plotpes', 'plotpes_scf', 'shear']
     assert build_orchestrator(write_run(tmp_path, steps=('match',))).order == ['match']
     run_dir = write_run(tmp_path, steps=('pes_scf', 'pes', 'match'), name='pes')
     assert build_orchestrator(run_dir).order == ['match', 'pes_scf', 'pes']

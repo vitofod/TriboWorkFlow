@@ -320,10 +320,13 @@ each run.
 
 Optional: the job of the analyses that need a compute node, i.e. the
 interpolations of the PES (`plotpes`, `plotpes_scf`), whose memory grows with
-the square of the points ([interface.md](interface.md#cost)). The
-orchestrator never runs them on the login node: with this table it submits
-each in a job of its own and follows it; without it those steps wait to be
-analysed by hand (`triboworkflow analyse plotpes`).
+the square of the points ([interface.md](interface.md#cost)), and the shear
+strength (`shear`), which interpolates the PES again and then runs the string
+method for a long time. The orchestrator never runs them on the login node:
+with this table it submits each in a job of its own and follows it; without it
+those steps wait to be analysed by hand (`triboworkflow analyse plotpes`). One
+jobscript serves all of them: give it the memory and the walltime of the
+heaviest.
 
 | Key | Type | | Notes |
 |---|---|---|---|
@@ -339,7 +342,7 @@ one ([execution.md](execution.md), *Analyses in a job of their own*).
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `slabs` | list | R | two `[[interface.slabs]]` entries, slab 1 then slab 2: their order gives the interface id (`mid1_mid2`) and the strain weights (`strain_weight_1` goes with slab 1); the slab on top is decided by the matching (see below) |
-| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both; `plotpes` interpolates `pes` and `plotpes_scf` interpolates `pes_scf`, each run only when listed, also both ([interface.md](interface.md)); `adhesion` reads the PES chosen in `[interface.adhesion]`; `ppes` reads the interface that `adhesion` relaxed, of the kind of `[interface.adhesion]` and at the site of `[interface.ppes]`. In this version `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `adhesion` and `ppes` are available, `plotpes` and `plotpes_scf` analysed in a job of their own with `[execution.analysis]`, or by hand (`analyse plotpes`): with any other step the command line stops with `step '<name>' not available in this version` |
+| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both; `plotpes` interpolates `pes` and `plotpes_scf` interpolates `pes_scf`, each run only when listed, also both ([interface.md](interface.md)); `adhesion` reads the PES chosen in `[interface.adhesion]`; `ppes` reads the interface that `adhesion` relaxed, of the kind of `[interface.adhesion]` and at the site of `[interface.ppes]`; `charge` reads the same interface and the density of the slabs; `shear` reads the PES relaxed along z that `plotpes` interpolated (so it needs `pes` and `plotpes`, not `pes_scf`). `plotpes`, `plotpes_scf` and `shear` are analysed in a job of their own with `[execution.analysis]`, or by hand (`analyse plotpes`) |
 | `set_bm` | bool | `true` | strain weights from the bulk moduli of the two materials |
 | `engine` | str | `"qe"` | engine of the steps that run calculations |
 | `engines` | table | `{}` | per-step engine for `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`; only `qe` for now |
@@ -511,3 +514,49 @@ workflow fail, A32), the axis is 2 and the number of points is 1000, which
 `defaults.json` says and the signatures of the functions contradict with 10000
 (A93). The original did not run the other site once one was done (A59): here
 the site is part of the calculations and of what is done (D59).
+
+`[interface.shear]` and `[interface.shear.mep]`: the shear strength (step
+`shear`, [interface.md](interface.md)); other keys are errors. The step reads
+the PES relaxed along z that `plotpes` interpolated (the surface is not a
+setting) and finds three paths of minimum energy on it, one from each starting
+string: the best straight line, the axis x and the axis y of the cell. The
+shear strength along each path is the largest force along it, in GPa. The
+defaults are the recommended values: the step logs which parameters of a run
+are not the recommended ones. Changing any key
+computes the shear strength again. The step has no calculation of its own: it
+runs in a job of its own with `[execution.analysis]`, or by hand with `analyse
+shear`, where there is enough memory.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `delta` | float | `0.01` | step of the finite-difference derivative of the surface along each path, in Å, that gives the force and so the shear strength; finite and > 0. Not the `delta` of `[interface.shear.mep]` |
+| `seed` | int | `0` | seed of the random numbers; from 0 to 4294967295, the range of the seed of NumPy. The best straight line starts from a string perturbed by a random noise of about 1e-4 of the cell, and the seed is set before each string: the same seed gives the same result, another seed is another sample of the same noise (its effect on the shear strength is small: [interface.md](interface.md)). The axes x and y do not use random numbers |
+| `mep` | table | below | the parameters of the string method |
+
+`[interface.shear.mep]` has the parameters of the string method, the same for
+the three paths:
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `npts` | int | `101` | points of the string; ≥ 6, because the entries of the shear strength hold the values at the first six points of the path ([interface.md](interface.md), *Entries and files*) and a shorter string would fail when they are written, after it is computed |
+| `extent` | 2 float | `[1.5, 1.5]` | extent of the starting string along x and along y, in lengths of the cell along those axes: it goes from −`extent` to +`extent`; finite and > 0 |
+| `h` | float | `0.01` | time step of the evolution of the string; finite and > 0 |
+| `nstepmax` | int | `99999` | maximum number of steps; ≥ 1 |
+| `tol` | float | `1e-8` | the string stops when the mean displacement of its points in a step is at most this; finite and > 0 |
+| `delta` | float | `1e-4` | step of the finite-difference derivative of the surface inside the method, in Å; finite and > 0. Not the `delta` of `[interface.shear]` |
+
+The method (`zerotemp`), the three starting strings, the interpolation of the
+surface (thin-plate spline, smoothing 1e-3, points replicated 5 × 5 around the
+cell, grid of density 20 that the shear does not use) and the entry
+(`shearstr`) are not settings. The cell must be a square with its sides along x
+and y: the starting strings are built on the two diagonal elements of the cell
+only, and the step warns when the cell is not a square.
+
+To remove: the options of TribChem's command line `-npts`, `-fac`, `-hs`,
+`-nstepmax`, `-tol` and `-opt` never reached the string method (A94): its
+values were those of `defaults_tribo.json`, which are the defaults here, and
+not the ones that the command line and `defaults.json` announced (`h` 0.001,
+`tol` 1e-7, `delta` 0.01); the three paths were always computed. Only `-delta`
+(0.01) acted, on the shear strength. Here every key acts (DEV-47), and the
+default of each is the value that TribChem used. The noise of the starting
+string was not seeded in TribChem (Q02, DEV-46).

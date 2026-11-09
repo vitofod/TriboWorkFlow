@@ -10,7 +10,8 @@ entries of ``pes`` and ``match``, and ``match`` → ``pes_scf`` →
 ``plotpes_scf``. ``pes`` and ``pes_scf`` (the potential energy surface relaxed
 along z and the static one) are independent; ``plotpes`` and ``plotpes_scf``
 interpolate the one and the other and read also the entries of ``match``;
-``shear`` depends on ``pes`` for now. ``adhesion`` reads the surface chosen in
+``shear`` reads the surface relaxed along z, interpolated by ``plotpes``, and
+never the static one. ``adhesion`` reads the surface chosen in
 ``[interface.adhesion]`` and the entries of ``match``
 (``interface_graph``). A pass
 (``Orchestrator.run_pass``):
@@ -143,11 +144,12 @@ logger = logging.getLogger(__name__)
 # written by the steps of the interface workflow).
 # pes and pes_scf need only match. plotpes interpolates pes and plotpes_scf
 # interpolates pes_scf, each reading also the high-symmetry points of match.
-# Which of the two PES shear reads is decided with that step, and until then
-# it depends on pes. adhesion reads the PES that [interface.adhesion] names
-# and the entries of match (the slabs, the sites): here the default, pes;
+# shear reads the interpolation of plotpes, so pes, and the cell of match; it
+# never reads the static PES. adhesion reads the PES that [interface.adhesion]
+# names and the entries of match (the slabs, the sites): here the default, pes;
 # interface_graph gives the graph of a run.
-# To remove: Q38 (shear); the adhesion is decided in D56.
+# To remove: the PES that shear reads is the only one that TribChem's shear
+# read (D60, Q38); the adhesion is decided in D56.
 INTERFACE_GRAPH = {
     'match': (),
     'pes': ('match',),
