@@ -13,7 +13,8 @@ machine"). The jobs of the analyses (`[execution.analysis]`, the
 interpolation of the PES and the shear strength) run no pw.x and are not part
 of this check: they are checked with a run of the interface workflow that
 interpolates its PES and analyses the shear strength
-(`execution.md`, "Analyses in a job of their own").
+(`execution.md`, "Analyses in a job of their own"), which
+`tests/hpc/interface_check.py` reads ([run_report.md](run_report.md)).
 
 Everything runs by hand, from a login node, in the virtual environment of
 the package. Nothing of the runs goes into the repository: the run folders

@@ -1,7 +1,7 @@
 # Author: Vito Foderà
 # Created: 2026-10-23
 
-"""Reading of CIF, XYZ, extxyz, PWI, POSCAR and pymatgen JSON files.
+"""Reading of CIF, XYZ, extxyz, PWI, PWO, POSCAR and pymatgen JSON files.
 
 Every reader keeps the cell matrix, the cartesian positions, the order of the
 atoms, the labels and the per-atom data present in the file (``model.py``),
@@ -25,6 +25,10 @@ Libraries and choices per format:
   ``starting_magnetization(i)`` stays with the i-th species of
   ``ATOMIC_SPECIES``: ASE and Xsorb look it up by element and turn it into
   initial moments, a different quantity (``model.py``);
+- PWO: the last run of a pw.x output that is over and converged, read by
+  ``engines.qe.pwo`` (the only place where this module names an engine, and
+  only when a PWO file is read: the core does not depend on the engines
+  otherwise). The data are those of a PWI file, with the digits pw.x prints;
 - POSCAR: pymatgen's reader, as ``Structure.from_file`` uses it;
 - JSON: a pymatgen ``Structure`` or ``Slab`` dict, e.g. a slab saved with
   ``Slab.as_dict``. ``Slab.from_dict`` reorients the lattice and drops the
@@ -53,7 +57,7 @@ from pymatgen.core.surface import Slab
 from .convert import to_structure
 from .model import CIF_LABEL, CONSTRAINT_GIVEN, IF_POS, QE_SPECIES, StructureError
 
-FORMATS = ('cif', 'xyz', 'extxyz', 'pwi', 'poscar', 'json')
+FORMATS = ('cif', 'xyz', 'extxyz', 'pwi', 'pwo', 'poscar', 'json')
 
 # Keys of a pymatgen Slab dict that read_json restores.
 SLAB_KEYS = {'@module', '@class', '@version', 'charge', 'lattice', 'properties', 'sites',
@@ -73,8 +77,8 @@ def detect_format(path):
     -------
     str
         One of ``FORMATS``: from the suffix (``.cif``, ``.xyz``, ``.extxyz``,
-        ``.pwi``, ``.json``, ``.vasp``, ``.poscar``) or, for POSCAR, from a
-        name starting with ``POSCAR`` or ``CONTCAR``.
+        ``.pwi``, ``.pwo``, ``.json``, ``.vasp``, ``.poscar``) or, for POSCAR,
+        from a name starting with ``POSCAR`` or ``CONTCAR``.
 
     Raises
     ------
@@ -84,7 +88,7 @@ def detect_format(path):
     name = Path(path).name
     suffix = Path(path).suffix.lower()
     by_suffix = {'.cif': 'cif', '.xyz': 'xyz', '.extxyz': 'extxyz', '.pwi': 'pwi',
-                 '.json': 'json', '.vasp': 'poscar', '.poscar': 'poscar'}
+                 '.pwo': 'pwo', '.json': 'json', '.vasp': 'poscar', '.poscar': 'poscar'}
     if suffix in by_suffix:
         return by_suffix[suffix]
     if name.upper().startswith(('POSCAR', 'CONTCAR')):
@@ -105,7 +109,8 @@ def read_structure(path, format='auto', frame=0, cell=None):
         (``detect_format``).
     frame : int, optional
         Structure to read, counted from 0, in files with several (CIF,
-        XYZ, extxyz); must be 0 for the others.
+        XYZ, extxyz); must be 0 for the others (a PWO file gives the
+        structure of its last run).
     cell : array_like, shape (3, 3), optional
         Row vectors in angstrom that replace the cell of the file, keeping
         the cartesian positions; required for plain XYZ.
@@ -127,7 +132,7 @@ def read_structure(path, format='auto', frame=0, cell=None):
         raise StructureError(f'{path}: unknown format {fmt!r}; allowed: {", ".join(FORMATS)}')
     if not path.is_file():
         raise StructureError(f'{path}: file not found')
-    if fmt in ('pwi', 'poscar', 'json') and frame != 0:
+    if fmt in ('pwi', 'pwo', 'poscar', 'json') and frame != 0:
         raise StructureError(f'{path}: a {fmt} file holds one structure; frame must be 0, got {frame}')
     try:
         if fmt == 'cif':
@@ -138,6 +143,8 @@ def read_structure(path, format='auto', frame=0, cell=None):
             structure = _read_extxyz(path, frame, cell)
         elif fmt == 'pwi':
             structure = _read_pwi(path)
+        elif fmt == 'pwo':
+            structure = _read_pwo(path)
         elif fmt == 'poscar':
             structure = Structure.from_str(path.read_text(), fmt='poscar')
         else:
@@ -303,6 +310,13 @@ def _read_pwi(path):
     if any(f is not None for f in flags):
         structure.add_site_property(IF_POS, flags)
     return structure
+
+
+def _read_pwo(path):
+    # Imported here so that the core does not depend on the engines: the
+    # reading of a pw.x output belongs to the engine that prints it.
+    from triboworkflow.engines.qe.pwo import read_pwo_structure
+    return read_pwo_structure(path)
 
 
 def read_json(path):

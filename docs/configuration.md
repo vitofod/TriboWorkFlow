@@ -60,7 +60,7 @@ everything else comes from the settings. Formats, data read and limits:
 | Key | Type | Default | Allowed / notes |
 |---|---|---|---|
 | `file` | str | R | structure file, relative to the folder of the settings file; `""` is a placeholder |
-| `format` | str | `"auto"` | `auto`, `cif`, `xyz`, `extxyz`, `pwi`, `poscar`, `json` |
+| `format` | str | `"auto"` | `auto`, `cif`, `xyz`, `extxyz`, `pwi`, `pwo`, `poscar`, `json` |
 | `frame` | int | `0` | counted from 0, for files with several structures |
 | `xyz_units` | str | `"angstrom"` | `angstrom` |
 | `preserve_atom_order` | bool | `true` | only `true` |

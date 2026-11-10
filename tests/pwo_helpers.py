@@ -57,8 +57,13 @@ def relaxed(s, shift=(0.01, -0.02, 0.03)):
     return [tuple(p) for p in np.asarray(s.cart_coords) + np.asarray(shift)]
 
 
-def header(s, calculation='scf', version='7.2', species=SPECIES, md5_lines=None):
-    """Header of a run of ``s``, from the version line to the positions."""
+def header(s, calculation='scf', version='7.2', species=SPECIES, md5_lines=None,
+           magnetization=None):
+    """Header of a run of ``s``, from the version line to the positions.
+
+    ``magnetization`` (one value per species) adds the table ``Starting magnetic
+    structure`` that pw.x prints for a spin-polarized calculation.
+    """
     matrix = np.asarray(s.lattice.matrix) / BOHR_TO_ANGSTROM
     alat = float(np.linalg.norm(matrix[0]))
     lines = ['', f'     Program PWSCF v.{version} starts on  1Jan2026 at 10: 0: 0 ', '',
@@ -87,6 +92,10 @@ def header(s, calculation='scf', version='7.2', species=SPECIES, md5_lines=None)
     lines += ['     atomic species   valence    mass     pseudopotential']
     for label, element, _, _ in species:
         lines.append(f'        {label:6s}         1.00     1.00800     {element:2s}( 1.00)')
+    if magnetization is not None:
+        lines += ['', '     Starting magnetic structure ', '     atomic species   magnetization']
+        lines += [f'        {label:6s}   {value:8.3f}'
+                  for (label, _, _, _), value in zip(species, magnetization)]
     lines += ['', '   Cartesian axes', '',
               '     site n.     atom                  positions (alat units)']
     for n, (site, (x, y, z)) in enumerate(zip(s, np.asarray(s.cart_coords) /
@@ -142,7 +151,7 @@ def final_coordinates(labels, positions, if_pos=None, closed=True):
 def pw_output(s, calculation='scf', version='7.2', energy=-31.1, forces=None, stress=None,
               species=SPECIES, md5_lines=None, steps=2, final_energy='same', final_positions=None,
               final_if_pos=None, closed=True, verbosity_high=False, dispersion=False,
-              job_done=True):
+              job_done=True, magnetization=None):
     """Text of a converged pw.x run of ``s``.
 
     ``forces`` (Ry/bohr, one triple per atom) and ``stress`` (Ry/bohr^3, three
@@ -151,10 +160,11 @@ def pw_output(s, calculation='scf', version='7.2', energy=-31.1, forces=None, st
     ``Final energy`` is ``energy`` with ten decimals (``final_energy='same'``),
     another value, or absent (None); the final coordinates are
     ``final_positions`` (``relaxed(s)`` by default) with the flags
-    ``final_if_pos``, left open when ``closed`` is False.
+    ``final_if_pos``, left open when ``closed`` is False; ``magnetization``
+    adds the table of the starting magnetization to the header.
     """
     nat = len(s)
-    lines = header(s, calculation, version, species, md5_lines)
+    lines = header(s, calculation, version, species, md5_lines, magnetization)
     if calculation == 'scf':
         lines += scf_cycle(nat, energy, forces, stress, verbosity_high, dispersion)
     else:

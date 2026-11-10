@@ -17,8 +17,8 @@
 schema_version = 1
 
 [structure]
-file = ""                          # TO FILL IN: CIF, XYZ, extxyz, PWI or POSCAR file.
-format = "auto"                    # auto | cif | xyz | extxyz | pwi | poscar | json
+file = ""                          # TO FILL IN: CIF, XYZ, extxyz, PWI, PWO or POSCAR file.
+format = "auto"                    # auto | cif | xyz | extxyz | pwi | pwo | poscar | json
 frame = 0                          # Counted from 0, for files with several structures.
 xyz_units = "angstrom"             # Units of the coordinates of a plain XYZ file.
 preserve_atom_order = true         # Needed by the constraints given by atom index.

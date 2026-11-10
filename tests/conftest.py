@@ -20,6 +20,17 @@ ROOT = Path(__file__).resolve().parents[1]
 ENVS = ROOT / 'envs'
 
 
+@pytest.fixture(scope='session')
+def chain(tmp_path_factory):
+    """The run of the nine steps of the interface workflow, finished (``chain_helpers.py``).
+
+    Built once for the whole session, in about a minute, by the tests that read it.
+    """
+    from chain_helpers import build_chain
+
+    return build_chain(tmp_path_factory.mktemp('chain'))
+
+
 @pytest.fixture
 def read_lock():
     """Return a function giving the {name: version} pins of envs/<env>/requirements.lock."""

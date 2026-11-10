@@ -1,7 +1,7 @@
 # Author: Vito Foderà
 # Created: 2026-11-04
 
-"""Fake pw.x and pp.x for the tests of ``tests/hpc/qe_check.py``: nothing is computed.
+"""Fake pw.x and pp.x for the tests of ``tests/hpc/qe_check.py``: no electrons are computed.
 
 ``python qe_check_fake.py pw -in run.pwi`` prints on the standard output a
 pw.x 7.2 output of the input, with the lines the package reads (built with
@@ -19,6 +19,14 @@ listed ends ``completed``. The ends:
 - ``max_seconds``, ``user_request``: stopped inside the SCF;
 - ``max_steps`` (relax): steps over;
 - ``scf_not_converged``: the SCF not converged.
+
+With ``--emt`` after ``pw`` the converged run has the energy, the forces and
+the stress of ASE's EMT, a classical potential, in place of constants, and a
+relax is a real minimization (BFGS) of the free coordinates: the surfaces that
+the steps of the workflow build from such runs vary from point to point, for
+the tests of the whole chain (``tests/test_interface_chain.py``). EMT covers
+Ag, Al, Au, C, Cu, H, N, Ni, O, Pd and Pt, not Fe. This is a stand-in for a
+program on the HPC machine, kept in the tests: the package never computes.
 
 Every end but ``completed`` leaves ``<outdir>/<prefix>.save/`` with the files
 a restart needs. With ``restart_mode = 'restart'`` the output says that
@@ -131,7 +139,7 @@ def pw(argv):
                   '     iteration #  1     ecut=    30.00 Ry     beta= 0.40',
                   '     total energy              =     -31.00000000 Ry']
     if end == 'completed':
-        text = completed(structure, calculation, control, species)
+        text = completed(structure, calculation, control, species, emt='--emt' in argv)
         lines = text.splitlines()
         body_start = next(i for i, line in enumerate(lines)
                           if line.strip() == 'Self-consistent Calculation')
@@ -154,22 +162,67 @@ def pw(argv):
     return code
 
 
-def completed(structure, calculation, control, species):
-    """Text of a converged run (``pwo_helpers.pw_output``)."""
+def emt_values(structure, calculation, control):
+    """Energy, forces, stress and positions of a structure by ASE's EMT, in the units of pw.x.
+
+    A ``relax`` minimizes the energy with BFGS, the atoms moving along the free
+    components (``if_pos``) only, to the force threshold ``forc_conv_thr`` of the
+    input. The run stops with an error if the minimization does not converge.
+
+    Returns
+    -------
+    energy : float
+        In Ry.
+    forces : list of tuple
+        In Ry/bohr, one triple per atom (the fixed components are zero).
+    stress : list of tuple
+        In Ry/bohr^3, the sign pw.x prints (opposite to ASE's).
+    positions : list of tuple
+        Cartesian, in angstrom (those of the input for a ``scf``).
+    """
+    from ase.calculators.emt import EMT
+    from ase.optimize import BFGS
+
+    from triboworkflow.core.structures import to_atoms
+    from triboworkflow.engines.qe.results import BOHR_TO_ANGSTROM, RY_TO_EV
+
+    atoms = to_atoms(structure)
+    atoms.calc = EMT()
+    if calculation == 'relax':
+        fmax = control.get('forc_conv_thr', 1.0e-3) * RY_TO_EV / BOHR_TO_ANGSTROM
+        if not BFGS(atoms, logfile=None).run(fmax=fmax, steps=min(control.get('nstep', 50), 250)):
+            raise SystemExit('fake pw.x with EMT: the relaxation did not converge')
+    forces = atoms.get_forces() * BOHR_TO_ANGSTROM / RY_TO_EV
+    stress = -atoms.get_stress(voigt=False) * BOHR_TO_ANGSTROM ** 3 / RY_TO_EV
+    return (atoms.get_potential_energy() / RY_TO_EV, [tuple(f) for f in forces],
+            [tuple(row) for row in stress], [tuple(p) for p in atoms.get_positions()])
+
+
+def completed(structure, calculation, control, species, emt=False):
+    """Text of a converged run (``pwo_helpers.pw_output``); constants unless ``emt``."""
     nat = len(structure)
     forces = [(0.0, 0.0, 0.0)] * nat if control.get('tprnfor') or calculation == 'relax' \
         else None
     stress = [(0.0001, 0, 0), (0, 0.0001, 0), (0, 0, 0.0002)] if control.get('tstress') else None
-    if calculation == 'scf':
-        return pwo_helpers.pw_output(structure, 'scf', species=species, forces=forces,
-                                     stress=stress)
     if_pos = structure.site_properties.get('if_pos') or [None] * nat
     flags = [tuple(f) if f is not None else (1, 1, 1) for f in if_pos]
-    moved = [tuple(c + 0.01 * f for c, f in zip(site.coords, flag))
-             for site, flag in zip(structure, flags)]
+    energy = {}
+    if emt:
+        value, emt_forces, emt_stress, positions = emt_values(structure, calculation, control)
+        energy = {'energy': value}
+        forces = emt_forces if forces is not None else None
+        stress = emt_stress if stress is not None else None
+    if calculation == 'scf':
+        return pwo_helpers.pw_output(structure, 'scf', species=species, forces=forces,
+                                     stress=stress, **energy)
+    if emt:
+        moved = positions
+    else:
+        moved = [tuple(c + 0.01 * f for c, f in zip(site.coords, flag))
+                 for site, flag in zip(structure, flags)]
     return pwo_helpers.pw_output(structure, 'relax', species=species, forces=forces,
                                  stress=stress, final_positions=moved,
-                                 final_if_pos=[f if 0 in f else None for f in flags])
+                                 final_if_pos=[f if 0 in f else None for f in flags], **energy)
 
 
 def pp(argv):

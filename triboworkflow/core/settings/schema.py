@@ -343,7 +343,8 @@ class StructureParams:
 
     def check(self, path):
         """Validate the table; errors name ``path``."""
-        _choice(f'{path}.format', self.format, ('auto', 'cif', 'xyz', 'extxyz', 'pwi', 'poscar', 'json'))
+        _choice(f'{path}.format', self.format,
+                ('auto', 'cif', 'xyz', 'extxyz', 'pwi', 'pwo', 'poscar', 'json'))
         _choice(f'{path}.xyz_units', self.xyz_units, ('angstrom',))
         if not self.preserve_atom_order:
             raise SettingsError(f'{path}.preserve_atom_order', 'only true is supported: atom '

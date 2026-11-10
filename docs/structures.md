@@ -45,13 +45,58 @@ Magnetisation: two different quantities, never converted into each other.
 | `xyz` | ASE (plain) | no: `[structure.cell] source = "config"` | — (elements only) | — | — | a comment line with `Lattice=` is an extxyz file: error |
 | `extxyz` | ASE | `Lattice`, `pbc="T T T"` | column `qe_label` | `move_mask` (cartesian) | `initial_magmoms` | other columns become site properties |
 | `pwi` | ASE parsing functions | `CELL_PARAMETERS`, `ibrav = 0` only | whole labels | `if_pos` of `ATOMIC_POSITIONS` | — | `qe_species`: label, mass, pseudopotential, `starting_magnetization` |
+| `pwo` | the pw.x output parser of `engines.qe` | `crystal axes` × `celldm(1)`, any `ibrav` | whole labels | `if_pos` of the final coordinates of a `relax` | — | last run only, over and converged; `qe_species` as for `pwi`; the digits pw.x prints; see below |
 | `poscar` | pymatgen | yes | element | `selective_dynamics` | — | input only |
 | `json` | pymatgen dict | `lattice.matrix` required | `label` of the sites | site properties | site properties | `Structure` or `Slab`; see below |
 
 `format = "auto"` takes the format from the name: `.cif`, `.xyz`,
-`.extxyz`, `.pwi`, `.json`, `.vasp`, `.poscar`, names starting with
-`POSCAR` or `CONTCAR`. Relative paths in the settings are taken from the
-folder of the settings file.
+`.extxyz`, `.pwi`, `.pwo`, `.json`, `.vasp`, `.poscar`, names starting with
+`POSCAR` or `CONTCAR`. Any other name needs the format (an output called
+`run.out` is read with `format = "pwo"`). Relative paths in the settings are
+taken from the folder of the settings file.
+
+**Structures from a pw.x output (`pwo`).** The structure of a calculation that
+was run elsewhere, e.g. a relaxed slab, is read from its output instead of its
+input.
+
+- *Which run.* Only the last run of the file is read (a restart appends its
+  output to the same file), and only if that run is over with the SCF
+  converged and, for a relaxation, the geometry converged and the final
+  coordinates closed. Otherwise the file is refused and the error names the
+  states (`process`, `SCF`, `geometry`, `final coordinates`, `stop reason`);
+  a structure from an unfinished run is never returned. The summary of the run
+  tells the kind of calculation: it prints `nstep` for a relaxation only.
+- *Positions.* A `scf` gives the positions of the header (the atoms of its
+  input); a `relax` the closed block `Begin final coordinates` … `End final
+  coordinates`, which must be in angstrom and must not hold a cell: a
+  variable-cell relaxation is refused. The cell is the `crystal axes` of the
+  header times `celldm(1)`, whatever `ibrav` the input gave.
+- *Digits.* The structure has what pw.x prints, not what its input had. The
+  axes and `celldm(1)` have six decimals, so the cell is known to a few
+  1e-6 Å for the cells of a slab; the header positions of a `scf` have seven decimals in
+  units of `alat`; the final coordinates of a `relax` keep their printed
+  digits. A PWI file is the input itself and exact. When the exact cell is
+  known, `cell` in `[structure]` replaces the printed one and keeps the
+  cartesian positions.
+- *Labels and species.* Labels are kept whole (`Fe1` stays `Fe1`). The element
+  is the symbol the label starts with, as for a PWI file, and must be the
+  element of the pseudopotential that pw.x printed for the species; a
+  contradiction is an error. `qe_species` has, in the order of the output,
+  `label`, `mass`, the name of the UPF file and `starting_magnetization`. The
+  last one comes from the table `Starting magnetic structure` that pw.x prints
+  for spin-polarized calculations, and is `None` without it; it is provenance
+  only and never becomes `magmom`. A table with columns other than the
+  magnetization (non-collinear) is an error.
+- *Constraints.* A `relax` prints the flags after the final positions of the
+  atoms that have a fixed component only, so an atom given `1 1 1` in the
+  input reads as an atom without constraint (`None`), and the other flags
+  become `if_pos`. A `scf` prints no flags: the structure has no `if_pos`.
+- *Slabs.* A structure from a `pwo` follows the rules of any other file (see
+  "Slabs of the workflows"). A cell whose c is not perpendicular to a and b is
+  refused as a slab: e.g. a relaxed cell printed with
+  `a(1) = (0.998727, 0, -0.050443)` and `a(3) = (0, 0, 3.304038)` (in units
+  of `alat`) has an angle of about 92.9° between a and c. The reader does not
+  straighten it; it must be a slab with c along z before it is used.
 
 **JSON slabs.** A pymatgen `Slab` dict (`Slab.as_dict`) is read without
 losses: lattice matrix, sites (fractional coordinates, labels, properties),
