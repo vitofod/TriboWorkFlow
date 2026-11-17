@@ -454,7 +454,8 @@ def test_withdrawal_refused_while_a_job_may_exist(run_dir, manager, slurm):
 
 def test_the_group_of_an_analysis_has_one_job(run_dir, tmp_path, manager, slurm):
     write_analysis(run_dir, Analysis(name='Cu111_Al111.plotpes.1', system='Cu111_Al111',
-                                     step='plotpes', scheduler='slurm'), tmp_path / 'job.sh')
+                                     step='plotpes', scheduler='slurm', walltime=1800),
+                   tmp_path / 'job.sh')
     jobs = manager()
     assert jobs.add_group('Cu111_Al111.plotpes.1', 4) == 1
     summary = jobs.cycle()
@@ -467,7 +468,8 @@ def test_the_group_of_an_analysis_has_one_job(run_dir, tmp_path, manager, slurm)
 
 def test_withdraw_the_group_of_an_analysis(run_dir, tmp_path, manager):
     write_analysis(run_dir, Analysis(name='Cu111_Al111.plotpes.1', system='Cu111_Al111',
-                                     step='plotpes', scheduler='slurm'), tmp_path / 'job.sh')
+                                     step='plotpes', scheduler='slurm', walltime=1800),
+                   tmp_path / 'job.sh')
     manager().withdraw('Cu111_Al111.plotpes.1', 'analysed by hand')
     assert manager().withdrawn() == ['Cu111_Al111.plotpes.1']
 

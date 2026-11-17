@@ -47,7 +47,8 @@ layers = 4
 big_size = [3, 3]
 big_layers = 6
 
-# Per case: walltime (seconds; the jobscript gets it as {time}), jobs per
+# Per case: walltime (seconds; the jobscript gets it as {time}, the steps of
+# the case in their sections [execution.<step>] of the run), jobs per
 # group, and for the case restart the nstep of the relax stopped at
 # max_steps and the electron_maxstep of the one stopped with
 # scf_not_converged.

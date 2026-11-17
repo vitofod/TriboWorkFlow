@@ -25,9 +25,13 @@ from triboworkflow.execution import scheduler as scheduler_module
 from triboworkflow.execution.jobs import (ANALYSIS_FILE, JOBSCRIPT_FILE, MANIFEST_FILE,
                                           PENDING_KEY, SUBMITTED_FILE, Analysis, JobError, Launch,
                                           Manifest, analysis_jobscript_path, analysis_line,
-                                          is_analysis, jobscript_path, most_jobs, read_analysis,
-                                          read_manifest, submit_jobs, surely_not_created,
-                                          worker_line, write_analysis, write_job)
+                                          group_step, group_walltime, is_analysis, job_name,
+                                          jobscript_name, jobscript_path,
+                                          jobscript_placeholders, jobscript_time, most_jobs,
+                                          read_analysis,
+                                          read_manifest, slurm_seconds, submit_jobs,
+                                          surely_not_created, walltime_notes, worker_line,
+                                          write_analysis, write_job)
 from triboworkflow.execution.scheduler import JobScheduler
 
 EXAMPLES = Path(__file__).resolve().parents[1] / 'examples'
@@ -128,11 +132,93 @@ def test_manifest_from_a_generator():
 
 def test_manifest_from_the_settings():
     settings = example_settings(max_seconds_margin=900)
-    built = Manifest.from_execution('pes_scf', LAUNCHES, settings.execution)
+    built = Manifest.from_execution('pes_scf', LAUNCHES, settings.execution, 86400)
     assert built == manifest(max_seconds_margin=900)
     settings = example_settings(pp_command='mpirun -np 32 pp.x')
-    built = Manifest.from_execution('pes_scf', LAUNCHES, settings.execution)
-    assert built == manifest(pp_command='mpirun -np 32 pp.x')
+    built = Manifest.from_execution('pes_scf', LAUNCHES, settings.execution, 7200)
+    assert built == manifest(pp_command='mpirun -np 32 pp.x', walltime=7200)
+
+
+# --- walltime ------------------------------------------------------------------------
+
+@pytest.mark.parametrize('value, seconds', [
+    ('30', 1800), ('30:15', 1815), ('04:00:00', 14400), ('2-6', 194400), ('2-6:30', 196200),
+    ('2-06:30:05', 196205), ('0-00:10:00', 600)])
+def test_slurm_seconds(value, seconds):
+    assert slurm_seconds(value) == seconds
+
+
+@pytest.mark.parametrize('value', ['UNLIMITED', '', '1:2:3:4', '1-2:3:4:5', '-5', 'a-1'])
+def test_slurm_seconds_rejects(value):
+    with pytest.raises(ValueError, match='is not a time limit of Slurm'):
+        slurm_seconds(value)
+
+
+@pytest.mark.parametrize('lines, seconds', [
+    ('#SBATCH --time=04:00:00', 14400),
+    ('#SBATCH --time 1:00:00', 3600),
+    ('#SBATCH -t 90', 5400),
+    ('#SBATCH -t2-00:00:00', 172800),
+    ('#SBATCH --nodes=1 --time=00:30:00   # debug', 1800),
+    ('#SBATCH --time=12:00:00\n\n# a comment\n#SBATCH --time=04:00:00', 14400),  # the last counts
+    ('#SBATCH --time-min=01:00:00', None),
+    ('# SBATCH --time=04:00:00', None),  # a comment, not a directive
+    ('module load qe\n#SBATCH --time=04:00:00', None),  # after the first command: not read
+    ('#SBATCH --mem=8G', None)])
+def test_jobscript_time(tmp_path, lines, seconds):
+    path = tmp_path / 'job.sh'
+    path.write_text(f'#!/bin/bash\n{lines}\nsrun hostname\n')
+    assert jobscript_time(path) == seconds
+
+
+@pytest.mark.parametrize('lines, name', [
+    ('#SBATCH --job-name=testFe', 'testFe'),
+    ('#SBATCH --job-name testFe', 'testFe'),
+    ('#SBATCH -J testFe', 'testFe'),
+    ('#SBATCH -JtestFe', 'testFe'),
+    ('#SBATCH --nodes=1 --job-name=testFe   # name', 'testFe'),
+    ('#SBATCH -J a\n#SBATCH --job-name=b', 'b'),  # the last counts
+    ('# SBATCH --job-name=testFe', None),
+    ('module load qe\n#SBATCH --job-name=testFe', None),
+    ('#SBATCH --mem=8G', None)])
+def test_jobscript_name(tmp_path, lines, name):
+    path = tmp_path / 'job.sh'
+    path.write_text(f'#!/bin/bash\n{lines}\nsrun hostname\n')
+    assert jobscript_name(path) == name
+
+
+def test_jobscript_placeholders(tmp_path):
+    path = tmp_path / 'job.sh'
+    path.write_text('#!/bin/bash\n#SBATCH --account=<account>\n# set <venv> below\n'
+                    'source <venv>/bin/activate\necho "a <b" > out\n')
+    # Directives and commands, not the other comments; "<b" is not a placeholder.
+    assert jobscript_placeholders(path) == [(2, '<account>'), (4, '<venv>')]
+
+
+def jobscripts(tmp_path, *lines):
+    """Jobscripts with the given lines after the first, before the first command."""
+    paths = []
+    for i, text in enumerate(lines):
+        path = tmp_path / f'job{i}.sh'
+        path.write_text(f'#!/bin/bash\n{text}\nmodule load qe\n')
+        paths.append(path)
+    return paths
+
+
+def test_walltime_notes_name_the_missing_walltimes_and_the_time_of_the_jobscripts(tmp_path):
+    paths = jobscripts(tmp_path, '#SBATCH --mem=8G', '#SBATCH --time=00:30:00',
+                       '#SBATCH --time=UNLIMITED')
+    execution = example_settings(adhesion={'groups': 4}, charge={}).execution
+    notes = walltime_notes(execution, ['match', 'pes', 'adhesion', 'charge', 'shear'],
+                           paths + [tmp_path / 'missing.sh'])
+    # A jobscript not read is left to the writing of the jobs.
+    assert notes == ['no walltime in [execution.<step>] for adhesion, charge: their jobs get '
+                     '24:00:00',
+                     f'{paths[1]} has an #SBATCH --time: the walltime of each step in '
+                     '[execution.<step>] replaces it']
+    # The example gives every walltime; another scheduler: the jobscripts are not read.
+    assert walltime_notes(example_settings().execution, ['pes', 'shear'], paths) == [notes[1]]
+    assert walltime_notes(example_settings(scheduler='pbs').execution, ['pes'], paths) == []
 
 
 def give_density(run_dir, system, calc_id, pp_input=True):
@@ -326,8 +412,23 @@ def test_dry_run_submits_nothing(run_dir, jobscript, monkeypatch):
     path = write_job(run_dir, manifest(), jobscript)
     scheduler = JobScheduler('slurm', dry_run=True)
     assert submit_jobs(path, scheduler, 3) == [None, None, None]
-    assert scheduler.commands == [(['sbatch', str(path / JOBSCRIPT_FILE)], None, path)] * 3
+    # The walltime of the manifest, 86400 s, overrides the --time of the jobscript; the
+    # name is <step>_<--job-name of the jobscript>.
+    assert scheduler.commands == [(['sbatch', '--time=24:00:00', '--job-name=pes_scf_pes',
+                                    str(path / JOBSCRIPT_FILE)], None, path)] * 3
     assert not (path / SUBMITTED_FILE).exists()
+
+
+def test_job_name_from_the_step_and_the_jobscript(run_dir, jobscript, tmp_path):
+    path = write_job(run_dir, manifest(), jobscript)
+    assert group_step(path) == ('pes_scf', 'Cu111_Al111')
+    assert job_name(path, 'slurm') == 'pes_scf_pes'
+    # Another scheduler: the jobscript is not read, the name is <step>_<system>.
+    assert job_name(path, 'pbs') == 'pes_scf_Cu111_Al111'
+    plain = tmp_path / 'plain.sh'
+    plain.write_text('#!/bin/bash\n#SBATCH --mem=8G\nmodule load qe\n')
+    other = write_job(run_dir, manifest(name='pes_scf.2', calculations=LAUNCHES[2:]), plain)
+    assert job_name(other, 'slurm') == 'pes_scf_Cu111_Ni111'
 
 
 def test_submitted_ids_are_written(run_dir, jobscript, monkeypatch):
@@ -453,7 +554,7 @@ ANALYSIS_TEMPLATE = b'#!/bin/bash\n#SBATCH --mem=200G\n#SBATCH --time=04:00:00\n
 
 def analysis(**changes):
     fields = dict(name='Cu111_Al111.plotpes.1', system='Cu111_Al111', step='plotpes',
-                  scheduler='slurm')
+                  scheduler='slurm', walltime=1800)
     fields.update(changes)
     return Analysis(**fields)
 
@@ -481,13 +582,14 @@ def test_write_analysis(tmp_path, analysis_jobscript):
     # The digest is the one of the jobscript of [execution.analysis], as copied.
     assert read == analysis(jobscript_digest=store.bytes_digest(ANALYSIS_TEMPLATE))
     assert read.number == 1 and run_found == run.resolve()
-    assert json.loads((path / ANALYSIS_FILE).read_text())['schema_version'] == 1
+    data = json.loads((path / ANALYSIS_FILE).read_text())
+    assert data['schema_version'] == 2 and data['walltime'] == 1800
+    assert group_walltime(path) == 1800
 
 
 def test_write_analysis_errors(tmp_path, analysis_jobscript):
     run = tmp_path / 'run'
-    with pytest.raises(JobError, match=r'jobscript .*missing.sh of \[execution.analysis\] not '
-                                       'found'):
+    with pytest.raises(JobError, match='jobscript .*missing.sh of the analyses not found'):
         write_analysis(run, analysis(), tmp_path / 'missing.sh')
     assert not (run / 'jobs').exists()
     write_analysis(run, analysis(), analysis_jobscript)
@@ -502,6 +604,8 @@ def test_write_analysis_errors(tmp_path, analysis_jobscript):
     ({'name': 'Cu111_Al111.plotpes.'}, 'k >= 1'),
     ({'system': 'a/b'}, 'system'),
     ({'scheduler': ' '}, 'scheduler: a non-empty string is required'),
+    ({'walltime': 0}, 'walltime: 0 is not an integer > 0'),
+    ({'walltime': '00:30:00'}, "walltime: '00:30:00' is not an integer > 0"),
     ({'jobscript_digest': 'md5:1'}, 'jobscript_digest'),
 ])
 def test_analysis_errors(changes, message):
@@ -510,9 +614,11 @@ def test_analysis_errors(changes, message):
 
 
 @pytest.mark.parametrize('edit, message', [
-    (lambda d: d.update(schema_version=2), 'schema_version: 2; this version reads 1'),
+    # Version 1, without the walltime, is not read (an analysis.json written before it).
+    (lambda d: d.update(schema_version=1), 'schema_version: 1; this version reads 2'),
     (lambda d: d.update(memory='200G'), "unknown 'memory'"),
     (lambda d: d.pop('step'), 'missing step'),
+    (lambda d: d.pop('walltime'), 'missing walltime'),
 ])
 def test_analysis_file_errors(tmp_path, analysis_jobscript, edit, message):
     path = write_analysis(tmp_path / 'run', analysis(), analysis_jobscript) / ANALYSIS_FILE
@@ -533,7 +639,8 @@ def test_read_analysis_checks_the_directory(tmp_path, analysis_jobscript):
 
 def test_analysis_jobscript_relative_to_the_settings_file():
     settings = example_settings()
-    assert analysis_jobscript_path(settings) is None  # no [execution.analysis]
+    # Without [execution.analysis], the jobscript of [execution].
+    assert analysis_jobscript_path(settings) == jobscript_path(settings) == Path('jobscript.sh')
     settings = example_settings(analysis={'jobscript': 'analysis.sh'})
     assert analysis_jobscript_path(settings) == Path('analysis.sh')
     settings.source = EXAMPLES / 'interface.toml'
@@ -548,12 +655,17 @@ def test_an_analysis_runs_one_job(tmp_path, analysis_jobscript, count, caplog):
     assert most_jobs(path) == 1
     scheduler = JobScheduler('slurm', dry_run=True)
     assert submit_jobs(path, scheduler, count) == [None]
-    assert scheduler.commands == [(['sbatch', str(path / JOBSCRIPT_FILE)], None, path)]
+    # The walltime of analysis.json, not the --time=04:00:00 of the jobscript; a jobscript
+    # without --job-name: <step>_<system>.
+    assert scheduler.commands == [(['sbatch', '--time=00:30:00',
+                                    '--job-name=plotpes_Cu111_Al111',
+                                    str(path / JOBSCRIPT_FILE)], None, path)]
     reduced = 'Group Cu111_Al111.plotpes.1: 1 jobs submitted instead of 4, one for an analysis'
     assert (reduced in caplog.text) == (count > 1)
 
 
 def test_most_jobs(run_dir, jobscript, tmp_path):
     assert most_jobs(write_job(run_dir, manifest(), jobscript)) == 3
+    assert group_walltime(layout.job_dir(run_dir, 'pes_scf')) == 86400
     with pytest.raises(JobError, match='manifest.json not found: write the group first'):
         most_jobs(tmp_path / 'empty')

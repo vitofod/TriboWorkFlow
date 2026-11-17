@@ -44,7 +44,10 @@ Notes
 -----
 Ported from Xsorb (``xsorb/io/scheduler.py``, CC BY 4.0), which gives the
 table of the schedulers, the commands, the parsing of the column listings and
-the error messages. The column listings depend on the output format
+the error messages. The options that give the walltime and the name of the
+job to the submission (``walltime_option``, ``job_name_option``) are not in
+Xsorb: they follow the manuals of ``sbatch``, ``qsub`` (PBS, Torque, SGE) and
+``bsub``. The column listings depend on the output format
 configured on the machine. The listings of PBS, Torque and HTCondor, the
 listing command of SGE and the states of single jobs are not those of Xsorb:
 their commands follow the manuals of Slurm, OpenPBS, Torque, SGE and HTCondor
@@ -66,10 +69,16 @@ from dataclasses import dataclass
 # ``job_history`` give the state of one job ($JOB_ID is replaced by its id),
 # ``job_restarts`` the number of times it was requeued or restarted;
 # ``submit_method = "stdin"`` passes the jobscript on the standard input.
+# ``walltime_option`` holds the options of the submission that set the walltime
+# of the job, added before the jobscript: $WALLTIME is replaced by HH:MM:SS,
+# $WALLTIME_HM by HH:MM rounded up to the minute (LSF); ``job_name_option`` the
+# option that names the job, $NAME replaced by the name; HTCondor has neither.
 # ``test_cmd`` is part of the original table and is not used.
 SCHEDULER_CONFIG = {
     "slurm": {
         "submit": ["sbatch"],
+        "walltime_option": ["--time=$WALLTIME"],
+        "job_name_option": ["--job-name=$NAME"],
         "cancel": ["scancel"],
         "id_regex": r"Submitted batch job (\d+)",
         "id_format": r"^\d+$",
@@ -80,6 +89,8 @@ SCHEDULER_CONFIG = {
     },
     "pbs": {
         "submit": ["qsub"],
+        "walltime_option": ["-l", "walltime=$WALLTIME"],
+        "job_name_option": ["-N", "$NAME"],
         "cancel": ["qdel"],
         "id_regex": r"(\d+(?:\.\S+)?)",
         "id_format": r"^\d+(?:\.\S+)?$",
@@ -90,6 +101,8 @@ SCHEDULER_CONFIG = {
     },
     "torque": {
         "submit": ["qsub"],
+        "walltime_option": ["-l", "walltime=$WALLTIME"],
+        "job_name_option": ["-N", "$NAME"],
         "cancel": ["qdel"],
         "id_regex": r"(\d+(?:\.\S+)?)",
         "id_format": r"^\d+(?:\.\S+)?$",
@@ -100,6 +113,8 @@ SCHEDULER_CONFIG = {
     },
     "lsf": {
         "submit": ["bsub"],
+        "walltime_option": ["-W", "$WALLTIME_HM"],
+        "job_name_option": ["-J", "$NAME"],
         "cancel": ["bkill"],
         "id_regex": r"Job <(\d+)> is submitted",
         "id_format": r"^\d+$",
@@ -109,6 +124,8 @@ SCHEDULER_CONFIG = {
     },
     "sge": {
         "submit": ["qsub"],
+        "walltime_option": ["-l", "h_rt=$WALLTIME"],
+        "job_name_option": ["-N", "$NAME"],
         "cancel": ["qdel"],
         "id_regex": r"Your job (\d+)",
         "id_format": r"^\d+$",
@@ -394,6 +411,30 @@ class JobScheduler:
 
         return cmd
 
+    def _walltime_options(self, walltime):
+        """Options of the submission that set a walltime of ``walltime`` seconds."""
+        option = self.config.get("walltime_option")
+        if walltime is None or option is None:
+            return []
+        hours, rest = divmod(walltime, 3600)
+        minutes, seconds = divmod(rest, 60)
+        whole_minutes = -(-walltime // 60)  # rounded up
+        values = {"$WALLTIME_HM": f"{whole_minutes // 60:02d}:{whole_minutes % 60:02d}",
+                  "$WALLTIME": f"{hours:02d}:{minutes:02d}:{seconds:02d}"}
+        options = []
+        for arg in option:
+            for key, value in values.items():  # $WALLTIME_HM first: it contains $WALLTIME
+                arg = arg.replace(key, value)
+            options.append(arg)
+        return options
+
+    def _job_name_options(self, name):
+        """Options of the submission that name the job ``name``."""
+        option = self.config.get("job_name_option")
+        if name is None or option is None:
+            return []
+        return [arg.replace("$NAME", name) for arg in option]
+
     def _user_name(self):
         """Name of the current user, from $USER or $USERNAME."""
         username = os.getenv("USER") or os.getenv("USERNAME")
@@ -443,7 +484,7 @@ class JobScheduler:
             return job_id.split(".")[0]
         return job_id
 
-    def submit_job(self, script_path, script_args=None, cwd=None):
+    def submit_job(self, script_path, script_args=None, cwd=None, walltime=None, job_name=None):
         """Submit a jobscript and return the job id.
 
         Parameters
@@ -456,6 +497,15 @@ class JobScheduler:
             jobscript passed on the standard input.
         cwd : str or os.PathLike or None, optional
             Directory the submission runs in; the current one by default.
+        walltime : int or None, optional
+            Walltime of the job in seconds, given to the submission command
+            with the ``walltime_option`` of the table, which overrides a time
+            limit in the jobscript; ignored by a scheduler without that
+            option (HTCondor). None: no option.
+        job_name : str or None, optional
+            Name of the job, given with the ``job_name_option`` of the table,
+            which overrides a name in the jobscript; ignored by HTCondor.
+            None: no option.
 
         Returns
         -------
@@ -487,8 +537,9 @@ class JobScheduler:
             if not all(isinstance(arg, str) for arg in script_args):
                 raise JobSchedulerError("All script_args must be strings")
 
+        options = self._walltime_options(walltime) + self._job_name_options(job_name)
         if self.config.get("submit_method") == "stdin":
-            cmd = self._build_command("submit")
+            cmd = self._build_command("submit", extra_args=options)
 
             with open(script_path, 'r') as f:
                 script_content = f.read()
@@ -500,7 +551,8 @@ class JobScheduler:
 
             result = self._submit(cmd, input_data=script_content, cwd=cwd)
         else:
-            cmd = self._build_command("submit", script_path, script_args)
+            cmd = self._build_command("submit", extra_args=options) + [script_path]
+            cmd += script_args or []
             result = self._submit(cmd, cwd=cwd)
 
         if self.dry_run:

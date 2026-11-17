@@ -39,7 +39,7 @@ from triboworkflow.execution import layout
 from triboworkflow.execution.jobs import ANALYSIS_FILE
 from triboworkflow.execution.scheduler import JobScheduler
 
-CUCU = 'mp-30_mp-30'
+CUCU = 'Cu111_Cu111'
 FAKE = Path(__file__).resolve().parent / 'qe_check_fake.py'
 STEPS = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf', 'shear', 'adhesion', 'ppes',
          'charge')
@@ -52,8 +52,8 @@ posix_only = pytest.mark.skipif(os.name != 'posix' or not Path('/bin/bash').exis
 def chain_run(tmp_path):
     """A run of the example with two Cu(111) slabs, the nine steps and the stand-in programs."""
     run_dir = pes_run(tmp_path, name='run', steps=STEPS)
-    edit_config(run_dir, 'file = "slabs/Al111.json"\nmid = "mp-134"',
-                'file = "slabs/Cu111.json"\nmid = "mp-30"')
+    edit_config(run_dir, 'file = "slabs/Al111.json"\nid = "Al111"',
+                'file = "slabs/Cu111.json"\nid = "Cu111"')
     pseudo = tmp_path / 'pseudo'
     pseudo.mkdir()
     lines = []

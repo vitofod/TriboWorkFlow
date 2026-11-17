@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from chain_helpers import CUCU, SHIFTS, STEPS, posix_only
-from triboworkflow.core.store import read_record
+from triboworkflow.core.store import read_record, read_system
 from triboworkflow.execution import layout
 from triboworkflow.execution.jobs import OUTCOME_FILE
 from triboworkflow.workflows.interface import registry
@@ -103,6 +103,39 @@ def test_the_adhesion_the_perpendicular_pes_and_the_charge(chain):
     # has the atoms of its two slabs.
     assert displacement['interface']['integral'] == pytest.approx(0.0, abs=1e-6)
     assert displacement['all']['integral'] == pytest.approx(0.0, abs=1e-6)
+
+
+@posix_only
+def test_steps_that_run_together_read_and_write_different_entries(chain):
+    # DEV-59: the steps of which neither reads the other, even through other steps, run
+    # together. For each such pair the entries that one writes (those whose provenance names
+    # it) overlap neither those that the other reads (Step.expected) nor those it writes, so
+    # the order of their saves changes no number.
+    document = read_system(layout.system_dir(chain.run_dir, CUCU))
+    written = {}
+    for item in document.to_dict()['provenance']:
+        written.setdefault(item['step'], set()).add(tuple(item['path']))
+    assert sorted(written) == sorted(STEPS)
+    read = {name: set(registry.get_step(name).expected(chain.run_dir, CUCU)) for name in STEPS}
+
+    def before(name):
+        found, todo = set(), list(chain.orch.graph[name])
+        while todo:
+            step = todo.pop()
+            if step not in found:
+                found.add(step)
+                todo.extend(chain.orch.graph[step])
+        return found
+
+    def overlap(a, b):
+        return a[:min(len(a), len(b))] == b[:min(len(a), len(b))]
+
+    together = [(a, b) for a in STEPS for b in STEPS
+                if a != b and a not in before(b) and b not in before(a)]
+    assert ('plotpes', 'adhesion') in together and ('ppes', 'charge') in together
+    for a, b in together:
+        for mine in written[a]:
+            assert not any(overlap(mine, other) for other in read[b] | written[b]), (a, b, mine)
 
 
 @posix_only

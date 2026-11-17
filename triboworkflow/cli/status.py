@@ -37,9 +37,10 @@ Example:
     def run(self, args, run_dir, settings):
         from triboworkflow.core.store import read_record
         from triboworkflow.execution import daemon
-        from triboworkflow.execution.layout import system_dir
+        from triboworkflow.execution.layout import CLAIM_FILE, calc_dir, system_dir
         from triboworkflow.execution.lock import holder
         from triboworkflow.execution.orchestrator import Step
+        from triboworkflow.execution.reconcile import Reconciler
         from triboworkflow.execution.replacement import unfinished
 
         from .run import build_orchestrator, run_steps, system_name
@@ -97,14 +98,35 @@ Example:
             print(f'  group {name}: withdrawn before any of its jobs was submitted')
         if args.calcs:
             sdir = system_dir(run_dir, system)
+            reconciler = Reconciler(run_dir, orch.manager, orch.execution.polling_interval)
             print('Calculations')
             for name in orch.order:
                 for calc_id in entries[name]['calculations'] or ():
                     try:
-                        state = read_record(sdir, calc_id).status.summary
+                        record = read_record(sdir, calc_id)
                     except (OSError, ValueError) as error:
-                        state = f'record not read: {error}'
+                        print(f'  {calc_id:<24} record not read: {error}')
+                        continue
+                    claimed = (calc_dir(run_dir, system, calc_id) / CLAIM_FILE).exists()
+                    if record.attempts or claimed:
+                        state = record.status.summary
+                    else:
+                        state = _not_started(reconciler.calculation(system, calc_id))
                     print(f'  {calc_id:<24} {state}')
+
+
+def _not_started(state):
+    """State of a calculation without attempts nor claim, in words.
+
+    Its record says nothing yet (``unknown``): the state is the one of the
+    reconciliation, which for such a calculation reads only files, e.g.
+    ``pending`` while a group that lists it has a job not over; one that no
+    group lists is ``ready for the first run``.
+    """
+    detail = '; '.join(filter(None, [state.groups and f'groups: {", ".join(state.groups)}',
+                                     state.reason]))
+    name = 'ready for the first run' if state.state == 'new' else state.state
+    return name + (f' ({detail})' if detail else '')
 
 
 def _lock(found):

@@ -7,12 +7,15 @@ A run is a folder with its settings in ``config.toml``: every command works
 on the current folder or on the one given with ``-r/--run``, and the
 relative paths of the settings (jobscript, slabs) hold from that folder, so
 a run prepared on one machine is copied to another as it is. A run has one
-system, the interface of its two slabs, named ``<mid1>_<mid2>``.
+system, the interface of its two slabs, named ``<id1>_<id2>``.
 
-The number of jobs (workers) of each group of jobs comes from ``--groups``,
-then from ``[execution].groups``; when both are missing, the command asks for
-it if its standard input and output are a terminal, and stops with an error
-otherwise, so that a command started by a script never waits for an answer.
+The number of jobs (workers) of each group of jobs of a step comes from
+``--groups``, which holds for every step, then from the section of the step
+(``[execution.<step>].groups``), then from ``[execution].groups``; when a step
+that runs calculations has none of them, the command asks for it if its
+standard input and output are a terminal, and the answer takes the place of
+``[execution].groups``; otherwise it stops with an error, so that a command
+started by a script never waits for an answer.
 
 ``build_orchestrator`` gives the orchestrator of the run, with the steps of
 ``[interface].steps`` from the registry of the steps and the graph of the
@@ -23,15 +26,16 @@ the factory that the orchestrator in the background calls
 """
 
 import contextlib
-import dataclasses
 import logging
 import shlex
 import sys
 from pathlib import Path
 
 from triboworkflow.core.settings import load_settings
+from triboworkflow.core.settings.schema import DEFAULT_WALLTIME, STEPS_WITH_ENGINE
 from triboworkflow.core.store.atomic import read_json
-from triboworkflow.execution.jobs import analysis_jobscript_path, jobscript_path
+from triboworkflow.execution.jobs import (analysis_jobscript_path, jobscript_path,
+                                          jobscript_placeholders, walltime_notes)
 from triboworkflow.execution.manager import JobManager
 from triboworkflow.execution.orchestrator import STATE_FILE, Orchestrator, interface_graph
 from triboworkflow.execution.scheduler import JobScheduler
@@ -83,9 +87,9 @@ def load_run(run_dir):
 
 
 def system_name(settings):
-    """System of the run: ``<mid1>_<mid2>`` of the two slabs."""
+    """System of the run: ``<id1>_<id2>`` of the two slabs."""
     first, second = settings.interface.slabs
-    return f'{first.mid}_{second.mid}'
+    return f'{first.id}_{second.id}'
 
 
 def execution_of(settings):
@@ -102,8 +106,54 @@ def execution_of(settings):
     return settings.execution
 
 
-def resolve_groups(settings, given, ask=None):
-    """Number of jobs (workers) per group of jobs.
+def jobscripts(settings):
+    """Jobscripts of the run: the one of ``[execution]`` and, if given, the one of the analyses."""
+    paths = [jobscript_path(settings), analysis_jobscript_path(settings)]
+    return list(dict.fromkeys(path for path in paths if path is not None))
+
+
+def print_step_jobs(settings, groups=None, override=False):
+    """Print the walltime and the jobs per group of each step of the run, for ``check`` and ``start``.
+
+    A walltime not given is printed as the default; the jobs of an analysis
+    are always one. The steps without a walltime and, with Slurm, the
+    jobscripts whose ``--time`` the walltimes replace are logged as warnings
+    (``jobs.walltime_notes``). ``groups`` and ``override`` are those of
+    ``resolve_groups``, applied before printing.
+    """
+    execution = execution_of(settings)
+    if groups is not None:
+        execution = execution.with_groups(groups, override)
+    steps = settings.interface.steps
+    shown = []
+    for step in execution.job_steps(steps):
+        walltime = execution.walltime_given(step) or f'{DEFAULT_WALLTIME} (default)'
+        if step in STEPS_WITH_ENGINE:
+            groups = execution.groups_of(step)
+            jobs = f'{groups} jobs per group' if groups is not None else 'jobs per group not set'
+        else:
+            jobs = '1 job'
+        shown.append(f'{step} {walltime}, {jobs}')
+    print('Jobs of the steps: ' + ('; '.join(shown) if shown else 'no step submits jobs'))
+    for note in walltime_notes(execution, steps, jobscripts(settings)):
+        logger.warning('%s', note)
+
+
+def print_placeholders(settings):
+    """Print the placeholders left in the settings and in the jobscripts, for ``check``."""
+    missing = settings.missing_values()
+    if settings.execution is not None:
+        for path in jobscripts(settings):
+            try:
+                found = jobscript_placeholders(path)
+            except OSError:
+                continue  # a jobscript missing is reported when the jobs are written
+            missing += [f'{path.name} line {line}: {text}' for line, text in found]
+    print(f'Placeholders: {", ".join(missing) if missing else "none"}')
+
+
+def resolve_groups(settings, given, ask=None, steps=None):
+    """Jobs (workers) per group from the command line or a terminal, when needed.
 
     Parameters
     ----------
@@ -111,30 +161,48 @@ def resolve_groups(settings, given, ask=None):
     given : int or None
         Value of ``--groups``.
     ask : callable or None, optional
-        Question in a terminal (``terminal_ask``), asked only when neither
-        ``given`` nor ``[execution].groups`` is set.
+        Question in a terminal (``terminal_ask``), asked only when ``given``
+        is None and a step of ``steps`` that runs calculations has no
+        ``groups`` in its section nor in ``[execution]``.
+    steps : iterable of str or None, optional
+        Steps the command may write groups for; ``[interface].steps`` by
+        default.
 
     Returns
     -------
-    int
-        The value, logged with where it comes from.
+    value : int or None
+        ``given``; else None when the settings give the jobs of every step
+        (logged step by step); else the answer in the terminal.
+    override : bool
+        True for ``given``, which holds for every step over their sections;
+        False for an answer, which takes the place of ``[execution].groups``
+        (``ExecutionParams.with_groups``).
 
     Raises
     ------
     RunError
-        If no value is given and there is no terminal to ask.
+        If a step has no value and there is no terminal to ask.
     """
-    found = execution_of(settings).groups
+    execution = execution_of(settings)
+    steps = settings.interface.steps if steps is None else steps
+    calc_steps = [step for step in STEPS_WITH_ENGINE if step in steps]
     if given is not None:
-        value, origin = given, '--groups'
-    elif found is not None:
-        value, origin = found, '[execution].groups'
-    elif ask is not None:
-        value, origin = ask(), 'answer in the terminal'
-    else:
-        raise RunError('groups not given: set [execution].groups or pass --groups')
-    logger.info('groups: %d, from %s', value, origin)
-    return value
+        logger.info('groups: %d, from --groups', given)
+        return given, True
+    unset = [step for step in calc_steps if execution.groups_of(step) is None]
+    if not unset:
+        if calc_steps:
+            logger.info('groups: %s', ', '.join(
+                f'{step} {execution.groups_of(step)} (from '
+                f'{f"[execution.{step}]" if getattr(execution, step).groups else "[execution]"})'
+                for step in calc_steps))
+        return None, False
+    if ask is None:
+        raise RunError(f'groups not given for {", ".join(unset)}: set groups in their sections '
+                       '[execution.<step>] or in [execution], or pass --groups')
+    value = ask()
+    logger.info('groups: %d, from the answer in the terminal, for %s', value, ', '.join(unset))
+    return value, False
 
 
 def _is_terminal(stream):
@@ -186,7 +254,8 @@ def make_scheduler(settings, dry_run=False):
     return JobScheduler(execution_of(settings).scheduler, dry_run=dry_run)
 
 
-def build_orchestrator(run_dir, groups=None, steps=None, dry_run=False, step_objects=None):
+def build_orchestrator(run_dir, groups=None, steps=None, dry_run=False, step_objects=None,
+                       override=True):
     """Orchestrator of a run.
 
     Parameters
@@ -194,9 +263,12 @@ def build_orchestrator(run_dir, groups=None, steps=None, dry_run=False, step_obj
     run_dir : path-like
         Directory of the run.
     groups : int or None, optional
-        Jobs per group, replacing ``[execution].groups``; by default the value
-        of the settings, which may be missing: the commands that write groups
-        resolve it first (``resolve_groups``).
+        Jobs per group (``ExecutionParams.with_groups``); by default the
+        values of the settings, which may be missing: the commands that write
+        groups resolve them first (``resolve_groups``).
+    override : bool, optional
+        Whether ``groups`` holds for every step (``--groups``, the default) or
+        only takes the place of ``[execution].groups``.
     steps : sequence of str or None, optional
         Steps of the orchestrator; ``[interface].steps`` by default.
     dry_run : bool, optional
@@ -219,7 +291,7 @@ def build_orchestrator(run_dir, groups=None, steps=None, dry_run=False, step_obj
     settings = load_run(run_dir)
     execution = execution_of(settings)
     if groups is not None:
-        execution = dataclasses.replace(execution, groups=groups)
+        execution = execution.with_groups(groups, override)
     names = list(settings.interface.steps if steps is None else steps)
     objects = dict(step_objects) if step_objects is not None else \
         {name: get_step(name) for name in names}
@@ -247,12 +319,13 @@ def run_steps(run_dir, settings):
     return names
 
 
-def run_orchestrator(run_dir, settings, groups=None):
+def run_orchestrator(run_dir, settings, groups=None, override=True):
     """Orchestrator of every step of a run (``run_steps``), for the actions of the user."""
-    return build_orchestrator(run_dir, groups=groups, steps=run_steps(run_dir, settings))
+    return build_orchestrator(run_dir, groups=groups, steps=run_steps(run_dir, settings),
+                              override=override)
 
 
-def step_orchestrator(run_dir, settings, step, groups=None):
+def step_orchestrator(run_dir, settings, step, groups=None, override=True):
     """Orchestrator for a phase of one step: the steps of the run, and ``step``.
 
     A step not in ``[interface].steps`` can be run by hand: it is added.
@@ -260,7 +333,7 @@ def step_orchestrator(run_dir, settings, step, groups=None):
     names = run_steps(run_dir, settings)
     if step not in names:
         names.append(step)
-    return build_orchestrator(run_dir, groups=groups, steps=names)
+    return build_orchestrator(run_dir, groups=groups, steps=names, override=override)
 
 
 def job_manager(run_dir, settings):
@@ -339,7 +412,11 @@ def run_log(run_dir, argv):
         handler.close()
 
 
-def daemon_factory(run_dir, groups=None):
+#: How ``start`` passes to the orchestrator in the background the jobs per group it resolved.
+GROUPS_OVERRIDE, GROUPS_DEFAULT = 'override', 'default'
+
+
+def daemon_factory(run_dir, groups=None, kind=GROUPS_OVERRIDE):
     """Factory of the orchestrator in the background (``daemon.start``).
 
     Parameters
@@ -347,8 +424,16 @@ def daemon_factory(run_dir, groups=None):
     run_dir : path-like
     groups : str or None, optional
         Jobs per group decided by ``start``, as written in the command of the
-        process; without it, ``[execution].groups`` must be set.
+        process; without it, the settings give the jobs of every step.
+    kind : str, optional
+        ``GROUPS_OVERRIDE`` for a value of ``--groups``, ``GROUPS_DEFAULT``
+        for an answer in a terminal (``resolve_groups``).
     """
-    settings = load_run(run_dir)
-    value = resolve_groups(settings, int(groups) if groups is not None else None)
-    return build_orchestrator(run_dir, groups=value)
+    if groups is None:
+        # Logs the jobs of each step; no terminal to ask in the background.
+        resolve_groups(load_run(run_dir), None)
+        return build_orchestrator(run_dir)
+    override = kind == GROUPS_OVERRIDE
+    logger.info('groups: %s, from %s', groups,
+                '--groups' if override else 'the answer in the terminal')
+    return build_orchestrator(run_dir, groups=int(groups), override=override)

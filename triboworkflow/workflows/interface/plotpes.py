@@ -25,8 +25,9 @@ of the points) and their energies converted to J/m^2 on the area of the cell
 its point, removes the duplicates, brings the points into the cell, sets the
 minimum to zero and interpolates them with radial basis functions (thin-plate
 spline, smoothing 1e-3, points replicated 6 x 6 around the cell, grid of
-density 50): once with the energies in eV, once in J/m^2, the second time
-drawing the figure. The analysis writes, in the entry ``<pes>.energy``:
+density 50): once with the energies in eV, once in J/m^2. The figure is
+drawn from the second (``figures.pes_figure``). The analysis writes, in the
+entry ``<pes>.energy``:
 
 - ``grid.hs_all_ev`` and ``grid.hs_all_jm2``: ``[point, x, y, energy]`` of
   every replica;
@@ -36,10 +37,11 @@ drawing the figure. The analysis writes, in the entry ``<pes>.energy``:
 each with the provenance of the step: its parameters and the content of the
 entries read. Writing into ``<pes>.energy`` leaves the entries of the PES
 step current: they have their provenance each (``pes.pes_leaves``). The
-figure (energies in J/m^2) is the file ``<step>/pes_<name>.png`` in the
-folder of the system, ``<name>`` the name of the interface in the document;
-it is not stored in the document. The two steps write in two folders, so
-their figures never overwrite each other.
+figure (energies in J/m^2), sized for one column of an article, is saved
+twice in the folder of the system: ``<step>/pes_<name>.png`` (600 dpi) and
+``<step>/pes_<name>.pdf``, ``<name>`` the name of the interface in the
+document; it is not stored in the document. The two steps write in two
+folders, so their figures never overwrite each other.
 
 Cost: the interpolation solves a dense linear system on all the points
 replicated (144 times the points left after the duplicates), whose matrix
@@ -48,22 +50,24 @@ atoms) take about two minutes and 3.2 GiB for the matrix alone; 108 864
 points (64 atoms) would need about 88 GiB.
 
 Where it runs: never in the orchestrator, on the login node
-(``Step.manual_analysis``). With ``[execution.analysis]`` the orchestrator
-submits it in a job of its own on a compute node and follows the job, which
-runs ``analyse`` of this step (``cli/analysis_job.py``) without taking the
-lock of the run. Without that table the orchestrator leaves the step
-``manual`` once it is ready, and the steps after it wait for it: the user
-runs ``triboworkflow analyse plotpes`` or ``analyse plotpes_scf`` on a
+(``Step.manual_analysis``). The orchestrator submits it in a job of its own
+on a compute node, with the jobscript of ``[execution.analysis]`` or else of
+``[execution]``, and follows the job, which runs ``analyse`` of this step
+(``cli/analysis_job.py``) without taking the lock of the run. The user may
+also run ``triboworkflow analyse plotpes`` or ``analyse plotpes_scf`` on a
 machine with enough memory; that command takes the lock of the run, so it
 runs with the orchestrator stopped or ended.
 
-All or nothing: the entries are read, the interpolation runs and the figure is
-written to a temporary file without locking the document; then, with the
+All or nothing: the entries are read, the interpolation runs and the figures
+are written to temporary files without locking the document; then, with the
 document locked, the prerequisites and the entries read are checked again,
-the entries written, the figure renamed and the document saved once. An
-interruption leaves the document as it was; a figure without its entries does
-not make the step done, and the next analysis starts from the beginning. A
-step done is recognised from its entries, their provenance and the figure,
+the entries written, the document saved once and the figures renamed. Each
+file of the figure carries the stamp of the provenance saved
+(``outputs.analysis_stamp``). An interruption before the save leaves the
+document and the figure as they were; one after it leaves a figure whose
+stamp is not the one saved, which does not make the step done, and the next
+analysis starts from the beginning. A step done is recognised from its
+entries, their provenance and the two files of the figure with its stamp,
 without interpolating again.
 
 Notes
@@ -76,8 +80,10 @@ with the document found as ``FireTaskInterface.query_interface``
 of TribChem's command line (``set_pes``, ``core/cli/calc_interface_cli.py
 :171-199``), which interpolated one PES per invocation, ``pes`` by default
 (DEV-41). The figure stays a file and the key ``image`` (the bytes of the PNG
-encoded again with PIL) is not written (DEV-42); the figure is closed once
-saved (A84). The interpolation is computed twice, as there (A07). Not ported:
+encoded again with PIL) is not written (DEV-42); the figure of ``PES.plot``,
+which ``get_pes`` drew when given a file, is replaced by the one of
+``figures.pes_figure`` (DEV-60); the figure is closed once saved (A84). The
+interpolation is computed twice, as there (A07). Not ported:
 ``override``, ``check_entry`` (the provenance decides), ``to_file`` (A83),
 ``db_file``, ``database``; ``pes_type`` is always ``energy``. The writes use
 the ids of the document written by ``match`` (DEV-39). The docstring of
@@ -109,8 +115,10 @@ from triboworkflow.vendored.physics.base.solidstate import get_cell_info
 from triboworkflow.vendored.physics.base.units import Converter
 from triboworkflow.vendored.physics.tribology.potensurf import get_pes
 
-from .chain import upstream_done
+from .chain import upstream_done, upstream_entries_done
+from .figures import figure_paths, pes_figure
 from .match import COLLECTION, FILTER_KEYS, match_parameters, match_provenance, set_filter
+from .outputs import analysis_stamp, written_by
 from .pes import CALC_TYPES, ID_KEYS, PES_TYPE, RelaxedPesStep, StaticPesStep, pes_entry
 
 logger = logging.getLogger(__name__)
@@ -205,7 +213,7 @@ def interpolation_leaves(pes):
 
 
 def interface_name(ids):
-    """Name of the interface, for the title and the file of the figure.
+    """Name of the interface, for the files of the figure.
 
     Parameters
     ----------
@@ -236,16 +244,17 @@ def interface_name(ids):
 
 
 def figure_path(sdir, name, title):
-    """Figure of the step ``name``: ``<step>/pes_<title>.png`` in the folder of the system."""
+    """PNG of the figure of the step ``name``: ``<step>/pes_<title>.png`` in the folder of the
+    system; the PDF is next to it (``figures.figure_paths``)."""
     return sdir / name / f'pes_{title}.png'
 
 
 def partial_path(figure):
-    """Temporary file of the figure, renamed to ``figure`` when the entries are saved.
+    """Temporary file of a figure, renamed to ``figure`` once the entries are saved.
 
-    It ends in ``.png``, from which matplotlib takes the format.
+    It ends as ``figure`` (``.png``, ``.pdf``), from which matplotlib takes the format.
     """
-    return figure.with_name(f'.{figure.stem}.partial.png')
+    return figure.with_name(f'.{figure.stem}.partial{figure.suffix}')
 
 
 def arrange_data(store, ids, calc_type, pes_type=PES_TYPE):
@@ -393,15 +402,17 @@ def plotpes_provenance(inputs):
 
 # --- analysis -------------------------------------------------------------------------
 
-def interpolate(inputs, figure):
-    """The two interpolations of the PES, the second drawing the figure.
+def interpolate(inputs, figures=None, stamp=None):
+    """The two interpolations of the PES, and the figure of the second.
 
     Parameters
     ----------
     inputs : PlotPesInputs
-    figure : pathlib.Path
-        File where the figure of the PES in J/m^2 is saved; it must end in
-        ``.png``.
+    figures : tuple of pathlib.Path or None, optional
+        PNG and PDF where the figure of the PES in J/m^2 is saved
+        (``figures.pes_figure``); None: no figure.
+    stamp : str or None, optional
+        ``outputs.analysis_stamp`` of the analysis, in the metadata of the figure.
 
     Returns
     -------
@@ -410,9 +421,11 @@ def interpolate(inputs, figure):
     Notes
     -----
     To remove: ``FT_PESInterpolation.compute_pes`` (``pes.py:231-250``) up to
-    the dict written, without ``image`` (DEV-42). matplotlib draws without a
-    display (backend Agg); the figure is closed once saved (A84). What
-    ``get_pes`` prints goes to the log, at debug level.
+    the dict written, without ``image`` (DEV-42); ``get_pes`` is called
+    without the file of its figure, which ``figures.pes_figure`` replaces
+    (DEV-60). matplotlib draws without a display (backend Agg); the figure is
+    closed once saved (A84). What ``get_pes`` prints goes to the log, at
+    debug level.
     """
     matplotlib.use('Agg')
     hs_all, unique_values, cell = inputs.all_shifts, inputs.values, inputs.cell
@@ -427,8 +440,10 @@ def interpolate(inputs, figure):
                                          title=pes_name, to_fig=None)
             middle = time.perf_counter()
             logger.info('%s: interpolation in eV: %.1f s', inputs.name, middle - start)
-            _, v_list_jm2, data_jm2, _ = get_pes(hs_all, unique_values[1], cell,
-                                                 title=pes_name, to_fig=str(figure))
+            solver, v_list_jm2, data_jm2, _ = get_pes(hs_all, unique_values[1], cell,
+                                                      title=pes_name, to_fig=None)
+            if figures is not None:
+                pes_figure(solver, *figures, stamp=stamp)
             end = time.perf_counter()
             logger.info('%s: interpolation in J/m^2 and figure: %.1f s', inputs.name, end - middle)
     finally:
@@ -486,7 +501,8 @@ def describe(inputs, interpolation, figure):
         f'{len(inputs.values[0])} high-symmetry points, {interpolation.unfolded} in the cell, '
         f'{interpolation.points} after removing the duplicates',
         f'interpolation in eV {ev:.1f} s, in J/m^2 with the figure {jm2:.1f} s',
-        f'figure written in {figure.parent.name}/{figure.name}',
+        f'figure written in {figure.parent.name}/: '
+        + ' and '.join(path.name for path in figure_paths(figure)),
     ]
 
 
@@ -511,29 +527,58 @@ class PlotPesStep(Step):
     manual_analysis = True
 
     def done(self, run_dir, system):
-        """Whether the four entries are written and current and the figure exists.
+        """Whether the entries are done (``entries_done``) and the PNG and PDF of the figure
+        were written by the analysis saved (``outputs.written_by``)."""
+        current = self._current(run_dir, system, upstream_done)
+        return current is not None and written_by(*self._exports(run_dir, system, *current))
+
+    def entries_done(self, run_dir, system):
+        """Whether the four entries are written and current.
 
         Nothing is interpolated: the entries read are compared with those
         recorded in the provenance. The PES and ``match``, which it reads,
         have to be done too: the provenance holds the content of the entries
-        read, not whether they are still current.
+        read, not whether they are still current. Their entries only
+        (``upstream_entries_done``).
+        """
+        return self._current(run_dir, system, upstream_entries_done) is not None
+
+    def exports(self, run_dir, system):
+        """Files of the analysis saved and the stamp each carries: ``(paths, stamp)``.
+
+        Only for entries done (``entries_done``): the figure is named after
+        the interface that the inputs read.
+        """
+        return self._exports(run_dir, system,
+                             *self._current(run_dir, system, upstream_entries_done))
+
+    def _current(self, run_dir, system, upstream):
+        """The document and the inputs when the entries are written and current, else None.
+
+        ``upstream`` tells whether the steps upstream are done: ``upstream_done``
+        or ``upstream_entries_done``.
         """
         sdir = system_dir(run_dir, system)
         document = read_system(sdir)
         leaves = interpolation_leaves(PES_OF[self.name])
         # Before any analysis the inputs are not read: the PES may not have run.
         if not all(document.get(leaf) for leaf in leaves):
-            return False
-        if not upstream_done(self, run_dir, system):
-            return False
+            return None
+        if not upstream(self, run_dir, system):
+            return None
         try:
             inputs = plotpes_inputs(sdir, document, _load_run(run_dir), self.name)
         except PrerequisiteError:
-            return False
-        if not figure_path(sdir, self.name, inputs.title).is_file():
-            return False
+            return None
         expected = plotpes_provenance(inputs)
-        return all(is_done(document, leaf, expected, sdir) for leaf in leaves)
+        if not all(is_done(document, leaf, expected, sdir) for leaf in leaves):
+            return None
+        return document, inputs
+
+    def _exports(self, run_dir, system, document, inputs):
+        figure = figure_path(system_dir(run_dir, system), self.name, inputs.title)
+        provenance = document.provenance(interpolation_leaves(inputs.pes)[0])
+        return list(figure_paths(figure)), analysis_stamp(provenance)
 
     def expected(self, run_dir, system):
         """``highsym`` with the provenance of ``match``, ``<pes>.data`` with that of the PES step."""
@@ -564,10 +609,11 @@ class PlotPesStep(Step):
         inputs = plotpes_inputs(sdir, read_system(sdir), settings, self.name)
         provenance = plotpes_provenance(inputs)
         figure = figure_path(sdir, self.name, inputs.title)
-        partial = partial_path(figure)
+        figures = figure_paths(figure)
+        partials = [partial_path(path) for path in figures]
         figure.parent.mkdir(parents=True, exist_ok=True)
         try:
-            interpolation = interpolate(inputs, partial)
+            interpolation = interpolate(inputs, partials, analysis_stamp(provenance))
             with SystemWriter(sdir) as writer:
                 check_prerequisites(writer.document, self.expected(run_dir, system), sdir)
                 again = plotpes_inputs(sdir, writer.document, settings, self.name)
@@ -578,10 +624,12 @@ class PlotPesStep(Step):
                                     interpolation)
                 for leaf in interpolation_leaves(inputs.pes):
                     writer.document.set_provenance(leaf, provenance)
-                os.replace(partial, figure)
                 writer.save()
+                for partial, path in zip(partials, figures):
+                    os.replace(partial, path)
         finally:
-            partial.unlink(missing_ok=True)
+            for partial in partials:
+                partial.unlink(missing_ok=True)
         for line in describe(inputs, interpolation, figure):
             logger.info('%s: %s', system, line)
 

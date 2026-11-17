@@ -20,11 +20,11 @@ works on any machine.
 
 plotpes, plotpes_scf and shear are never analysed by the orchestrator in the
 background: the interpolation of a large PES needs much memory, and the
-string method of the shear strength takes long. With [execution.analysis]
-the orchestrator, or "submit", analyses them in a job of their own on a
-compute node; without it the orchestrator leaves them manual once ready, and
-this command analyses them, where there is enough memory, with the
-orchestrator stopped or ended (it holds the run). It is refused while the job
+string method of the shear strength takes long. The orchestrator, or
+"submit", analyses them in a job of their own on a compute node, with the
+jobscript of [execution.analysis] or else of [execution]; this command
+analyses them by hand, where there is enough memory, with the orchestrator
+stopped or ended (it holds the run). It is refused while the job
 of the step may still run, according to the last query of the scheduler. The
 step is saved as running while it is analysed; an analysis stopped before its
 end writes nothing, and the next one starts it again from the beginning.

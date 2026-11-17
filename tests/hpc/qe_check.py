@@ -120,7 +120,8 @@ import warnings
 from pathlib import Path
 
 from triboworkflow.core.settings import load_settings
-from triboworkflow.core.settings.schema import INTERFACE_STEPS, NAMELISTS, key_name
+from triboworkflow.core.settings.schema import (INTERFACE_STEPS, NAMELISTS, WALLTIME_STEPS,
+                                                key_name)
 from triboworkflow.core.store import (Provenance, SystemWriter, is_done, read_record,
                                       read_system)
 from triboworkflow.core.structures import read_structure, write_structure
@@ -505,7 +506,7 @@ def config_text(machine, case, system, steps, control, groups):
                                                'set_bm': False}))
         for name in ('bottom', 'top'):
             parts.append(_toml_table('interface.slabs', {
-                'file': f'{STRUCTURES_DIR}/{name}.extxyz', 'mid': f'{system}111',
+                'file': f'{STRUCTURES_DIR}/{name}.extxyz', 'id': f'{system}111',
                 'miller': [1, 1, 1]}, array=True))
     for name, values in _namelists(machine, control).items():
         if values:
@@ -525,11 +526,16 @@ def config_text(machine, case, system, steps, control, groups):
                      'run_command': machine['run_command']}
         if machine.get('pp_command'):
             execution['pp_command'] = machine['pp_command']
-        execution.update(groups=groups, walltime=walltime_of(machine, case),
+        execution.update(groups=groups,
                          polling_interval=machine.get('polling_interval', 120),
                          max_seconds_margin=machine.get('max_seconds_margin', 600),
                          job_report_wait=machine.get('job_report_wait', 3600))
         parts.append(_toml_table('execution', execution))
+        # The walltime of the case for every step that submits jobs, as in the jobscript.
+        time = hms(walltime_of(machine, case))
+        for step in steps:
+            if step in WALLTIME_STEPS:
+                parts.append(_toml_table(f'execution.{step}', {'walltime': time}))
     return '\n'.join(parts)
 
 

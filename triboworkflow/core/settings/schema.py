@@ -7,7 +7,8 @@ A settings file describes either one calculation (``[structure]``) or the
 interface workflow (``[interface]``), together with the pw.x template
 (``[namelists]``, ``[[atomic_species]]``, ``[k_points]``), the pw.x expected
 (``[qe]``: version and checksums of the pseudopotentials) and, optionally,
-the execution on HPC (``[execution]``). ``loader.py`` fills the dataclasses
+the execution on HPC (``[execution]``) and the MLIP model (``[mlip]``, read
+and checked but not used by any step yet). ``loader.py`` fills the dataclasses
 from the TOML tables with dacite and then runs their ``check`` methods.
 
 The namelists are passed to pw.x as given: pw.x applies its own defaults to
@@ -38,6 +39,7 @@ list indices included.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import re
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
@@ -56,6 +58,9 @@ ENGINES = ('qe',)
 QE_VERSIONS = ('7.1', '7.2', '7.3')
 # A version of pw.x as it prints it: major.minor or major.minor.patch.
 QE_VERSION_FORMAT = re.compile(r'[0-9]+\.[0-9]+(\.[0-9]+)?')
+# Defaults of [mlip]: the largest force (eV/angstrom) and the largest number of steps of a
+# relaxation with an MLIP. The version of the package of the model has the format of QE's.
+MLIP_FMAX, MLIP_MAXSTEPS = 0.01, 500
 # Steps of the interface workflow, in the order of the graph of the
 # orchestrator (execution/orchestrator.py, INTERFACE_GRAPH). pes and pes_scf
 # are the potential energy surface relaxed along z and the static one: two
@@ -66,6 +71,14 @@ INTERFACE_STEPS = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf', 'shear',
 # Interface steps that run calculations; match, plotpes, plotpes_scf and shear
 # only analyse.
 STEPS_WITH_ENGINE = ('pes', 'pes_scf', 'adhesion', 'ppes', 'charge')
+# Interface steps that submit jobs, each with its section [execution.<step>] (walltime, and
+# groups for the steps with calculations): those that run calculations, then those analysed in
+# a job of their own. A walltime is "HH:MM:SS" (hours may pass 24); a step without one gets
+# DEFAULT_WALLTIME.
+ANALYSIS_JOB_STEPS = ('plotpes', 'plotpes_scf', 'shear')
+WALLTIME_STEPS = STEPS_WITH_ENGINE + ANALYSIS_JOB_STEPS
+WALLTIME_FORMAT = re.compile(r'([0-9]+):([0-5][0-9]):([0-5][0-9])')
+DEFAULT_WALLTIME = '24:00:00'
 # Layers kept in a reduced slab of the static PES when the settings do not
 # give them: 3 for a (111) surface, 2 for the others.
 # To remove: the values of TribChem's command line (calc_interface.py:151).
@@ -157,7 +170,15 @@ KEY_HINTS = {
                  'in [[atomic_species]], counted from 1',
     'london_rvdw': 'write "london_rvdw(i)" in [namelists.SYSTEM], i = position of the species '
                    'in [[atomic_species]], counted from 1',
+    'mid': 'a slab is named by "id", e.g. id = "Fe110"; the system is <id1>_<id2>',
+    'walltime': 'the walltime of the jobs of each step goes in the section of the step, e.g. '
+                '[execution.pes] walltime = "12:00:00"',
 }
+# Hints for keys whose type changed: added to the error of a value of the old type.
+TYPE_HINTS = {}
+
+#: Name of a slab, ``[[interface.slabs]].id``: no "_", which joins the two ids.
+SLAB_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9.-]*')
 
 
 class SettingsError(ValueError):
@@ -583,34 +604,137 @@ class QEParams:
                 'results are not guaranteed and may hold errors: check them']
 
 
+@dataclass
+class MlipParams:
+    """``[mlip]``: the MLIP model of the calculations that use one.
+
+    One model for the whole run. The table is read and checked, but no step uses it yet.
+    The types of model are those of ``triboworkflow.engines.mlip.registry``. The file of the
+    model is not looked at: it is on the machine that runs the calculations, which is not the
+    one that reads the settings. ``type``, ``path`` and ``kwargs`` enter the energy model
+    of the calculations as written.
+
+    Attributes
+    ----------
+    type : str
+        Type of model, written whole (e.g. ``'MACE'``, ``'MACE_MP'``, ``'DP'``).
+    path : str
+        Absolute path of the model on the machine that runs the calculations.
+    kwargs : dict
+        Keyword arguments of the function that loads the model, passed as written. Not
+        allowed: ``device`` and the path of the model for the types that take them. The
+        keys that the backend requires, e.g. ``default_dtype`` of MACE with ASE, are checked
+        when a step chooses the backend (``registry.check_model``), not here.
+    version : str or None
+        Version of the package that loads the model, as pip prints it: ``major.minor``
+        (every ``major.minor.x``) or ``major.minor.patch``.
+    fmax : float
+        Largest force on an atom, in eV/angstrom, below which a relaxation stops.
+    maxsteps : int
+        Largest number of steps of a relaxation.
+    """
+
+    type: str
+    path: str
+    kwargs: dict[str, Any] = field(default_factory=dict)
+    version: str | None = None
+    fmax: float = MLIP_FMAX
+    maxsteps: int = MLIP_MAXSTEPS
+
+    def check(self, path):
+        """Validate the table; errors name ``path``."""
+        # Imported here so that the core does not depend on the engines: the types of
+        # model belong to the engine that loads them.
+        from triboworkflow.engines.mlip.registry import ModelError, check_model
+        try:
+            check_model(self.type, self.path, self.kwargs)
+        except ModelError as error:
+            raise SettingsError(f'{path}.{error.key}', error.message) from None
+        if self.version is not None and not QE_VERSION_FORMAT.fullmatch(self.version):
+            raise SettingsError(f'{path}.version', f'{self.version!r} is not a version of the '
+                                'package of the model: give major.minor or major.minor.patch, '
+                                'e.g. "0.3" or "3.1.0"')
+        _finite_positive(f'{path}.fmax', self.fmax)
+        if self.maxsteps < 1:
+            raise SettingsError(f'{path}.maxsteps', f'must be >= 1, got {self.maxsteps}')
+
+
 # --- execution on HPC -----------------------------------------------------------
 
 @dataclass
 class AnalysisParams:
-    """``[execution.analysis]``: the job of the analyses that need a compute node.
+    """``[execution.analysis]``: a jobscript of its own for the analyses in a job.
 
     Some analyses take more memory and time than the login node, where the
     orchestrator runs, can give: the interpolation of a potential energy
     surface builds a dense matrix of tens of GiB on large interfaces. The
-    orchestrator never runs them itself. With this table it submits each in a
-    job of its own and follows it; without it the step waits to be analysed by
-    hand (``triboworkflow analyse <step>``).
+    orchestrator never runs them itself: it submits each in a job of its own
+    (``ANALYSIS_JOB_STEPS``) and follows it. Their jobs use the jobscript of
+    ``[execution]``; this table gives them another one, e.g. with fewer
+    resources (they run Python only, on one GPU at most) or another queue.
 
     Attributes
     ----------
     jobscript : str
         Jobscript of these jobs, relative to the folder of the settings file;
         copied unchanged, with the line that runs the analysis added. Its lines
-        give memory, walltime and partition; the scheduler is the one of
+        give memory and partition; the walltime is the one of the step in its
+        section ``[execution.<step>]``; the scheduler is the one of
         ``[execution]``.
     """
 
     jobscript: str
 
 
+def walltime_seconds(value):
+    """Seconds of a walltime ``"HH:MM:SS"`` (``WALLTIME_FORMAT``)."""
+    hours, minutes, seconds = (int(part) for part in WALLTIME_FORMAT.fullmatch(value).groups())
+    return (hours * 60 + minutes) * 60 + seconds
+
+
+@dataclass
+class StepJobsParams:
+    """``[execution.<step>]``: the jobs of one step that submits jobs (``WALLTIME_STEPS``).
+
+    The walltime goes to the command that submits each job of the step, so
+    the jobscript does not give it, and sets the time the calculations may
+    run (``max_seconds``). A step run without a walltime gets
+    ``DEFAULT_WALLTIME``, with a warning (``ExecutionParams.missing_walltimes``);
+    the section of a step that is not run has no effect.
+
+    Attributes
+    ----------
+    walltime : str or None
+        ``"HH:MM:SS"``, as ``--time`` of Slurm; hours may pass 24
+        (``"48:00:00"``).
+    groups : int or None
+        Jobs (one worker each) over which the calculations of a group of the
+        step are spread; None: ``[execution].groups``. Only for the steps that
+        run calculations: an analysis runs in one job.
+    """
+
+    walltime: str | None = None
+    groups: int | None = None
+
+    def check(self, path):
+        """Validate the section; errors name ``path``, ``execution.<step>``."""
+        step = path.rsplit('.', 1)[-1]
+        value = self.walltime
+        if value is not None and (not WALLTIME_FORMAT.fullmatch(value)
+                                  or walltime_seconds(value) == 0):
+            raise SettingsError(f'{path}.walltime', 'give "HH:MM:SS" > 0 (hours may pass 24, '
+                                f'minutes and seconds are below 60), got {value!r}')
+        if self.groups is not None:
+            if step not in STEPS_WITH_ENGINE:
+                raise SettingsError(f'{path}.groups', f'{step} runs its analysis in one job: '
+                                    'groups is only for the steps that run calculations '
+                                    f'({", ".join(STEPS_WITH_ENGINE)})')
+            _positive(f'{path}.groups', self.groups)
+
+
 @dataclass
 class ExecutionParams:
-    """``[execution]``: scheduler, jobscript and groups of calculations.
+    """``[execution]``: scheduler, jobscript and the jobs of each step.
 
     Attributes
     ----------
@@ -618,7 +742,10 @@ class ExecutionParams:
         One of ``SCHEDULERS``.
     jobscript : str
         Jobscript copied for every group of jobs, with the launch line of the
-        worker added; relative to the folder of the settings file.
+        worker (or of the analysis) added; relative to the folder of the
+        settings file. It gives the resources and the environment; the
+        walltime and the name of each job are options of the submission
+        (``[execution.<step>]``, ``jobs.job_name``).
     run_command : str
         Command up to the input file, e.g. ``mpirun -np 32 pw.x -nk 4``.
     pp_command : str or None
@@ -626,36 +753,48 @@ class ExecutionParams:
         the worker runs it after pw.x in the calculations that also give the
         charge density. Required only when such calculations are prepared or
         submitted.
-    walltime, polling_interval : int
-        Seconds. ``walltime`` must match the one of the jobscript.
+    polling_interval : int
+        Seconds between two passes of the orchestrator.
     groups : int or None
         Jobs (one worker each) over which the calculations of a group are
-        spread; never more jobs than calculations are submitted. None: given
-        on the command line (``--groups``) or asked in a terminal.
+        spread, for the steps without ``groups`` in their section; never more
+        jobs than calculations are submitted. None: given in the sections of
+        the steps, on the command line (``--groups``) or asked in a terminal.
     max_seconds_margin : int
         Seconds kept free at the end of the walltime. Before each run the
         worker sets ``max_seconds`` to the walltime left minus this margin,
-        capped by the ``max_seconds`` of ``[namelists.CONTROL]`` if given,
-        and takes no more calculations once nothing is left.
+        and takes no more calculations once nothing is left. Below the
+        walltime of every step of ``[interface].steps`` that runs
+        calculations (``check_margin``).
     job_report_wait : int
         Seconds after its submission during which a job that the scheduler
         does not report is still waited for; after that it needs attention,
         and it is never submitted again automatically.
     analysis : AnalysisParams or None
-        Job of the analyses that need a compute node; None: those steps are
-        analysed by hand.
+        Jobscript of the analyses in a job (``ANALYSIS_JOB_STEPS``); None:
+        they use ``jobscript``.
+    pes, pes_scf, adhesion, ppes, charge, plotpes, plotpes_scf, shear : StepJobsParams
+        ``[execution.<step>]``: walltime of the jobs of the step and, for the
+        steps that run calculations, their ``groups``.
     """
 
     scheduler: str
     jobscript: str
     run_command: str
-    walltime: int
     polling_interval: int
     groups: int | None = None
     max_seconds_margin: int = 600
     job_report_wait: int = 3600
     pp_command: str | None = None
     analysis: AnalysisParams | None = None
+    pes: StepJobsParams = field(default_factory=StepJobsParams)
+    pes_scf: StepJobsParams = field(default_factory=StepJobsParams)
+    adhesion: StepJobsParams = field(default_factory=StepJobsParams)
+    ppes: StepJobsParams = field(default_factory=StepJobsParams)
+    charge: StepJobsParams = field(default_factory=StepJobsParams)
+    plotpes: StepJobsParams = field(default_factory=StepJobsParams)
+    plotpes_scf: StepJobsParams = field(default_factory=StepJobsParams)
+    shear: StepJobsParams = field(default_factory=StepJobsParams)
 
     def check(self, path):
         """Validate the table; errors name ``path``."""
@@ -665,14 +804,68 @@ class ExecutionParams:
                                 'calculation gives the charge density')
         if self.groups is not None:
             _positive(f'{path}.groups', self.groups)
-        _positive(f'{path}.walltime', self.walltime)
         _positive(f'{path}.polling_interval', self.polling_interval)
         _positive(f'{path}.max_seconds_margin', self.max_seconds_margin)
         _positive(f'{path}.job_report_wait', self.job_report_wait)
-        if self.max_seconds_margin >= self.walltime:
-            raise SettingsError(f'{path}.max_seconds_margin',
-                                f'must be < walltime ({self.walltime}), '
-                                f'got {self.max_seconds_margin}')
+
+    def check_margin(self, steps, path):
+        """Check ``max_seconds_margin`` against the walltime of each step of ``steps`` that runs
+        calculations; the walltime of a step not run has no effect.
+
+        Raises
+        ------
+        SettingsError
+            Naming ``<path>.max_seconds_margin`` and the step.
+        """
+        for step in STEPS_WITH_ENGINE:
+            seconds = self.walltime_of(step)
+            if step in steps and self.max_seconds_margin >= seconds:
+                raise SettingsError(f'{path}.max_seconds_margin',
+                                    f'must be < the walltime of {step} ({seconds} s), '
+                                    f'got {self.max_seconds_margin}')
+
+    def walltime_given(self, step):
+        """Walltime of ``[execution.<step>]`` as written, ``"HH:MM:SS"``; None when not given."""
+        return getattr(self, step).walltime
+
+    def walltime_of(self, step):
+        """Walltime of the jobs of ``step``, in seconds; ``DEFAULT_WALLTIME`` when not given."""
+        value = self.walltime_given(step)
+        return walltime_seconds(DEFAULT_WALLTIME if value is None else value)
+
+    def groups_of(self, step):
+        """Jobs per group of ``step``: its own ``groups``, else ``[execution].groups``; or None."""
+        own = getattr(self, step).groups if step in STEPS_WITH_ENGINE else None
+        return own if own is not None else self.groups
+
+    def with_groups(self, groups, override):
+        """A copy with ``groups`` jobs per group.
+
+        Parameters
+        ----------
+        groups : int
+        override : bool
+            True for a value of the command line (``--groups``): it holds for
+            every step, over the ``groups`` of their sections. False for a
+            value that only replaces ``[execution].groups`` (an answer in a
+            terminal): the sections keep theirs.
+        """
+        changes = {'groups': groups}
+        if override:
+            changes.update({step: dataclasses.replace(getattr(self, step), groups=None)
+                            for step in STEPS_WITH_ENGINE})
+        return dataclasses.replace(self, **changes)
+
+    def job_steps(self, steps):
+        """Steps of ``steps`` that submit jobs, in the order of ``WALLTIME_STEPS``.
+
+        Those that run calculations, and those analysed in a job of their own.
+        """
+        return [step for step in WALLTIME_STEPS if step in steps]
+
+    def missing_walltimes(self, steps):
+        """Steps of ``steps`` that submit jobs and get ``DEFAULT_WALLTIME``, not given here."""
+        return [step for step in self.job_steps(steps) if self.walltime_given(step) is None]
 
 
 # --- interface workflow -----------------------------------------------------------
@@ -685,8 +878,10 @@ class SlabParams:
     ----------
     file : str
         Slab structure, relative to the folder of the settings file.
-    mid : str
-        Material id; the interface id is ``mid1_mid2``.
+    id : str
+        Name of the slab chosen by the user (e.g. ``Fe110``): letters, digits,
+        ``-`` and ``.``, starting with a letter or a digit. The system is
+        ``<id1>_<id2>``, also the ``mid`` of its document.
     miller : list of int
         Miller indices of the surface.
     formula, name : str or None
@@ -696,10 +891,17 @@ class SlabParams:
         (e.g. ``Cu_Al`` and ``Cu111-Al111``).
     bulk_modulus : float or None
         Bulk modulus of the material in GPa, used with ``set_bm = true``.
+
+    Notes
+    -----
+    To remove: TribChem named a slab by the Materials Project id of its
+    material (``mid``), with which it found the bulk in its database; here
+    the bulk is not read, and the ``mid`` of the documents is ``<id1>_<id2>``
+    (DEV-61).
     """
 
     file: str
-    mid: str
+    id: str
     miller: list[int]
     formula: str | None = None
     name: str | None = None
@@ -707,6 +909,10 @@ class SlabParams:
 
     def check(self, path):
         """Validate the entry; errors name ``path``."""
+        if not SLAB_ID.fullmatch(self.id):
+            raise SettingsError(f'{path}.id', 'letters, digits, "-" and "." only, starting with '
+                                'a letter or a digit ("_" joins the two ids in the name of '
+                                f'the system), got {self.id!r}')
         _three(f'{path}.miller', self.miller)
 
 
@@ -1099,7 +1305,7 @@ class InterfaceParams:
     Attributes
     ----------
     slabs : list of SlabParams
-        The two slabs. Their order gives the interface id (``mid1_mid2``) and
+        The two slabs. Their order gives the system (``<id1>_<id2>``) and
         the strain weights (``strain_weight_1`` goes with the first slab); the
         slab on top is the one whose formula and Miller indices come first in
         alphabetical order, whatever the order here.
@@ -1214,6 +1420,8 @@ class Settings:
     execution : ExecutionParams or None
     qe : QEParams
         Expected version of pw.x and checksums of the UPF files.
+    mlip : MlipParams or None
+        The MLIP model, when the run uses one.
     source : pathlib.Path or None
         File the settings were read from, set by the loader.
     """
@@ -1227,6 +1435,7 @@ class Settings:
     generation: GenerationParams | None = None  # used with [structure]
     execution: ExecutionParams | None = None
     qe: QEParams = field(default_factory=QEParams)
+    mlip: MlipParams | None = None
     # File the settings were read from (set by the loader).
     source: Path | None = field(default=None, init=False, repr=False, compare=False)
 
@@ -1243,10 +1452,17 @@ class Settings:
                 if key_name(key) in PER_CALCULATION:
                     raise SettingsError(f'namelists.CONTROL.{key}', 'not allowed in a workflow: '
                                         'it is set for every calculation')
+                if key_name(key) == 'max_seconds':
+                    raise SettingsError(f'namelists.CONTROL.{key}', 'not allowed in a workflow: '
+                                        'the worker sets it before each run, from the walltime '
+                                        'of the step ([execution.<step>] walltime) minus '
+                                        '[execution].max_seconds_margin')
             if any(self.interface.engine_for(step) == 'qe' for step in self.interface.steps
                    if step in STEPS_WITH_ENGINE):
                 _required('qe.version', self.qe.version, 'by the steps that run pw.x: the '
                           'version expected on the HPC, e.g. "7.2" or "7.3.1"')
+            if self.execution is not None:
+                self.execution.check_margin(self.interface.steps, 'execution')
         if not self.atomic_species:
             raise SettingsError('atomic_species', 'give at least one species')
         seen = {}

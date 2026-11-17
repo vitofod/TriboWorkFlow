@@ -161,17 +161,6 @@
    "dtype": "float64"
   }
  },
- "figure": [
-  "pes_Pt111-Ag111.png"
- ],
- "image": {
-  "mode": "RGBA",
-  "size": [
-   2100,
-   2100
-  ],
-  "sha256": "4479be026077cd7befc23db9a07d4755a6bd0520ada1c4ba115c9fb3ab5bf199"
- },
  "calls": [
   {
    "call": "update_db",

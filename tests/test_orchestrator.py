@@ -21,7 +21,7 @@ import pytest
 from run_helpers import (FP, JOB_DONE, MAX_SECONDS, NOT_CONVERGED, PARALLEL, PWI, SCF_DONE,
                          SCF_TRUNCATED, SYSTEM, Run, header, text)
 from triboworkflow.core import store
-from triboworkflow.core.settings.schema import ExecutionParams
+from triboworkflow.core.settings.schema import WALLTIME_STEPS, ExecutionParams, StepJobsParams
 from triboworkflow.core.store import Provenance, SystemWriter, is_done, read_system
 from triboworkflow.core.store.record import RESTART_PARTS
 from triboworkflow.execution import archive as archive_module
@@ -29,9 +29,9 @@ from triboworkflow.execution import layout
 from triboworkflow.execution import orchestrator as orchestrator_module
 from triboworkflow.execution.archive import released_claim
 from triboworkflow.execution.jobs import (ANALYSIS_FILE, JOBSCRIPT_FILE, MANIFEST_FILE,
-                                          OUTCOME_FILE, SUBMITTED_FILE, WITHDRAWN_FILE, Launch,
-                                          Manifest, is_analysis, read_analysis, read_manifest,
-                                          write_job)
+                                          OUTCOME_FILE, SUBMITTED_FILE, WITHDRAWN_FILE,
+                                          Launch, Manifest, is_analysis, read_analysis,
+                                          read_manifest, write_job)
 from triboworkflow.execution.manager import JobManager
 from triboworkflow.execution.orchestrator import (INTERFACE_GRAPH, Orchestrator,
                                                   OrchestratorError, Step, interface_graph,
@@ -39,8 +39,9 @@ from triboworkflow.execution.orchestrator import (INTERFACE_GRAPH, Orchestrator,
 from triboworkflow.execution.policy import PolicyError
 
 EXECUTION = ExecutionParams(scheduler='slurm', jobscript='job.sh', run_command='pw.x', groups=2,
-                            walltime=3600, polling_interval=300, max_seconds_margin=60)
-ALL = ('match', 'pes', 'plotpes', 'shear', 'adhesion', 'ppes', 'charge')
+                            polling_interval=300, max_seconds_margin=60,
+                            **{step: StepJobsParams(walltime='01:00:00') for step in WALLTIME_STEPS})
+ALL =('match', 'pes', 'plotpes', 'shear', 'adhesion', 'ppes', 'charge')
 # Calculations of each fictitious step; match, plotpes and shear only analyse.
 CALCS = {'pes': 2, 'adhesion': 2, 'ppes': 1, 'charge': 1}
 # Fingerprint of the calculations after a change of the settings.
@@ -252,6 +253,50 @@ def test_whole_workflow(run):
     assert all(document.get([name]) == {'done': True} for name in ALL)
 
 
+def test_walltime_of_the_groups_is_the_one_of_their_step(run, caplog):
+    run.jobscript.write_text('#!/bin/bash\n#SBATCH --time=02:00:00\n')
+    # adhesion without: the default.
+    execution = dataclasses.replace(EXECUTION, pes=StepJobsParams(walltime='03:00:00'),
+                                    adhesion=StepJobsParams())
+    steps = {name: FakeStep(run, name, {}) for name in ('match', 'pes', 'adhesion')}
+    orch = Orchestrator(run.dir, [SYSTEM], steps, run.manager, execution, run.jobscript)
+    assert orch.run_pass().submitted == [f'{SYSTEM}.pes.1']
+    manifest, _ = read_manifest(layout.job_dir(run.dir, f'{SYSTEM}.pes.1') / MANIFEST_FILE)
+    assert manifest.walltime == 10800
+    assert 'no walltime' not in caplog.text
+    for _ in range(3):
+        work(run)
+        orch.run_pass()
+    manifest, _ = read_manifest(layout.job_dir(run.dir, f'{SYSTEM}.adhesion.1') / MANIFEST_FILE)
+    assert manifest.walltime == 86400
+    assert (f'Group {SYSTEM}.adhesion.1: no walltime for adhesion in [execution.adhesion]: its '
+            'jobs get 24:00:00') in caplog.text
+
+
+def test_groups_of_each_step(run):
+    # pes its own, adhesion those of [execution].
+    execution = dataclasses.replace(EXECUTION, groups=3, pes=StepJobsParams('01:00:00', 1))
+    steps = {name: FakeStep(run, name, {}) for name in ('match', 'pes', 'adhesion')}
+    orch = Orchestrator(run.dir, [SYSTEM], steps, run.manager, execution, run.jobscript)
+
+    def jobs(group):
+        path = layout.job_dir(run.dir, f'{SYSTEM}.{group}') / SUBMITTED_FILE
+        return json.loads(path.read_text())['job_ids']
+
+    orch.run_pass()
+    assert len(jobs('pes.1')) == 1
+    for _ in range(3):
+        work(run)
+        orch.run_pass()
+    assert len(jobs('adhesion.1')) == 2  # not 3: one per calculation
+    # No groups at all: the step cannot write its group.
+    bare = Orchestrator(run.dir, [SYSTEM], steps, run.manager,
+                        dataclasses.replace(EXECUTION, groups=None), run.jobscript)
+    with pytest.raises(OrchestratorError, match=r'groups of ppes not given: set groups in '
+                                                r'\[execution.ppes\] or \[execution\]'):
+        bare._groups('ppes')
+
+
 def test_run_until_no_step_waits(run):
     orch = orchestrator(run, ['match', 'pes'])
     sleeps = []
@@ -284,7 +329,9 @@ def test_adhesion_needs_the_pes_that_the_settings_name(run, pes, status):
     assert statuses(orch.run_pass()) == {'adhesion': status}
 
 
-def test_steps_of_a_system_run_one_at_a_time_in_the_given_order(run):
+def test_steps_of_a_system_that_do_not_read_each_other_run_together(run):
+    # DEV-59: ppes and charge read only adhesion; they start in the same pass, in the order
+    # of the graph, the given order deciding between them.
     write_entry(run.dir, SYSTEM, 'pes')
     write_entry(run.dir, SYSTEM, 'match')
     orch = orchestrator(run, ['charge', 'ppes', 'adhesion'])
@@ -292,10 +339,10 @@ def test_steps_of_a_system_run_one_at_a_time_in_the_given_order(run):
                                          'ppes': 'waiting'}
     work(run)
     report = orch.run_pass()
-    assert statuses(report) == {'adhesion': 'completed', 'charge': 'running', 'ppes': 'waiting'}
-    assert orch.entry(SYSTEM, 'ppes')['reason'] == 'ready; charge runs first'
+    assert statuses(report) == {'adhesion': 'completed', 'charge': 'running', 'ppes': 'running'}
+    assert report.submitted == [f'{SYSTEM}.charge.1', f'{SYSTEM}.ppes.1']
     work(run)
-    assert statuses(orch.run_pass())['ppes'] == 'running'
+    assert statuses(orch.run_pass()) == dict.fromkeys(('adhesion', 'charge', 'ppes'), 'completed')
 
 
 def test_report_of_the_steps(run):
@@ -328,9 +375,9 @@ def run_to(orch, run, step):
 def test_a_failed_branch_does_not_block_the_other(run, failing, other):
     orch = orchestrator(run, ['match', 'pes', 'adhesion', 'ppes', 'charge'])
     run_to(orch, run, 'ppes')
-    work(run, 'user_request' if failing == 'ppes' else 'completed')
-    orch.run_pass()
-    work(run, 'user_request' if failing == 'charge' else 'completed')
+    assert orch.entry(SYSTEM, other)['status'] == 'running'  # the two branches together
+    work(run, 'user_request', only={f'{failing}/c0'})
+    work(run, 'completed', only={f'{other}/c0'})
     for _ in range(3):
         report = orch.run_pass()
         work(run)
@@ -769,26 +816,23 @@ def test_a_job_is_followed_also_without_the_table(run):
     assert orch.run_pass().success
 
 
-def test_the_steps_of_a_system_wait_for_the_job(run):
-    orch = job_run(run, ('match', 'pes', 'plotpes', 'adhesion'))
-    report = until_pes(orch, run)
-    assert statuses(report)['plotpes'] == 'running' and statuses(report)['adhesion'] == 'waiting'
-    assert orch.entry(SYSTEM, 'adhesion')['reason'] == 'ready; plotpes runs first'
-    the_job_ends(run)
-    report = orch.run_pass()
-    assert statuses(report)['plotpes'] == 'completed' and statuses(report)['adhesion'] == 'running'
-
-
-def test_the_job_waits_for_the_steps_that_run(run):
-    orch = job_run(run, ('match', 'pes', 'adhesion', 'plotpes'))
-    report = until_pes(orch, run)
-    assert statuses(report)['adhesion'] == 'running' and statuses(report)['plotpes'] == 'waiting'
-    assert orch.entry(SYSTEM, 'plotpes')['reason'] == 'ready; adhesion runs first'
-    assert not layout.job_dir(run.dir, GROUP).exists()
+@pytest.mark.parametrize('requested', [('match', 'pes', 'plotpes', 'adhesion'),
+                                       ('match', 'pes', 'adhesion', 'plotpes')])
+def test_the_job_of_an_analysis_and_the_calculations_of_another_step_run_together(run,
+                                                                                 requested):
+    # DEV-59: plotpes and adhesion both read pes and match only; whatever the given order, the
+    # job of the interpolation and the calculations of adhesion are submitted in the same pass.
+    orch = job_run(run, requested)
+    orch.run_pass()  # match completed, pes running
     work(run)
     report = orch.run_pass()
-    assert statuses(report)['adhesion'] == 'completed'
-    assert orch.entry(SYSTEM, 'plotpes')['job'] == GROUP and report.submitted == [GROUP]
+    assert statuses(report)['plotpes'] == statuses(report)['adhesion'] == 'running'
+    assert orch.entry(SYSTEM, 'plotpes')['job'] == GROUP
+    assert sorted(report.submitted) == [f'{SYSTEM}.adhesion.1', GROUP]
+    assert not any('runs first' in (step.reason or '') for step in report.steps)
+    the_job_ends(run)
+    work(run)
+    assert orch.run_pass().success
 
 
 def test_analysis_by_hand_refused_while_the_job_may_run(run):

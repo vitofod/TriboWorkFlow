@@ -30,7 +30,8 @@ from triboworkflow.cli.main import main
 from triboworkflow.core import store
 from triboworkflow.core import structures as st
 from triboworkflow.core.settings import SettingsError, load_settings
-from triboworkflow.core.settings.schema import ExecutionParams, QEParams
+from triboworkflow.core.settings.schema import (WALLTIME_STEPS, ExecutionParams, QEParams,
+                                                StepJobsParams)
 from triboworkflow.engines.qe.prepare import input_differences, single_input
 from triboworkflow.execution import layout
 from triboworkflow.execution import orchestrator as orchestrator_module
@@ -48,7 +49,8 @@ DATA = Path(__file__).resolve().parent / 'data' / 'qe'
 UPF = 'C.pbe-n-kjpaw_psl.1.0.0.UPF'
 MD5 = '0123456789abcdef0123456789abcdef'
 EXECUTION = ExecutionParams(scheduler='slurm', jobscript='job.sh', run_command='pw.x', groups=2,
-                            walltime=3600, polling_interval=300, max_seconds_margin=60)
+                            polling_interval=300, max_seconds_margin=60,
+                            **{step: StepJobsParams(walltime='01:00:00') for step in WALLTIME_STEPS})
 SLAB = Structure(Lattice.hexagonal(2.46, 20.0), ['C', 'C'],
                  [[0, 0, 0.5], [1 / 3, 2 / 3, 0.5]])
 KPOINTS = Kpoints.gamma_automatic((4, 4, 1))

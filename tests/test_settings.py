@@ -17,12 +17,14 @@ import pytest
 
 from triboworkflow.core.settings import (Settings, SettingsError, load_settings,
                                          settings_from_dict, validate)
-from triboworkflow.core.settings.schema import (CHARGE_OPERATIONS, CHARGE_SITES,
+from triboworkflow.core.settings.schema import (CHARGE_OPERATIONS, CHARGE_SITES, ENGINES,
                                                 INTER_PARAMS_DEFAULTS, INTERFACE_STEPS,
                                                 PPES_SHIFTS, SHEAR_DELTA, SHEAR_MEP, SHEAR_SEED,
-                                                AdhesionParams, AnalysisParams, ChargeParams,
-                                                GenerationParams, InterParams, PesScfParams,
-                                                PpesParams, ShearMepParams, ShearParams, key_name)
+                                                WALLTIME_STEPS, AdhesionParams, AnalysisParams, ChargeParams,
+                                                GenerationParams, InterParams, MlipParams,
+                                                PesScfParams, PpesParams, ShearMepParams,
+                                                ShearParams, key_name)
+from triboworkflow.engines.mlip.registry import ModelType, register_model_type
 from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
 from triboworkflow.vendored.highput.utils.tasktools import read_default_params
 from triboworkflow.vendored.physics.tribology.mep import MEP
@@ -33,6 +35,10 @@ EXAMPLES = ROOT / 'examples'
 MATCHING_DEFAULTS = ROOT / 'triboworkflow' / 'vendored' / 'highput' / 'firetasks' / 'defaults.json'
 
 DELETE = object()
+
+# A valid [mlip]: the file of the model does not exist here, and the settings do not look for it.
+MLIP_PATH = '/models/mace-omat-0-medium.model'
+MLIP = {'type': 'MACE', 'path': MLIP_PATH}
 
 
 def read_example(name):
@@ -69,7 +75,7 @@ def test_interface_example_complete():
     settings = load_settings(EXAMPLES / 'interface.toml')
     settings.require_complete()
     assert settings.source == EXAMPLES / 'interface.toml'
-    assert [slab.mid for slab in settings.interface.slabs] == ['mp-30', 'mp-134']
+    assert [slab.id for slab in settings.interface.slabs] == ['Cu111', 'Al111']
     assert settings.namelists.SYSTEM['ecutwfc'] == 50.0
     assert settings.namelists.CONTROL['tprnfor'] is True
     assert [s.label for s in settings.atomic_species] == ['Cu', 'Al']
@@ -204,13 +210,13 @@ ACCEPTED = [
     ('if-pos-values', S, {'structure.constraints.default_if_pos': [2, 1, 1]}),
     ('override-repeated', S, {'structure.constraints.overrides': [{'atoms': [2, 2], 'if_pos': [0, 0, 0]}]}),
     ('generation-in-workflow', W, {'generation': {}}),
-    ('max-seconds', W, {'namelists.CONTROL.max_seconds': 90000}),
     ('wfcdir-inside', W, {'namelists.CONTROL.wfcdir': 'WFC/node'}),
     ('bulk-modulus-unused', W, {'interface.set_bm': False}),
     ('weights-with-set-bm', W, {'interface.inter_params.strain_weight_1': 1.0}),
     ('inter-params-values', W, {'interface.inter_params.max_area': 0.0,
                                 'interface.inter_params.max_angle_tol': -1.0}),
     ('bulk-modulus-0', W, {'interface.slabs[0].bulk_modulus': 0.0}),
+    ('slab-ids', W, {'interface.slabs[0].id': 'Fe-bcc.110', 'interface.slabs[1].id': 'mp-13'}),
     ('miller-zero', W, {'interface.slabs[1].miller': [0, 0, 0]}),
     ('formula-and-name', W, {'interface.slabs[0].formula': 'Cu', 'interface.slabs[0].name': 'a',
                              'interface.slabs[1].formula': 'Al', 'interface.slabs[1].name': 'b'}),
@@ -218,6 +224,19 @@ ACCEPTED = [
     ('match-only-without-qe', W, {'qe': DELETE, 'interface.steps': ['match', 'shear']}),
     ('single-without-qe', S, {'qe': DELETE}),
     ('single-manifest-only', S, {'qe.version': DELETE, 'qe.upf_md5': 'pseudo.md5'}),
+    # [mlip]: the model file is not looked at, and the keys that depend on the backend
+    # (default_dtype with ASE) are checked when a step chooses it.
+    ('mlip', W, {'mlip': MLIP}),
+    ('mlip-dp', W, {'mlip': {'type': 'DP', 'path': '/models/dp.pb'}}),
+    ('mlip-mace-mp', W, {'mlip': {'type': 'MACE_MP', 'path': MLIP_PATH}}),
+    ('mlip-without-default-dtype', W, {'mlip': {**MLIP, 'kwargs': {'head': 'Omat24'}}}),
+    ('mlip-with-structure', S, {'mlip': MLIP}),
+    ('mlip-version-minor', W, {'mlip': {**MLIP, 'version': '0.3'}}),
+    ('mlip-version-patch', W, {'mlip': {**MLIP, 'version': '3.1.0'}}),
+    ('mlip-fmax-integer', W, {'mlip': {**MLIP, 'fmax': 1}}),
+    ('mlip-fmax-large', W, {'mlip': {**MLIP, 'fmax': 50.0}}),
+    ('mlip-maxsteps-large', W, {'mlip': {**MLIP, 'maxsteps': 100000}}),
+    ('mlip-path-with-spaces', W, {'mlip': {**MLIP, 'path': '/my models/mace model.pt'}}),
 ]
 
 
@@ -256,6 +275,61 @@ def test_qe_versions_accepted_with_a_warning_outside_those_supported(version, wa
                       'may hold errors: check them'] if warned else [])
 
 
+def test_mlip_is_optional():
+    assert settings_from_dict(WORKFLOW).mlip is None
+    assert settings_from_dict(SINGLE).mlip is None
+
+
+def test_mlip_defaults():
+    settings = settings_from_dict(edited(WORKFLOW, {'mlip': MLIP}))
+    assert settings.mlip == MlipParams(type='MACE', path=MLIP_PATH)
+    assert settings.mlip.kwargs == {}
+    assert settings.mlip.version is None
+    assert (settings.mlip.fmax, settings.mlip.maxsteps) == (0.01, 500)
+
+
+def test_mlip_integer_fmax_is_a_float():
+    settings = settings_from_dict(edited(WORKFLOW, {'mlip': {**MLIP, 'fmax': 1}}))
+    assert settings.mlip.fmax == 1.0 and isinstance(settings.mlip.fmax, float)
+
+
+def test_mlip_kwargs_are_kept_as_written():
+    kwargs = {'default_dtype': 'float64', 'enable_cueq': False, 'cutoff': 5, 'scale': 0.5,
+              'head': 'Omat24'}
+    settings = settings_from_dict(edited(WORKFLOW, {'mlip': {**MLIP, 'kwargs': kwargs}}))
+    assert settings.mlip.kwargs == kwargs
+    assert list(settings.mlip.kwargs) == list(kwargs)
+    assert [type(value) for value in settings.mlip.kwargs.values()] == [str, bool, int, float, str]
+
+
+def test_mlip_from_a_file(tmp_path):
+    table = ('\n[mlip]\ntype = "MACE_MP"\npath = "/models/mace-omat-0-medium.model"\n'
+             'version = "0.3.14"\nfmax = 0.02\nmaxsteps = 300\n'
+             'kwargs = { default_dtype = "float64", head = "Omat24", enable_cueq = true }\n')
+    file = tmp_path / 'settings.toml'
+    file.write_text((EXAMPLES / 'interface.toml').read_text(encoding='utf-8') + table, encoding='utf-8')
+    assert load_settings(file).mlip == MlipParams(
+        type='MACE_MP', path='/models/mace-omat-0-medium.model', version='0.3.14', fmax=0.02,
+        maxsteps=300, kwargs={'default_dtype': 'float64', 'head': 'Omat24', 'enable_cueq': True})
+
+
+def test_mlip_type_registered_later_is_valid(mlip_types_restored):
+    data = edited(WORKFLOW, {'mlip': {**MLIP, 'type': 'GRACE'}})
+    with pytest.raises(SettingsError, match='mlip.type'):
+        settings_from_dict(data)
+    register_model_type(ModelType('GRACE', 'grace-tensorpotential', 'tensorpotential.calculator:TPCalculator',
+                                  path_argument='model'))
+    assert settings_from_dict(data).mlip.type == 'GRACE'
+
+
+def test_mlip_engines_are_not_available_yet():
+    # The table is read, but the steps still run on QE only: mlip-ase and mlip-lammps come with the
+    # execution of the MLIP calculations.
+    assert ENGINES == ('qe',)
+    settings = settings_from_dict(edited(WORKFLOW, {'mlip': MLIP}))
+    assert settings.interface.engine_for('pes') == 'qe'
+
+
 @pytest.mark.parametrize('k_points', [
     {'mode': 'gamma'},
     {'mode': 'automatic', 'grid': [8, 8, 1], 'offset': [1, 1, 0]},
@@ -278,6 +352,55 @@ def test_strain_weights_without_bulk_moduli():
 def test_max_seconds_margin_default():
     settings = settings_from_dict(edited(WORKFLOW, {'execution.max_seconds_margin': DELETE}))
     assert settings.execution.max_seconds_margin == 600
+
+
+def test_walltime_of_each_step():
+    execution = settings_from_dict(edited(WORKFLOW, {
+        'execution.pes.walltime': '48:00:00', 'execution.shear': DELETE})).execution
+    assert execution.walltime_of('pes') == 48 * 3600
+    assert execution.walltime_of('plotpes') == 1800
+    assert execution.walltime_given('shear') is None
+    assert execution.walltime_of('shear') == 24 * 3600  # DEFAULT_WALLTIME
+
+
+def test_walltime_missing_only_for_the_steps_that_submit_jobs():
+    walltimes = {f'execution.{step}': DELETE for step in WALLTIME_STEPS}
+    execution = settings_from_dict(edited(WORKFLOW, walltimes)).execution
+    assert execution.missing_walltimes(['match', 'pes', 'charge', 'plotpes']) == \
+        ['pes', 'charge', 'plotpes']
+    assert settings_from_dict(WORKFLOW).execution.missing_walltimes(INTERFACE_STEPS) == []
+    # The walltime of a step not run has no effect.
+    assert settings_from_dict(edited(WORKFLOW, walltimes | {
+        'execution.charge': {'walltime': '01:00:00'}})).execution.missing_walltimes(['pes']) == \
+        ['pes']
+
+
+def test_the_margin_is_checked_against_the_steps_run_only():
+    # A walltime below the margin for a step that the run does not ask for has no effect.
+    steps = {'interface.steps': ['match', 'pes']}
+    settings = settings_from_dict(edited(WORKFLOW, steps | {'execution.ppes.walltime': '00:05:00'}))
+    assert settings.execution.walltime_of('ppes') == 300
+    # For a step that the run asks for, it is an error, as before.
+    with pytest.raises(SettingsError) as error:
+        settings_from_dict(edited(WORKFLOW, steps | {'execution.pes.walltime': '00:05:00'}))
+    assert error.value.path == 'execution.max_seconds_margin'
+    assert 'must be < the walltime of pes (300 s), got 600' in error.value.message
+
+
+def test_groups_of_each_step():
+    execution = settings_from_dict(edited(WORKFLOW, {
+        'execution.groups': 10, 'execution.pes.groups': 6,
+        'execution.charge.groups': 1})).execution
+    assert [execution.groups_of(step) for step in ('pes', 'ppes', 'charge', 'shear')] == \
+        [6, 10, 1, 10]
+    # --groups holds for every step; an answer in a terminal only replaces [execution].groups.
+    given = execution.with_groups(3, override=True)
+    assert [given.groups_of(step) for step in ('pes', 'ppes', 'charge')] == [3, 3, 3]
+    answer = execution.with_groups(3, override=False)
+    assert [answer.groups_of(step) for step in ('pes', 'ppes', 'charge')] == [6, 3, 1]
+    assert execution.groups_of('pes') == 6  # the settings are not changed
+    unset = settings_from_dict(edited(WORKFLOW, {'execution.groups': DELETE})).execution
+    assert unset.groups_of('ppes') is None
 
 
 def test_job_report_wait_default():
@@ -668,13 +791,42 @@ ERRORS = [
     # [execution]
     ('scheduler', W, {'execution.scheduler': 'Slurm'}, 'execution.scheduler', "'Slurm' is not allowed"),
     ('groups', W, {'execution.groups': 0}, 'execution.groups', 'must be > 0'),
-    ('walltime', W, {'execution.walltime': 0}, 'execution.walltime', 'must be > 0'),
+    ('walltime-seconds', W, {'execution.walltime': 14400}, 'execution.walltime',
+     'unknown key (the walltime of the jobs of each step goes in the section of the step, e.g. '
+     '[execution.pes] walltime = "12:00:00")'),
+    ('walltime-table', W, {'execution.walltime': {'pes': '12:00:00'}}, 'execution.walltime',
+     'unknown key (the walltime of the jobs of each step goes in the section of the step'),
+    ('step-section', W, {'execution.match': {'walltime': '01:00:00'}}, 'execution.match',
+     'unknown key (allowed keys: scheduler, jobscript'),
+    ('step-key', W, {'execution.pes.time': '01:00:00'}, 'execution.pes.time',
+     'unknown key (allowed keys: walltime, groups)'),
+    ('walltime-number', W, {'execution.pes.walltime': 3600}, 'execution.pes.walltime',
+     'expected str, got 3600'),
+    ('walltime-format', W, {'execution.pes.walltime': '1-00:00:00'}, 'execution.pes.walltime',
+     'give "HH:MM:SS" > 0 (hours may pass 24, minutes and seconds are below 60), got '
+     "'1-00:00:00'"),
+    ('walltime-minutes', W, {'execution.shear.walltime': '00:60:00'}, 'execution.shear.walltime',
+     'give "HH:MM:SS"'),
+    ('walltime-zero', W, {'execution.ppes.walltime': '00:00:00'}, 'execution.ppes.walltime',
+     'give "HH:MM:SS" > 0'),
+    ('groups-of-an-analysis', W, {'execution.shear.groups': 2}, 'execution.shear.groups',
+     'shear runs its analysis in one job: groups is only for the steps that run calculations'),
+    ('groups-of-a-step-0', W, {'execution.ppes.groups': 0}, 'execution.ppes.groups',
+     'must be > 0'),
+    ('max-seconds', W, {'namelists.CONTROL.max_seconds': 90000}, 'namelists.CONTROL.max_seconds',
+     'not allowed in a workflow: the worker sets it before each run, from the walltime of the '
+     'step'),
     ('polling', W, {'execution.polling_interval': -5}, 'execution.polling_interval', 'must be > 0'),
     ('margin-0', W, {'execution.max_seconds_margin': 0}, 'execution.max_seconds_margin', 'must be > 0'),
     ('report-wait-0', W, {'execution.job_report_wait': 0}, 'execution.job_report_wait',
      'must be > 0'),
-    ('margin-walltime', W, {'execution.max_seconds_margin': 86400}, 'execution.max_seconds_margin',
-     'must be < walltime (86400), got 86400'),
+    ('margin-walltime', W, {'execution.ppes.walltime': '00:10:00', 'execution.max_seconds_margin': 600},
+     'execution.max_seconds_margin', 'must be < the walltime of ppes (600 s), got 600'),
+    ('margin-default-walltime', W, {**{f'execution.{step}.walltime': '48:00:00'
+                                       for step in ('pes', 'pes_scf', 'adhesion', 'ppes')},
+                                    'execution.charge.walltime': DELETE,
+                                    'execution.max_seconds_margin': 86400},
+     'execution.max_seconds_margin', 'must be < the walltime of charge (86400 s), got 86400'),
     ('margin-float', W, {'execution.max_seconds_margin': 600.0}, 'execution.max_seconds_margin',
      'expected int, got 600.0'),
     ('pp-command-empty', W, {'execution.pp_command': '  '}, 'execution.pp_command',
@@ -694,6 +846,15 @@ ERRORS = [
     ('one-slab', W, {'interface.slabs': WORKFLOW['interface']['slabs'][:1]}, 'interface.slabs',
      'give two slabs; got 1'),
     ('slab-key', W, {'interface.slabs[0].thickness': 3}, 'interface.slabs[0].thickness', 'unknown key'),
+    ('slab-mid', W, {'interface.slabs[0].mid': 'mp-30'}, 'interface.slabs[0].mid',
+     'unknown key (a slab is named by "id", e.g. id = "Fe110"; the system is <id1>_<id2>)'),
+    ('slab-id-missing', W, {'interface.slabs[1].id': DELETE}, 'interface.slabs.id',
+     'required key missing'),  # dacite does not give the index of the entry
+    ('slab-id-underscore', W, {'interface.slabs[1].id': 'Al_111'}, 'interface.slabs[1].id',
+     'letters, digits, "-" and "." only'),
+    ('slab-id-hidden', W, {'interface.slabs[0].id': '.Cu'}, 'interface.slabs[0].id',
+     'starting with a letter or a digit'),
+    ('slab-id-empty', W, {'interface.slabs[0].id': ''}, 'interface.slabs[0].id', 'got \'\''),
     # formula and name of both slabs, or none of them.
     ('formula-without-name', W, {'interface.slabs[0].formula': 'Cu', 'interface.slabs[1].formula': 'Al'},
      'interface.slabs[0].name', 'give formula and name of both slabs, or none of them (the ids of '
@@ -883,6 +1044,54 @@ ERRORS = [
      'required by the steps that run pw.x'),
     ('qe-missing', W, {'qe': DELETE}, 'qe.version', 'required by the steps that run pw.x'),
     ('qe-key', W, {'qe.md5': 'pseudo.md5'}, 'qe.md5', 'allowed keys: version, upf_md5'),
+    # [mlip]
+    ('mlip-type-missing', W, {'mlip': {'path': MLIP_PATH}}, 'mlip.type', 'required key missing'),
+    ('mlip-path-missing', W, {'mlip': {'type': 'DP'}}, 'mlip.path', 'required key missing'),
+    *[(f'mlip-type-{name!r}', W, {'mlip': {**MLIP, 'type': name}}, 'mlip.type',
+       f"{name!r} is not a model type; allowed values: 'DP', 'MACE', 'MACE_MP'")
+      for name in ('GRACE', 'Eqv2', 'ML/MACE', 'ML/DP', 'mace', 'Mace', 'MACE ', '')],
+    ('mlip-type-number', W, {'mlip': {**MLIP, 'type': 5}}, 'mlip.type', 'expected str, got 5'),
+    *[(f'mlip-path-{path!r}', W, {'mlip': {**MLIP, 'path': path}}, 'mlip.path',
+       'give the absolute path of the model on the machine that runs the calculations')
+      for path in ('', 'mace.model', './mace.model', '../models/mace.model', '~/mace.model',
+                   'C:\\models\\mace.model')],
+    ('mlip-path-number', W, {'mlip': {**MLIP, 'path': 5}}, 'mlip.path', 'expected str, got 5'),
+    ('mlip-kwargs-device', W, {'mlip': {**MLIP, 'kwargs': {'default_dtype': 'float64', 'device': 'cpu'}}},
+     'mlip.kwargs', "'device' is set by the workflow to 'cuda': remove it from kwargs"),
+    ('mlip-kwargs-device-mp', W, {'mlip': {'type': 'MACE_MP', 'path': MLIP_PATH,
+                                          'kwargs': {'device': 'cuda'}}},
+     'mlip.kwargs', "'device' is set by the workflow to 'cuda'"),
+    ('mlip-kwargs-model-path', W, {'mlip': {**MLIP, 'kwargs': {'model_path': '/other.model'}}},
+     'mlip.kwargs', "'model_path' is the path of the model, which is set by \"path\""),
+    ('mlip-kwargs-model', W, {'mlip': {'type': 'MACE_MP', 'path': MLIP_PATH,
+                                      'kwargs': {'model': 'medium'}}},
+     'mlip.kwargs', "'model' is the path of the model, which is set by \"path\""),
+    ('mlip-kwargs-list', W, {'mlip': {**MLIP, 'kwargs': [1, 2]}}, 'mlip.kwargs',
+     'expected a table, got [1, 2]'),
+    *[(f'mlip-version-{version!r}', W, {'mlip': {**MLIP, 'version': version}}, 'mlip.version',
+       'is not a version of the package of the model: give major.minor or major.minor.patch')
+      for version in ('0.3b', 'v0.3', '3', '3.1.0rc1', '')],
+    ('mlip-version-number', W, {'mlip': {**MLIP, 'version': 0.3}}, 'mlip.version',
+     'expected str, got 0.3'),
+    *[(f'mlip-fmax-{value!r}', W, {'mlip': {**MLIP, 'fmax': value}}, 'mlip.fmax',
+       f'must be a finite number > 0, got {float(value)!r}')
+      for value in (0, 0.0, -0.01, float('nan'), float('inf'))],
+    ('mlip-fmax-str', W, {'mlip': {**MLIP, 'fmax': '0.01'}}, 'mlip.fmax', "expected float, got '0.01'"),
+    ('mlip-fmax-bool', W, {'mlip': {**MLIP, 'fmax': True}}, 'mlip.fmax', 'expected float, got True'),
+    *[(f'mlip-maxsteps-{value!r}', W, {'mlip': {**MLIP, 'maxsteps': value}}, 'mlip.maxsteps',
+       f'must be >= 1, got {value}') for value in (0, -5)],
+    ('mlip-maxsteps-float', W, {'mlip': {**MLIP, 'maxsteps': 500.0}}, 'mlip.maxsteps',
+     'expected int, got 500.0'),
+    ('mlip-maxsteps-bool', W, {'mlip': {**MLIP, 'maxsteps': True}}, 'mlip.maxsteps',
+     'expected int, got True'),
+    *[(f'mlip-key-{key}', W, {'mlip': {**MLIP, key: 'x'}}, f'mlip.{key}',
+       'allowed keys: type, path, kwargs, version, fmax, maxsteps')
+      for key in ('device', 'backend', 'head', 'default_dtype', 'model')],
+    ('mlip-scalar', W, {'mlip': 'MACE'}, 'mlip', 'expected a table'),
+    # The MLIP engines are not available yet: [mlip] is read, but no step can use it.
+    ('engines-mlip', W, {'interface.engines': {'pes': 'mlip-ase'}}, 'interface.engines.pes',
+     'not available yet'),
+    ('engine-mlip', W, {'interface.engine': 'mlip-lammps'}, 'interface.engine', 'not available yet'),
 ]
 
 

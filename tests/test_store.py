@@ -27,6 +27,7 @@ import math
 import multiprocessing
 import os
 import stat
+import threading
 import time
 from pathlib import Path
 
@@ -35,6 +36,7 @@ import pytest
 
 from triboworkflow.core import store
 from triboworkflow.core.store import legacy
+from triboworkflow.core.store import system as system_module
 from triboworkflow.core.store.atomic import read_json, write_json, write_text
 from triboworkflow.core.store.record import RESTART_PARTS
 
@@ -1147,20 +1149,45 @@ def test_writer_saves_only_on_request(system_dir):
 def test_second_writer_is_refused(system_dir):
     with store.SystemWriter(system_dir):
         with pytest.raises(store.LockError, match='system.json.lock'):
-            with store.SystemWriter(system_dir):
+            with store.SystemWriter(system_dir, wait=0):
                 pass
         assert (system_dir / 'system.json.lock').exists()
     with store.SystemWriter(system_dir):
         pass
 
 
-def test_stale_lock_is_never_removed(system_dir):
+def test_stale_lock_is_never_removed(system_dir, monkeypatch):
+    monkeypatch.setattr(system_module, 'LOCK_POLL', 0.01)
+    monkeypatch.setattr(system_module, 'LOCK_WAIT', 0.05)
     lock = system_dir / 'system.json.lock'
     lock.write_text('{"pid": 1, "host": "node1"}\n')
-    with pytest.raises(store.LockError, match='node1'):
+    start = time.monotonic()
+    with pytest.raises(store.LockError, match=r'node1"\}\), still after 0 s'):
         with store.SystemWriter(system_dir):
             pass
-    assert lock.exists()
+    assert time.monotonic() - start >= 0.05 and lock.exists()
+
+
+def test_a_writer_waits_for_the_lock_of_another(system_dir, monkeypatch):
+    # Two steps that save in turn: the second waits, then writes on the document saved by the
+    # first, whose entries it keeps.
+    assert system_module.LOCK_WAIT == 600
+    monkeypatch.setattr(system_module, 'LOCK_POLL', 0.01)
+    lock = system_dir / 'system.json.lock'
+    with store.SystemWriter(system_dir) as first:
+        first.document.create({'pes': {'done': True}})
+        first.save()
+        released = threading.Timer(0.2, first._release)
+        released.start()
+        start = time.monotonic()
+        with store.SystemWriter(system_dir) as second:
+            assert time.monotonic() - start >= 0.15
+            second.document.set(['adhesion'], {'done': True})
+            second.save()
+        released.join()
+    assert store.read_system(system_dir).document == {'pes': {'done': True},
+                                                     'adhesion': {'done': True}}
+    assert not lock.exists()
 
 
 # -- separate processes --------------------------------------------------------
@@ -1178,7 +1205,7 @@ def test_writer_of_another_process_is_exclusive(system_dir):
     try:
         assert locked.wait(60)
         with pytest.raises(store.LockError):
-            with store.SystemWriter(system_dir):
+            with store.SystemWriter(system_dir, wait=0):
                 pass
     finally:
         release.set()

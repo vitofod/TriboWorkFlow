@@ -21,10 +21,10 @@ completed, run "analyse". The settings must not have changed since the
 preparation.
 
 A step without calculations whose analysis needs a compute node (plotpes,
-plotpes_scf, shear) is analysed in a job of its own with [execution.analysis]: the
-command writes and submits that job, and run again follows it; once the job
-is over the step is completed from its entries, or failed with the state of
-the job. Without [execution.analysis] it is analysed by hand ("analyse").
+plotpes_scf, shear) is analysed in a job of its own, with the jobscript of
+[execution.analysis] or else of [execution]: the command writes and submits
+that job, and run again follows it; once the job is over the step is
+completed from its entries, or failed with the state of the job.
 
 Example:
  $ triboworkflow submit pes
@@ -38,7 +38,8 @@ Example:
     def add_arguments(self, parser):
         parser.add_argument('step', choices=INTERFACE_STEPS, help='step to submit')
         parser.add_argument('--groups', type=positive_int, metavar='M',
-                            help='jobs (workers) per group; [execution].groups by default')
+                            help='jobs (workers) per group; by default those of '
+                                 '[execution.<step>], else of [execution]')
 
     def run(self, args, run_dir, settings):
         from triboworkflow.workflows.interface.registry import get_step
@@ -48,8 +49,9 @@ Example:
 
         # The job of an analysis is one job: no number of workers to ask for.
         analysis = get_step(args.step).manual_analysis
-        groups = None if analysis else resolve_groups(settings, args.groups, terminal_ask())
-        orch = step_orchestrator(run_dir, settings, args.step, groups)
+        groups, override = (None, False) if analysis else \
+            resolve_groups(settings, args.groups, terminal_ask(), steps=[args.step])
+        orch = step_orchestrator(run_dir, settings, args.step, groups, override)
         before = submissions(orch.manager)
         report, written = orch.submit_step(system_name(settings), args.step)
         code = print_step(report)

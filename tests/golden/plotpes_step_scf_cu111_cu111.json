@@ -117,17 +117,6 @@
    "dtype": "float64"
   }
  },
- "figure": [
-  "pes_Cu111-Cu111.png"
- ],
- "image": {
-  "mode": "RGBA",
-  "size": [
-   2100,
-   2100
-  ],
-  "sha256": "10ed84542d7ab97deb4e9c52ab840acf5486aab0cace73161c8f31a994f99197"
- },
  "calls": [
   {
    "call": "update_db",

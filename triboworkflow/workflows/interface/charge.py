@@ -59,7 +59,15 @@ the units of a CHGCAR). With ``<kind>`` and ``<site>`` as above it writes:
   the range between the slabs and ``all`` over the whole cell, each with ``integral``
   (e/angstrom^3, the integral divided by the width) and ``width`` (angstrom), then
   ``grid`` (the averaged curve, ``x`` as above) and ``rescale``, the number of points of
-  the integration (``RESCALE``).
+  the integration (``RESCALE``);
+- in the folder of the system, the text file ``charge/charge_<kind>_<site>.output``
+  (``charge_output``: the parameters, the integrals and the planar averages and the
+  displacement along z, one row per point), the figure ``charge_<kind>_<site>_<name>.png``
+  and ``.pdf`` of the displacement along z with the region between the slabs shaded, and
+  the displacement in three dimensions, ``charge_<kind>_<site>_<name>.cube`` (Gaussian
+  cube, e/bohr^3, in the cell of the calculations), which OVITO and VESTA read
+  (``write_charge_files``). They are renamed into place once the entries are saved, and the
+  step is done only with them carrying the stamp of the provenance saved (``outputs``).
 
 The keys are fixed, so nothing is emptied before they are written. Each of the three
 entries of the kind and site run (``charge_leaves``) gets the provenance of the step:
@@ -124,9 +132,12 @@ from triboworkflow.vendored.physics.electronics.charge.chgcar_integrator import 
     charge_displacement, chgcar_algebra_from_list, chgcar_average_along_axis)
 
 from .adhesion import AdhesionStep
-from .chain import check_upstream, upstream_done
+from .chain import check_upstream, upstream_done, upstream_entries_done
+from .figures import charge_figure, figure_paths
 from .match import COLLECTION, DEFAULTS, FILTER_KEYS, match_parameters, set_filter
+from .outputs import analysis_stamp, header, place, staged, write_cube, written_by
 from .pes import ID_KEYS, TRANSFER_FROM
+from .plotpes import interface_name
 # The slab each atom of an interface belongs to and the entries of the interface of each site are
 # those of the step ppes, which starts from the same interface (D58).
 from .ppes import (BOTTOM_SLAB, INTERFACE_OF, SLAB_PROPERTY, TOP_SLAB,  # noqa: F401 (re-exported)
@@ -704,6 +715,120 @@ def run_charge_analysis(inputs, store, calc_ids, chgcars):
                            inputs.operations, inputs.integrate_in, c_2)
 
 
+def output_path(sdir, kind, site):
+    """Text file of the step: ``charge/charge_<kind>_<site>.output`` in the folder of the system."""
+    return sdir / STEP / f'{STEP}_{kind}_{site}.output'
+
+
+def file_stem(sdir, kind, site, name):
+    """Figure and cube file of the step without suffix: ``charge/charge_<kind>_<site>_<name>``.
+
+    The figure is the ``.png`` and the ``.pdf``, the charge displacement in three dimensions
+    the ``.cube``.
+    """
+    return sdir / STEP / f'{STEP}_{kind}_{site}_{name}'
+
+
+def charge_output(system, inputs, document, values, region, now=None, stamp=None):
+    """Text of ``charge_<kind>_<site>.output``: parameters, integrals and the curves along z.
+
+    Parameters
+    ----------
+    system : str
+    inputs : ChargeInputs
+    document : SystemDocument
+        The document of the system, with the planar averages of the analysis.
+    values : dict
+        As ``displace_charge`` returns it.
+    region : tuple of float
+        Limits of the region between the slabs, contact plane at 0, angstrom.
+    now : datetime.datetime or None, optional
+    stamp : str or None, optional
+        ``outputs.analysis_stamp`` of the analysis.
+
+    Returns
+    -------
+    str
+
+    Raises
+    ------
+    StoreError
+        If the curves of the planar averages are not on the grid of the charge displacement.
+    """
+    axis = AXIS_NAMES[AXIS]
+    z_values = values['displacement'][inputs.site][axis]
+    z, drho = (np.asarray(column, dtype=float) for column in z_values['grid'])
+    averages = []
+    for part in LABELS:
+        x, rho = (np.asarray(column, dtype=float) for column in document.get(
+            average_entry(inputs.type, inputs.site) + (part, axis)))
+        if x.shape != z.shape or not np.allclose(x, z):
+            raise StoreError(f'the planar average of {part} is not on the grid of the charge '
+                             'displacement')
+        averages.append(rho)
+    first, second = inputs.operations
+    lines = header('Charge displacement of the interface', system, STEP, now, stamp) + [
+        '#', '# Parameters',
+        f'#   [interface.charge]    site = "{inputs.site}", operations = {inputs.operations}: '
+        f'interface {first} bot_slab {second} top_slab',
+        f'#   [interface.adhesion]  type = "{inputs.type}"',
+        f'#   axis {axis}; region between the slabs, the contact plane at {axis} = 0: from '
+        f'{region[0]:.6f} to {region[1]:.6f} angstrom',
+        '#',
+        '# Integral of the absolute value of the planar average of the charge displacement,',
+        f'# divided by the width (charge.{inputs.type}.displacement.{inputs.site}.{axis}):',
+        f'#   region between the slabs: {z_values["interface"]["integral"]:.8g} e/angstrom^3, '
+        f'width {z_values["interface"]["width"]:.6f} angstrom',
+        f'#   whole cell:               {z_values["all"]["integral"]:.8g} e/angstrom^3, '
+        f'width {z_values["all"]["width"]:.6f} angstrom',
+        '#', f'# One row per point of the grid along {axis}, contact plane at 0:',
+        f'#   {axis}              angstrom',
+        '#   rho_interface  planar average of the density of the interface, e/angstrom^3',
+        '#   rho_bot_slab   the same, of the bottom slab',
+        '#   rho_top_slab   the same, of the top slab',
+        '#   drho           planar average of the charge displacement, e/angstrom^3',
+        '#' + ' '.join(f'{name:>17}' for name in (axis, 'rho_interface', 'rho_bot_slab',
+                                                   'rho_top_slab', 'drho'))]
+    for row in zip(z, *averages, drho):
+        lines.append(' ' + ' '.join(f'{value: .10e}' for value in row))
+    return '\n'.join(lines) + '\n'
+
+
+def write_charge_files(stem, partials, inputs, chgcars, values, region, stamp=None):
+    """Draw the figure and write the cube file of the charge displacement.
+
+    Parameters
+    ----------
+    stem : pathlib.Path
+        ``file_stem`` of the step.
+    partials : dict
+        Path -> temporary path (``outputs.staged``), with the ``.png``, ``.pdf`` and
+        ``.cube`` of ``stem``.
+    inputs : ChargeInputs
+    chgcars : list of pymatgen.io.vasp.outputs.Chgcar
+        The three densities.
+    values : dict
+        As ``displace_charge`` returns it.
+    region : tuple of float
+        Limits of the region between the slabs, contact plane at 0, angstrom.
+    stamp : str or None, optional
+        ``outputs.analysis_stamp`` of the analysis, in the metadata of the figure and in the
+        comment of the cube file.
+    """
+    z, drho = values['displacement'][inputs.site][AXIS_NAMES[AXIS]]['grid']
+    png, pdf = figure_paths(stem.with_suffix('.png'))
+    charge_figure(z, drho, region, partials[png], partials[pdf], stamp)
+    # The same combination as the integral, in three dimensions.
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', 'Structures are different', UserWarning)
+        combined = chgcar_algebra_from_list(chgcars, inputs.operations, AXIS)
+    first, second = inputs.operations
+    write_cube(partials[stem.with_suffix('.cube')], combined,
+               f'charge displacement, {inputs.type} interface at {inputs.site}: interface {first} '
+               f'bot_slab {second} top_slab, e/bohr^3; the cell of the calculations, contact '
+               'plane at half the cell' + ('' if stamp is None else f'; {stamp}'))
+
+
 def describe(inputs, values):
     """Lines of the message of the step: the site, the operations and the integrals.
 
@@ -742,26 +867,65 @@ class ChargeStep(Step):
     name = STEP
 
     def done(self, run_dir, system):
+        """Whether its entries are done (``entries_done``) and its text file, figure and cube
+        file were written by the analysis saved (``outputs.written_by``)."""
+        return self._entries(run_dir, system, upstream_done) and \
+            written_by(*self.exports(run_dir, system))
+
+    def entries_done(self, run_dir, system):
         """Whether its entries (``charge_leaves``) are written and current (``provenance``).
 
         The adhesion, the surface and ``match``, which it reads, have to be done too: the
-        provenance holds the content of the entries read, not whether they are still current.
-        The files of the densities must be there, since the provenance holds their digests.
+        provenance holds the content of the entries read, not whether they are still current;
+        their entries only, not their files (``upstream_entries_done``). The files of the
+        densities must be there, since the provenance holds their digests.
         """
+        return self._entries(run_dir, system, upstream_entries_done)
+
+    def _entries(self, run_dir, system, upstream):
+        """``entries_done``, with ``upstream`` (``upstream_done`` or ``upstream_entries_done``)
+        for the steps upstream."""
         sdir = system_dir(run_dir, system)
         document = read_system(sdir)
         settings = _load_run(run_dir)
-        entries = charge_leaves(settings.interface.adhesion.type, settings.interface.charge.site)
+        kind, site = settings.interface.adhesion.type, settings.interface.charge.site
+        entries = charge_leaves(kind, site)
         # Before any analysis the inputs are not read: the adhesion may not have run.
         if not all(document.get(entry) for entry in entries):
             return False
-        if not upstream_done(self, run_dir, system):
+        if not upstream(self, run_dir, system):
             return False
         try:
             expected = self.provenance(run_dir, system)
         except PrerequisiteError:
             return False
         return all(is_done(document, entry, expected, sdir) for entry in entries)
+
+    def exports(self, run_dir, system):
+        """Files of the analysis saved and the stamp each carries: ``(paths, stamp)``."""
+        sdir = system_dir(run_dir, system)
+        document = read_system(sdir)
+        settings = _load_run(run_dir)
+        kind, site = settings.interface.adhesion.type, settings.interface.charge.site
+        name = interface_name(self._ids(sdir, document, settings))
+        return (self._files(sdir, kind, site, name),
+                analysis_stamp(document.provenance(charge_leaves(kind, site)[0])))
+
+    @staticmethod
+    def _files(sdir, kind, site, name):
+        """Text file, PNG, PDF and cube file of the step."""
+        stem = file_stem(sdir, kind, site, name)
+        return [output_path(sdir, kind, site), *figure_paths(stem.with_suffix('.png')),
+                stem.with_suffix('.cube')]
+
+    @staticmethod
+    def _ids(sdir, document, settings):
+        """Ids of the document of the system, which name its files (``plotpes.interface_name``)."""
+        params, _, _ = match_parameters(settings)
+        store = LegacyStore(sdir, document, COLLECTION)
+        field_, _ = store.query_db(COLLECTION, fltr=set_filter({'mid': '_'.join(params['mid']),
+                                                                 'miller': params['miller']}))
+        return {key: field_.get(key) for key in ID_KEYS}
 
     def analyse(self, run_dir, system, calculations):
         """Read the calculations and their densities, write the averages and the displacement.
@@ -811,9 +975,24 @@ class ChargeStep(Step):
                                          list(plan), chgcars)
             for entry in charge_leaves(inputs.type, inputs.site):
                 writer.document.set_provenance(entry, provenance)
-            writer.save()
+            # The region of the integral on the curves along z, contact plane at 0.
+            half = inputs.read['interface']['lattice']['c'] / 2
+            region = (inputs.integrate_in[0] - half, inputs.integrate_in[1] - half)
+            name = interface_name(inputs.ids)
+            stem = file_stem(sdir, inputs.type, inputs.site, name)
+            files = self._files(sdir, inputs.type, inputs.site, name)
+            output, stamp = files[0], analysis_stamp(provenance)
+            with staged(files) as partials:
+                partials[output].write_text(
+                    charge_output(system, inputs, writer.document, values, region, stamp=stamp),
+                    encoding='utf-8')
+                write_charge_files(stem, partials, inputs, chgcars, values, region, stamp)
+                writer.save()
+                place(partials)
         for line in describe(inputs, values):
             logger.info('%s: %s', system, line)
+        logger.info('%s: table in %s; figure and cube file in %s/', system, output.name,
+                    output.parent)
 
     def inputs(self, run_dir, system):
         """``charge_inputs`` of the step, from the settings of the run."""

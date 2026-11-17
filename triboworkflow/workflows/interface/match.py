@@ -22,7 +22,8 @@ The work goes in this order:
    defaults of the workflow (``INTER_PARAMS_DEFAULTS``: ``max_area`` 160.0,
    ``interface_distance`` 2.0, ``max_angle_tol`` 0.4), then those of the
    matching; with ``set_bm`` the strain weights are the bulk moduli of the
-   two slabs; the ids of the interface: ``mid`` is ``mid1_mid2``, ``formula``
+   two slabs; the ids of the interface: ``mid`` is ``<id1>_<id2>``, from the
+   ``id`` of the two slabs in the settings, ``formula``
    and ``name`` join those of the settings, or are made from the slabs (e.g.
    ``Cu_Al`` and ``Cu111-Al111``);
 2. the document of the system is created when missing, with the ids and an
@@ -243,7 +244,8 @@ def match_parameters(settings):
     Returns
     -------
     params : dict
-        ``mid``, ``miller``, ``formula`` and ``name`` of the two slabs.
+        ``mid`` (the ``id`` of the two slabs), ``miller``, ``formula`` and
+        ``name`` of the two slabs.
     inter_params : dict
         Complete matching parameters, in the order of the defaults of the
         matching, with the strain weights.
@@ -268,7 +270,7 @@ def match_parameters(settings):
     names of the fields.
     """
     interface = settings.interface
-    params = {'mid': [slab.mid for slab in interface.slabs],
+    params = {'mid': [slab.id for slab in interface.slabs],
               'miller': [list(slab.miller) for slab in interface.slabs],
               'formula': _ids_of(interface.slabs, 'formula'),
               'name': _ids_of(interface.slabs, 'name')}

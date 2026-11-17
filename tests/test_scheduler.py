@@ -122,6 +122,52 @@ def test_lsf_submits_on_stdin_with_the_arguments_exported(fake_run, jobscript):
     assert kwargs['input'] == 'export ARG1=in.pwi\nexport ARG2=out.pwo\n#!/bin/bash\necho start\n'
 
 
+@pytest.mark.parametrize('name, output, options', [
+    ('slurm', 'Submitted batch job 7', ['--time=36:00:05']),
+    ('pbs', '7.server', ['-l', 'walltime=36:00:05']),
+    ('torque', '7.server', ['-l', 'walltime=36:00:05']),
+    ('sge', 'Your job 7 ("job.sh") has been submitted', ['-l', 'h_rt=36:00:05']),
+    ('htcondor', '1 job(s) submitted to cluster 7.', []),  # no option: max_seconds only
+])
+def test_submit_gives_the_walltime_before_the_jobscript(fake_run, jobscript, name, output,
+                                                        options):
+    run = fake_run(output)
+    submit = JobScheduler(name).config['submit']
+    JobScheduler(name).submit_job(str(jobscript), script_args=['a'], walltime=36 * 3600 + 5)
+    assert run.calls[0][0] == submit + options + [str(jobscript), 'a']
+
+
+@pytest.mark.parametrize('walltime, value', [(36 * 3600 + 5, '36:01'), (1800, '00:30'),
+                                             (3599, '01:00')])
+def test_lsf_takes_the_walltime_in_minutes_rounded_up(fake_run, jobscript, walltime, value):
+    run = fake_run('Job <1> is submitted to queue <normal>.')
+    JobScheduler('lsf').submit_job(str(jobscript), walltime=walltime)
+    assert run.calls[0][0] == ['bsub', '-W', value]
+
+
+@pytest.mark.parametrize('name, output, options', [
+    ('slurm', 'Submitted batch job 7', ['--time=00:30:00', '--job-name=ppes_testFe']),
+    ('pbs', '7.server', ['-l', 'walltime=00:30:00', '-N', 'ppes_testFe']),
+    ('torque', '7.server', ['-l', 'walltime=00:30:00', '-N', 'ppes_testFe']),
+    ('sge', 'Your job 7 ("job.sh") has been submitted', ['-l', 'h_rt=00:30:00', '-N',
+                                                        'ppes_testFe']),
+    ('lsf', 'Job <7> is submitted to queue <normal>.', ['-W', '00:30', '-J', 'ppes_testFe']),
+    ('htcondor', '1 job(s) submitted to cluster 7.', []),  # neither option
+])
+def test_submit_gives_the_name_of_the_job_after_the_walltime(fake_run, jobscript, name, output,
+                                                             options):
+    run = fake_run(output)
+    submit = JobScheduler(name).config['submit']
+    JobScheduler(name).submit_job(str(jobscript), walltime=1800, job_name='ppes_testFe')
+    assert run.calls[0][0][:len(submit) + len(options)] == submit + options
+
+
+def test_submit_without_a_walltime_adds_no_option(fake_run, jobscript):
+    run = fake_run('Submitted batch job 7')
+    JobScheduler('slurm').submit_job(str(jobscript))
+    assert run.calls[0][0] == ['sbatch', str(jobscript)]
+
+
 @pytest.mark.parametrize('path, args, message', [
     ('', None, 'Script path must be a non-empty string'),
     ('missing.sh', None, "missing.sh' not found"),

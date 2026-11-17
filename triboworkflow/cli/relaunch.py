@@ -34,7 +34,8 @@ Example:
     def add_arguments(self, parser):
         parser.add_argument('calc_id', help='calculation, as <step>/<label>')
         parser.add_argument('--groups', type=positive_int, metavar='M',
-                            help='jobs (workers) per group; [execution].groups by default')
+                            help='jobs (workers) per group; by default those of '
+                                 '[execution.<step>], else of [execution]')
         parser.add_argument('--group', metavar='G',
                             help='group whose launch of the last attempt is taken, when it is '
                                  'not recorded')
@@ -52,8 +53,9 @@ Example:
         from .run import (print_failed_submissions, resolve_groups, run_orchestrator,
                           submissions, system_name, terminal_ask)
 
-        groups = resolve_groups(settings, args.groups, terminal_ask())
-        orch = run_orchestrator(run_dir, settings, groups)
+        step = args.calc_id.split('/', 1)[0]  # a calc_id not valid is refused by relaunch
+        groups, override = resolve_groups(settings, args.groups, terminal_ask(), steps=[step])
+        orch = run_orchestrator(run_dir, settings, groups, override)
         before = submissions(orch.manager)
         group = orch.relaunch(system_name(settings), args.calc_id, args.group, args.level,
                               args.from_scratch)

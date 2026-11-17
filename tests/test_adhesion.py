@@ -32,6 +32,7 @@ from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Structure
 
 from cli_helpers import SYSTEM, complete, fake_slurm  # noqa: F401 (fixture)
+from test_outputs import restamp
 from test_pes import (document, edit_config, finish, layers, pes_run, position_flags, status_of,
                       stored)
 from triboworkflow.cli.main import main
@@ -789,7 +790,56 @@ def test_message_of_the_analysis(surfaces_copy, caplog):
         f'{values["max_site"]["adhesion_energy_jm2"]:.6f} J/m^2',
         f'{SYSTEM}: corrugation (maximum - minimum): {values["corrugation_ev"]:.6f} eV, '
         f'{values["corrugation_jm2"]:.6f} J/m^2',
+        f'{SYSTEM}: table of the adhesion in '
+        f'{adhesion.output_path(system_dir(surfaces_copy, SYSTEM), "regular")}',
     ]
+
+
+def read_table(path):
+    """Rows of a text file of a step that are not comments, split into words."""
+    return [line.split() for line in path.read_text().splitlines() if not line.startswith('#')]
+
+
+def test_adhesion_output(surfaces_copy):
+    calc_ids = finish_adhesion(surfaces_copy)
+    adhesion.AdhesionStep().analyse(surfaces_copy, SYSTEM, calc_ids)
+    path = adhesion.output_path(system_dir(surfaces_copy, SYSTEM), 'regular')
+    doc = document(surfaces_copy)
+    values = doc['adhesion']['regular']
+    text = path.read_text()
+    assert text.startswith(f'# Adhesion of the interface {SYSTEM}\n# Written ')
+    assert '#   [interface.adhesion]  pes = "pes", type = "regular"' in text
+    for label in adhesion.LABELS:
+        assert f'#   {label:<14} {doc["data"][label]["energy"]:.8f}' in text
+    rows = read_table(path)
+    assert [row[:2] for row in rows] == [['min_site', doc['pes']['energy']['min_site']],
+                                         ['max_site', doc['pes']['energy']['max_site']]]
+    for row, site in zip(rows, ('min_site', 'max_site')):
+        ev, jm2, separation = (float(value) for value in row[2:5])
+        assert ev == pytest.approx(values[site]['adhesion_energy_ev'], abs=1e-8)
+        assert jm2 == pytest.approx(values[site]['adhesion_energy_jm2'], abs=1e-8)
+        assert separation == pytest.approx(-jm2, abs=1e-8)
+        assert row[5] == 'nan' or float(row[5]) > 0  # the distance between the slabs
+    assert f'{values["corrugation_jm2"]:.8f} J/m^2' in text
+
+
+def test_done_needs_adhesion_output(surfaces_copy):
+    calc_ids = finish_adhesion(surfaces_copy)
+    adhesion.AdhesionStep().analyse(surfaces_copy, SYSTEM, calc_ids)
+    assert adhesion.AdhesionStep().done(surfaces_copy, SYSTEM)
+    adhesion.output_path(system_dir(surfaces_copy, SYSTEM), 'regular').unlink()
+    assert not adhesion.AdhesionStep().done(surfaces_copy, SYSTEM)
+
+
+def test_done_needs_the_output_of_the_analysis_saved(surfaces_copy):
+    # The text file of another analysis (another stamp) is not the one of the analysis saved.
+    calc_ids = finish_adhesion(surfaces_copy)
+    step = adhesion.AdhesionStep()
+    step.analyse(surfaces_copy, SYSTEM, calc_ids)
+    restamp(adhesion.output_path(system_dir(surfaces_copy, SYSTEM), 'regular'))
+    assert step.entries_done(surfaces_copy, SYSTEM) and not step.done(surfaces_copy, SYSTEM)
+    step.analyse(surfaces_copy, SYSTEM, calc_ids)
+    assert step.done(surfaces_copy, SYSTEM)
 
 
 # --- energies of different models are not combined --------------------------------------------

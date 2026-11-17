@@ -52,6 +52,7 @@ from cli_helpers import SYSTEM, complete, fake_slurm  # noqa: F401 (fixture)
 from test_adhesion import (NO_RESULT, RELAX_DONE, RESULT_KEYS, adhesion_run,  # noqa: F401
                            analysed, analysed_copy, configure, finish_adhesion, matched,
                            short_surface, structure_of, surfaces, surfaces_copy)
+from test_outputs import restamp
 from test_pes import document, edit_config, finish, pes_run, position_flags, status_of
 from test_ppes import (adapter_pair, different_species, in_reverse_order,  # noqa: F401 (fixture)
                        put_interface, slabs_of, thicker_slab, with_slabs,
@@ -68,7 +69,8 @@ from triboworkflow.execution.layout import calc_dir, system_dir
 from triboworkflow.vendored.highput.utils.manipulate_struct import (ManipulateStruct,
                                                                     generate_chargedisp_inputs)
 from triboworkflow.vendored.physics.electronics.charge import chgcar_integrator as ci
-from triboworkflow.workflows.interface import adhesion, charge, pes, ppes
+from triboworkflow.workflows.interface import adhesion, charge, outputs, pes, ppes
+from triboworkflow.workflows.interface.plotpes import interface_name
 
 PARTS = ['interface', 'bot_slab', 'top_slab']
 LABELS = [f'min_site_{part}' for part in PARTS]
@@ -940,6 +942,82 @@ def test_the_other_entries_of_the_document_are_not_touched(analysed_copy):
     assert {key: after[key] for key in before} == before
     assert set(after['charge']) == {kind} and set(after['charge'][kind]) == {
         'data', 'average', 'displacement'}
+
+
+# --- the text file, the figure and the cube file -------------------------------------------------
+
+def files_of(run_dir, kind, site='min_site'):
+    """The text file and the stem of the figure and of the cube file of the step."""
+    sdir = system_dir(run_dir, SYSTEM)
+    name = interface_name(inputs_of(run_dir).ids)
+    return charge.output_path(sdir, kind, site), charge.file_stem(sdir, kind, site, name)
+
+
+def test_the_text_file_holds_the_curves_of_the_entries(done_run):
+    run_dir, _, _, kind = done_run
+    output, _ = files_of(run_dir, kind)
+    rows = np.array([[float(word) for word in line.split()]
+                     for line in output.read_text().splitlines() if not line.startswith('#')])
+    average = charge_entry(run_dir, kind, 'average')
+    grid = charge_entry(run_dir, kind, 'displacement')['z']['grid']
+    assert rows.shape == (GRID[2], 5)
+    assert np.allclose(rows[:, 0], grid[0], atol=1e-9)
+    for column, part in enumerate(PARTS, start=1):
+        assert np.allclose(rows[:, column], average[part]['z'][1], rtol=1e-9)
+    assert np.allclose(rows[:, 4], grid[1], rtol=1e-9)
+    text = output.read_text()
+    z = charge_entry(run_dir, kind, 'displacement')['z']
+    assert f'region between the slabs: {z["interface"]["integral"]:.8g} e/angstrom^3' in text
+    # The region of the integral on the curve: the contact plane at 0 between its limits.
+    low, up = (float(value) for value in re.search(r'from (\S+) to (\S+) angstrom', text).groups())
+    assert low < 0 < up and up - low == pytest.approx(z['interface']['width'], abs=1e-5)
+
+
+def test_the_figure_and_the_cube_file(done_run):
+    run_dir, _, _, kind = done_run
+    _, stem = files_of(run_dir, kind)
+    assert stem.with_suffix('.png').read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
+    assert stem.with_suffix('.pdf').read_bytes()[:5] == b'%PDF-'
+    lines = stem.with_suffix('.cube').read_text().splitlines()
+    combined = ci.chgcar_algebra_from_list(chgcars_of(run_dir), ['-', '-'], 2)
+    structure = combined.structure
+    assert int(lines[2].split()[0]) == len(structure)
+    # The grid and its steps, in bohr; one line per atom; then the values, z fastest.
+    bohr = outputs.BOHR
+    for axis in range(3):
+        words = lines[3 + axis].split()
+        assert int(words[0]) == GRID[axis]
+        assert np.allclose([float(w) for w in words[1:]],
+                           structure.lattice.matrix[axis] / GRID[axis] / bohr, atol=1e-6)
+    first = lines[6].split()
+    assert int(first[0]) == structure[0].specie.Z
+    assert np.allclose([float(w) for w in first[2:]], structure[0].coords / bohr, atol=1e-6)
+    values = np.array([float(w) for line in lines[6 + len(structure):] for w in line.split()])
+    expected = np.asarray(combined.data['total']) / structure.volume * bohr ** 3
+    assert values.shape == (expected.size,)
+    assert np.allclose(values, expected.ravel(), rtol=1e-5, atol=1e-12)
+    # Each column of z starts a new line.
+    per_column = -(-GRID[2] // 6)
+    assert len(lines) == 6 + len(structure) + GRID[0] * GRID[1] * per_column
+
+
+@pytest.mark.parametrize('suffix', ['.output', '.png', '.pdf', '.cube'])
+def test_done_needs_the_files(done_copy, suffix):
+    run_dir, _, _, kind = done_copy
+    output, stem = files_of(run_dir, kind)
+    assert charge.ChargeStep().done(run_dir, SYSTEM)
+    (output if suffix == '.output' else stem.with_suffix(suffix)).unlink()
+    assert not charge.ChargeStep().done(run_dir, SYSTEM)
+
+
+@pytest.mark.parametrize('suffix', ['.output', '.png', '.pdf', '.cube'])
+def test_done_needs_the_files_of_the_analysis_saved(done_copy, suffix):
+    # A file left by another analysis (another stamp) is not one of the analysis saved.
+    run_dir, _, _, kind = done_copy
+    output, stem = files_of(run_dir, kind)
+    restamp(output if suffix == '.output' else stem.with_suffix(suffix))
+    assert charge.ChargeStep().entries_done(run_dir, SYSTEM)
+    assert not charge.ChargeStep().done(run_dir, SYSTEM)
 
 
 def test_the_densities_are_not_changed_by_the_analysis(done_copy):

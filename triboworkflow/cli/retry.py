@@ -13,9 +13,9 @@ class CLICommand(CLICommandBase):
 
 A step fails for an error of its own while it is prepared or analysed, when
 the settings changed after its preparation, or when the job of its analysis
-(plotpes, plotpes_scf, shear with [execution.analysis]) ended without completing
-it; it stays failed until this command, once the cause is fixed (e.g. more
-memory or time in the jobscript of [execution.analysis]). It then starts
+(plotpes, plotpes_scf, shear) ended without completing it; it stays failed
+until this command, once the cause is fixed (e.g. more memory in the
+jobscript of the analyses, or more time in [execution.<step>]). It then starts
 again at the next pass of the orchestrator, or with "prepare" ("submit" for
 a new job of an analysis). A step failed because its calculations need the
 user is not retried: relaunch them.

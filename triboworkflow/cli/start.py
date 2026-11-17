@@ -38,7 +38,8 @@ Example:
 
     def add_arguments(self, parser):
         parser.add_argument('--groups', type=positive_int, metavar='M',
-                            help='jobs (workers) per group; [execution].groups by default')
+                            help='jobs (workers) per group of every step; by default those of '
+                                 '[execution.<step>], else of [execution]')
         parser.add_argument('--dry-run', action='store_true',
                             help='check the first pass on a copy of the run, submitting nothing')
 
@@ -48,13 +49,19 @@ Example:
     def run(self, args, run_dir, settings):
         from triboworkflow.execution import daemon
 
-        from .run import execution_of, resolve_groups, run_log, terminal_ask
+        from .run import (GROUPS_DEFAULT, GROUPS_OVERRIDE, execution_of, print_step_jobs,
+                          resolve_groups, run_log, terminal_ask)
 
-        groups = resolve_groups(settings, args.groups, terminal_ask())
+        groups, override = resolve_groups(settings, args.groups, terminal_ask())
+        # Before anything starts: a default is warned about here.
+        print_step_jobs(settings, groups, override)
         if args.dry_run:
-            return _dry_run(run_dir, groups)
+            return _dry_run(run_dir, groups, override)
+        # Only a value the settings do not hold goes to the process in the background.
+        factory_args = () if groups is None else \
+            (str(groups), GROUPS_OVERRIDE if override else GROUPS_DEFAULT)
         started = daemon.start(run_dir, FACTORY, execution_of(settings).scheduler,
-                               factory_args=(str(groups),))
+                               factory_args=factory_args)
         print(f'Orchestrator: {started.message}')
         # Written only once the start is confirmed: a start refused leaves nothing.
         with run_log(run_dir, args.argv):
@@ -62,7 +69,7 @@ Example:
         return 0
 
 
-def _dry_run(run_dir, groups):
+def _dry_run(run_dir, groups, override):
     """First pass on a temporary copy of the run, with the scheduler in a dry run."""
     import shlex
     import shutil
@@ -81,7 +88,7 @@ def _dry_run(run_dir, groups):
                 raise RunError(f'{Path(run_dir) / JOBS_DIR} exists: the dry run checks only a '
                                'run that has submitted nothing yet; see "status"')
             shutil.copytree(run_dir, copy, ignore=shutil.ignore_patterns(LOCK_FILE, CLI_LOG))
-        orch = build_orchestrator(copy, groups=groups, dry_run=True)
+        orch = build_orchestrator(copy, groups=groups, dry_run=True, override=override)
         report = orch.run_pass()
         print('Dry run on a copy of the run, first pass only: nothing is submitted and nothing '
               'is left in the run; later passes, jobs and relaunches are not simulated')

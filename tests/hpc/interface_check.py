@@ -24,8 +24,13 @@ a behaviour other than the one the package gives. The exit status is 1 when a ve
 Topics, one verdict each unless said otherwise:
 
 ``steps``
-    The steps of ``[interface]``: state in ``orchestrator.json`` and entries of
-    ``system.json`` done and current.
+    The steps of ``[interface]``: state in ``orchestrator.json``, entries of ``system.json``
+    done and current, and, apart, the files of their analysis with the stamp of the
+    provenance saved (``export_problems``). A run made before the files of the later
+    versions (the PDF of the figure of the PES, ``shear.output`` and the figures of the
+    paths, the tables, figures and cube file of ``adhesion``, ``ppes`` and ``charge``, the
+    stamps) lacks them, and this version of the package would analyse those steps again: a
+    ``note`` that names them. A file with the stamp of another analysis is a ``PROBLEM``.
 ``calculations <step>``
     For each step with calculations: complete, parsed, observed (version, pseudopotentials) as
     expected, one energy model for the step, final structure written, charge density ``ok``.
@@ -37,7 +42,8 @@ Topics, one verdict each unless said otherwise:
     The keys and units of the entries; the energy of each point against the energy of its
     output in Ry; the order and the sites.
 ``plotpes``, ``plotpes_scf``
-    The entries and the figure; the job of the interpolation: group, outcome, times, memory.
+    The entries and the figure (PNG and, when there, PDF); the job of the interpolation:
+    group, outcome, times, memory.
 ``adhesion``
     The final structures (slabs, ``interface_region`` of the interfaces) and the energies
     recomputed from the entries; the k-point grids.
@@ -49,7 +55,7 @@ Topics, one verdict each unless said otherwise:
 ``shear``
     The job (time, memory, log, warnings of ``DeprecationWarning``), the time of the
     interpolation and of each string, whether each string converged, the cell of the
-    interface against the cell of the PES.
+    interface against the cell of the PES; ``shear.output`` against the entries.
 ``accounting``
     The states of the jobs in the file of ``sacct``.
 """
@@ -75,6 +81,7 @@ sys.path.insert(0, str(HERE))
 from qe_check import VERDICTS, Findings, duration, local_time  # noqa: E402
 
 PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+PDF_SIGNATURE = b'%PDF-'
 # Keys of the results of a calculation in the entries of the PES.
 OUTPUT_KEYS = {'nsites', 'density', 'energy', 'energy_per_atom', 'bandgap', 'cbm', 'vbm',
                'is_gap_direct', 'forces', 'stress', 'pseudo_potential', 'dir_name', 'task_id',
@@ -169,7 +176,8 @@ class InterfaceReport:
         self.system = system_name(self.settings)
         self.sdir = system_dir(self.run_dir, self.system)
         self.steps = list(self.interface.steps)
-        self.doc = read_system(self.sdir).document
+        # Before match there is no document: no entry to read.
+        self.doc = read_system(self.sdir).document or {}
         state = self.run_dir / 'orchestrator.json'
         self.orchestrator = read_json(state)['systems'].get(self.system, {}) \
             if state.is_file() else None
@@ -218,27 +226,89 @@ class InterfaceReport:
 # --- the run -------------------------------------------------------------------------------
 
 def check_steps(rep):
+    """State of each step, whether its entries are current, and the files of its analysis.
+
+    The provenance of the entries and the files written next to them are read apart: a step
+    whose entries are not current is never ``ok``, whatever its files; for a step whose
+    entries are current, a file missing or without a stamp is one of a run made before the
+    later versions (a ``note``), a file with the stamp of another analysis a ``PROBLEM``.
+    """
     from triboworkflow.workflows.interface.registry import get_step
 
     if rep.orchestrator is None:
         rep.findings.add('not observed', 'steps', 'no orchestrator.json: the run never started')
         return
     states = {step: (rep.entry(step) or {}).get('status') for step in rep.steps}
-    done = {}
+    current, later, foreign = {}, {}, {}
     for step in rep.steps:
+        handler = get_step(step)
         try:
-            done[step] = get_step(step).done(rep.run_dir, rep.system)
+            # The steps that write no file have no entries_done: done is the same.
+            current[step] = getattr(handler, 'entries_done', handler.done)(rep.run_dir,
+                                                                           rep.system)
+            if current[step] is True and hasattr(handler, 'exports'):
+                missing, other = export_problems(rep, *handler.exports(rep.run_dir, rep.system))
+                if missing:
+                    later[step] = missing
+                if other:
+                    foreign[step] = other
         except Exception as error:  # reading the files of a copy that lacks some
-            done[step] = f'{type(error).__name__}: {error}'
+            current[step] = f'{type(error).__name__}: {error}'
     bad = [step for step, state in states.items() if state in ('failed', 'blocked')]
     reasons = {step: (rep.entry(step) or {}).get('reason') for step in bad}
     if bad:
         rep.findings.add('PROBLEM', 'steps', f'{states}; {reasons}')
+    elif foreign:
+        rep.findings.add('PROBLEM', 'steps', f'{states}; files that the analysis saved in '
+                         f'system.json did not write (another stamp): {foreign}')
     elif all(state == 'completed' for state in states.values()) \
-            and all(value is True for value in done.values()):
-        rep.findings.add('ok', 'steps', f'{states}; entries of system.json done and current')
+            and all(value is True for value in current.values()):
+        if later:
+            rep.findings.add('note', 'steps', f'{states}; entries of system.json done and current '
+                             'but for the files of a run made before they were written, which '
+                             f'this version analyses again: {later}')
+        else:
+            rep.findings.add('ok', 'steps', f'{states}; entries of system.json done and current, '
+                             'with the files of their analysis')
     else:
-        rep.findings.add('not observed', 'steps', f'{states}; entries done: {done}')
+        rep.findings.add('not observed', 'steps', f'{states}; entries done and current: {current}')
+
+
+def export_problems(rep, paths, stamp):
+    """The files of an analysis that a run made before lacks, and those of another analysis.
+
+    Parameters
+    ----------
+    rep : InterfaceReport
+    paths : list of pathlib.Path
+        The files of the analysis saved (``exports`` of the step).
+    stamp : str
+        The stamp that each carries (``outputs.analysis_stamp``).
+
+    Returns
+    -------
+    missing, other : list of str
+        Paths relative to the folder of the system: missing or without any stamp (the PDF of
+        the figure of the PES, ``shear.output`` and the figures of the paths, the tables of
+        ``adhesion``, ``ppes`` and ``charge``, their figures and the cube file came in later
+        versions, and the stamps after them); with a stamp other than ``stamp``.
+    """
+    from triboworkflow.workflows.interface.outputs import file_stamp
+
+    missing, other = [], []
+    for path in paths:
+        found = file_stamp(path) if path.is_file() else None
+        name = path.relative_to(rep.sdir).as_posix()
+        if found is None:
+            missing.append(name)
+        elif found != stamp:
+            other.append(name)
+    return missing, other
+
+
+def _step_figures(rep, step):
+    """The PNG of the figures of the PES of an interpolation step."""
+    return sorted(rep.sdir.glob(f'{step}/pes_*.png'))
 
 
 def check_calculations(rep):
@@ -527,16 +597,24 @@ def check_plotpes(rep, name):
         lowest = min(row[2] for row in leaves['pes_ev'])
         if abs(lowest) > 1e-9:
             problems.append(f'the minimum of pes_ev is {lowest!r}, not 0')
-        figures = sorted(rep.sdir.glob(f'{name}/*.png'))
+        from triboworkflow.workflows.interface.figures import figure_paths
+
+        figures = _step_figures(rep, name)
         if not figures:
             problems.append(f'no figure in {name}/')
-        for figure in figures:
-            if figure.read_bytes()[:8] != PNG_SIGNATURE:
-                problems.append(f'{figure.name} is not a PNG')
+        pdfs = [figure_paths(figure)[1] for figure in figures]
+        pdfs = [path for path in pdfs if path.is_file()]
+        signatures = {'.png': PNG_SIGNATURE, '.pdf': PDF_SIGNATURE}
+        for figure in figures + pdfs:
+            signature = signatures[figure.suffix]
+            if figure.read_bytes()[:len(signature)] != signature:
+                problems.append(f'{figure.name} is not a {figure.suffix[1:].upper()}')
         rep.findings.add('PROBLEM' if problems else 'ok', name, '; '.join(problems) or
                          f'{len(leaves["pes_ev"])} points interpolated, minimum at 0, '
-                         f'{len(leaves["hs_all_ev"])} replicas, figure {figures[0].name} '
-                         f'({figures[0].stat().st_size} bytes)')
+                         f'{len(leaves["hs_all_ev"])} replicas, figure '
+                         + ', '.join(f'{path.name} ({path.stat().st_size} bytes)'
+                                     for path in figures + pdfs)
+                         + ('' if pdfs else ', no PDF (a run made before it was written)'))
     verdict, text, facts = _analysis_job(rep, name)
     rep.findings.add(verdict, f'{name} job', text)
 
@@ -856,6 +934,7 @@ def check_shear(rep):
         else:
             rep.findings.add('ok', 'shear convergence', f'strength (GPa): {values}; the three '
                              f'strings reached tol = {mep.tol:g}')
+    check_shear_output(rep, strengths, mep)
     # The cell of the interface against the cell of the PES that plotpes interpolated.
     cell = dig(rep.doc, 'structure', 'init', 'interface', 'lattice', 'matrix')
     minimum = dig(rep.doc, 'pes', 'energy', 'grid', 'hs_unique_ev')
@@ -869,6 +948,49 @@ def check_shear(rep):
     verdict = 'ok' if deviation <= CELL_OK else 'note' if deviation <= CELL_NOTE else 'PROBLEM'
     rep.findings.add(verdict, 'shear cell', f'a, b of structure.init.interface against the cell '
                      f'of the minimum of the PES: largest difference {deviation:.3g} angstrom')
+
+
+_PROFILE = re.compile(r'# Profile along (\w+): (\d+) points$')
+
+
+def check_shear_output(rep, strengths, mep):
+    """``shear/shear.output`` against the entries ``shearstr``: one verdict, ``shear output``."""
+    from triboworkflow.workflows.interface.shear import output_path
+
+    path = output_path(rep.sdir)
+    if not path.is_file():
+        rep.findings.add('not observed', 'shear output', f'no {path.relative_to(rep.sdir)} (a run '
+                         'made before it was written, or not copied)')
+        return
+    table, rows, current = {}, {}, None
+    for line in path.read_text(encoding='utf-8').splitlines():
+        found = _PROFILE.match(line)
+        if found:
+            current = found.group(1)
+            rows[current] = 0
+        elif line.strip() and not line.startswith('#'):
+            words = line.split()
+            if current is None:
+                table[words[0]] = (float(words[1]), int(words[2]))
+            else:
+                rows[current] += 1
+    problems = []
+    for opt in ('bs_line', 'x', 'y'):
+        entry = strengths.get(f'along_{opt}') or {}
+        if opt not in table:
+            problems.append(f'{opt}: not in the table of the file')
+            continue
+        strength, nstep = table[opt]
+        if not math.isclose(strength, entry.get('shear_strength_GPa', math.nan), rel_tol=1e-9) \
+                or nstep != entry.get('nstep'):
+            problems.append(f'{opt}: {strength} GPa, nstep {nstep} in the file, '
+                            f'{entry.get("shear_strength_GPa")} GPa, nstep {entry.get("nstep")} '
+                            'in shearstr')
+        if rows.get(opt) != mep.npts:
+            problems.append(f'{opt}: profile of {rows.get(opt)} points, npts = {mep.npts}')
+    rep.findings.add('PROBLEM' if problems else 'ok', 'shear output', '; '.join(problems) or
+                     f'{path.relative_to(rep.sdir)}: the three shear strengths and nstep of '
+                     f'shearstr, profiles of {mep.npts} points ({path.stat().st_size} bytes)')
 
 
 def check_accounting(rep):

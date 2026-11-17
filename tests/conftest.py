@@ -1,4 +1,4 @@
-"""Shared fixtures: lock files of envs/ and installed distributions.
+"""Shared fixtures: lock files of envs/, installed distributions, MLIP model types.
 
 OpenBLAS runs with one thread: its results depend on the number of threads
 at round-off level, and the golden values are compared exactly
@@ -29,6 +29,17 @@ def chain(tmp_path_factory):
     from chain_helpers import build_chain
 
     return build_chain(tmp_path_factory.mktemp('chain'))
+
+
+@pytest.fixture
+def mlip_types_restored():
+    """The registry of MLIP model types as it was, whatever the test registers."""
+    from triboworkflow.engines.mlip.registry import MODEL_TYPES
+
+    saved = dict(MODEL_TYPES)
+    yield
+    MODEL_TYPES.clear()
+    MODEL_TYPES.update(saved)
 
 
 @pytest.fixture

@@ -13,6 +13,7 @@ the ``PATH`` (``fake_scheduler_bin``), which only record their calls.
 import importlib
 import json
 import os
+import re
 import tomllib
 
 import pytest
@@ -24,6 +25,7 @@ from triboworkflow.cli.main import main
 from triboworkflow.cli.parser import COMMANDS
 from triboworkflow.cli.run import build_orchestrator
 from triboworkflow.execution import layout
+from triboworkflow.execution.jobs import group_walltime
 from triboworkflow.execution.lock import RunLock
 
 
@@ -101,6 +103,38 @@ def test_check_without_groups(tmp_path, capsys):
     assert 'groups: not set' in capsys.readouterr().out
 
 
+def test_check_prints_the_walltime_of_each_step(tmp_path, capsys):
+    run_dir = write_run(tmp_path, steps=('match', 'pes', 'plotpes', 'adhesion'))
+    assert main(['check', '-r', str(run_dir)]) == 0
+    captured = capsys.readouterr()
+    # plotpes runs in a job, with the jobscript of [execution] without [execution.analysis].
+    assert ('Jobs of the steps: pes 12:00:00, 6 jobs per group; adhesion 12:00:00, 4 jobs per '
+            'group; plotpes 00:30:00, 1 job\n') in captured.out
+    assert 'walltime' not in captured.err
+    config = run_dir / 'config.toml'
+    config.write_text(config.read_text().replace('[execution.adhesion]\nwalltime = "12:00:00"\n',
+                                                 '[execution.adhesion]\n')
+                      + '\n[execution.analysis]\njobscript = "analysis.sh"\n')
+    (run_dir / 'analysis.sh').write_text('#!/bin/bash\n#SBATCH -t 30\n')
+    assert main(['check', '-r', str(run_dir)]) == 0
+    captured = capsys.readouterr()
+    assert ('Jobs of the steps: pes 12:00:00, 6 jobs per group; adhesion 24:00:00 (default), '
+            '4 jobs per group; plotpes 00:30:00, 1 job\n') in captured.out
+    assert ('no walltime in [execution.<step>] for adhesion: their jobs get 24:00:00'
+            in captured.err)
+    assert re.search(r'\S*analysis\.sh has an #SBATCH --time: the walltime of each step in '
+                     r'\[execution\.<step>\] replaces it', captured.err)
+
+
+def test_check_prints_the_placeholders_of_the_jobscripts(tmp_path, capsys):
+    run_dir = write_run(tmp_path)
+    (run_dir / 'jobscript.sh').write_text('#!/bin/bash\n#SBATCH --account=<account>\n'
+                                          'source <venv>/bin/activate\n')
+    assert main(['check', '-r', str(run_dir)]) == 0
+    assert ('Placeholders: jobscript.sh line 2: <account>, jobscript.sh line 3: <venv>\n'
+            in capsys.readouterr().out)
+
+
 def test_check_invalid_settings(tmp_path, capsys):
     run_dir = write_run(tmp_path)
     config = run_dir / 'config.toml'
@@ -142,6 +176,32 @@ def test_status_runs_no_scheduler_command(tmp_path, fake_steps, fake_slurm, fake
     assert not fake_scheduler_bin.exists() and files(run_dir) == before
     out = capsys.readouterr().out
     assert 'pes/c0' in out and 'pes/c1' in out  # with --calcs
+
+
+def calc_states(out):
+    """``calc_id`` → state of the lines of ``status --calcs``."""
+    lines = out.split('Calculations\n', 1)[1].splitlines()
+    return dict(line.split(None, 1) for line in lines)
+
+
+def test_status_calcs_gives_the_state_of_the_calculations_not_started(
+        tmp_path, fake_steps, fake_slurm, fake_scheduler_bin, capsys):
+    run_dir = write_run(tmp_path)
+    assert cli(run_dir, 'analyse', 'match') == 0
+    assert cli(run_dir, 'prepare', 'pes') == 0
+    capsys.readouterr()
+    assert main(['status', '--calcs', '-r', str(run_dir)]) == 0
+    assert calc_states(capsys.readouterr().out) == {'pes/c0': 'ready for the first run',
+                                                    'pes/c1': 'ready for the first run'}
+
+    assert cli(run_dir, 'submit', 'pes') == 0  # jobs in the queue of the simulated Slurm
+    complete(run_dir, 'pes/c1')
+    capsys.readouterr()
+    before = files(run_dir)
+    assert main(['status', '--calcs', '-r', str(run_dir)]) == 0
+    assert files(run_dir) == before and not fake_scheduler_bin.exists()
+    states = calc_states(capsys.readouterr().out)
+    assert states == {'pes/c0': f'pending (groups: {SYSTEM}.pes.1)', 'pes/c1': 'completed'}
 
 
 def test_status_shows_when_the_state_was_saved(tmp_path, fake_steps, fake_slurm, capsys):
@@ -265,6 +325,28 @@ def test_submission_refused_exits_1(tmp_path, fake_steps, fake_slurm, fake_sched
     assert f'jobs/{GROUP}/jobscript.sh' in out and f'clear-refusal {GROUP}' in out
 
 
+def test_a_group_refused_for_its_walltime_takes_the_one_of_the_settings(
+        tmp_path, fake_steps, fake_slurm, fake_scheduler_bin, capsys):
+    # e.g. the default of a step without walltime, above the limit of the queue.
+    run_dir = write_run(tmp_path)
+    config = run_dir / 'config.toml'
+    config.write_text(config.read_text().replace('[execution.pes]\nwalltime = "12:00:00"\n',
+                                                 '[execution.pes]\n'))
+    assert cli(run_dir, 'analyse', 'match') == 0 and cli(run_dir, 'prepare', 'pes') == 0
+    fake_slurm.refuse = 1
+    assert cli(run_dir, 'submit', 'pes') == 1
+    path = run_dir / 'jobs' / GROUP
+    assert group_walltime(path) == 86400
+    config.write_text(config.read_text().replace('[execution.pes]\n',
+                                                 '[execution.pes]\nwalltime = "00:30:00"\n'))
+    capsys.readouterr()
+    assert cli(run_dir, 'clear-refusal', GROUP) == 0
+    assert f'group {GROUP}: walltime 00:30:00, from [execution.pes] now' in \
+        capsys.readouterr().out
+    assert group_walltime(path) == 1800
+    assert cli(run_dir, 'submit', 'pes') == 0 and fake_slurm.submitted == 2
+
+
 def test_submit_with_groups_from_the_command_line(tmp_path, fake_steps, fake_slurm,
                                                   fake_scheduler_bin, capsys):
     run_dir = write_run(tmp_path, groups=None)
@@ -288,9 +370,30 @@ def test_start_passes_the_factory_and_groups(tmp_path, monkeypatch, fake_schedul
 
     monkeypatch.setattr(daemon, 'start', fake_start)
     assert cli(run_dir, 'start', '--groups', '3') == 0
-    assert calls == [(run_dir, 'triboworkflow.cli.run:daemon_factory', 'slurm', ('3',))]
-    assert 'running: pid 4242 on login01 since now' in capsys.readouterr().out
+    assert calls == [(run_dir, 'triboworkflow.cli.run:daemon_factory', 'slurm',
+                      ('3', 'override'))]
+    out = capsys.readouterr().out
+    assert 'running: pid 4242 on login01 since now' in out
+    assert 'Jobs of the steps: pes 12:00:00, 3 jobs per group\n' in out
     assert 'running: pid 4242' in (run_dir / 'cli.log').read_text()
+    # The settings give the jobs of every step: nothing to pass to the process.
+    calls.clear()
+    assert cli(write_run(tmp_path, name='given'), 'start') == 0
+    assert calls[0][3] == ()
+
+
+def test_start_warns_about_a_step_without_walltime(tmp_path, fake_steps, fake_scheduler_bin,
+                                                   capsys):
+    run_dir = write_run(tmp_path)
+    config = run_dir / 'config.toml'
+    config.write_text(config.read_text().replace('[execution.pes]\nwalltime = "12:00:00"\n',
+                                                 '[execution.pes]\n'))
+    assert cli(run_dir, 'start', '--dry-run') == 0
+    captured = capsys.readouterr()
+    assert 'Jobs of the steps: pes 24:00:00 (default), 6 jobs per group\n' in captured.out
+    assert 'no walltime in [execution.<step>] for pes: their jobs get 24:00:00' in captured.err
+    # The jobs of the step get it from the submission command, with their name.
+    assert f'sbatch --time=24:00:00 --job-name=pes_{SYSTEM} ' in captured.out
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='the orchestrator in the background is POSIX only')
@@ -311,7 +414,7 @@ def test_dry_run_leaves_the_run_untouched(tmp_path, fake_steps, fake_scheduler_b
     before = files(run_dir)
     assert cli(run_dir, 'start', '--dry-run') == 0
     out = capsys.readouterr().out
-    assert 'first pass only' in out and 'sbatch' in out
+    assert 'first pass only' in out and 'sbatch --time=12:00:00 ' in out
     assert files(run_dir) == before and not fake_scheduler_bin.exists()
 
 

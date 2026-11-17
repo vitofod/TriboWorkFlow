@@ -9,8 +9,9 @@ all of them, whose
 calculations are those of a case of the check (module
 docstring of the script). It complements `tests/hpc/hpc_check.py` (fake
 engine: claims, exit codes, locks; `execution.md`, "Checking a new
-machine"). The jobs of the analyses (`[execution.analysis]`, the
-interpolation of the PES and the shear strength) run no pw.x and are not part
+machine"). The jobs of the analyses (the interpolation of the PES and the
+shear strength, with `[execution.analysis]` or the jobscript of
+`[execution]`) run no pw.x and are not part
 of this check: they are checked with a run of the interface workflow that
 interpolates its PES and analyses the shear strength
 (`execution.md`, "Analyses in a job of their own"), which
@@ -49,7 +50,12 @@ R=<folder of the runs, on the parallel filesystem>
    module, `pseudo_dir`, `upf_md5`, the UPF file of each species; values of
    the namelists other than the defaults of the script if needed. The
    jobscript keeps `{time}` in its `--time` line: each case writes its own
-   walltime there. Use `%j` in the names of the log files.
+   walltime there, for the case `single` submitted by hand; the other cases
+   write it also in the sections `[execution.<step>]` of the steps, which the
+   package gives to the submission of the jobs (`check` and `start` warn
+   about the `--time` of the jobscript, overridden by the same value); the
+   jobs are named `<step>_<job-name>`, e.g. `pes_qe_check`. Use `%j` in the
+   names of the log files.
 5. The runs live on the parallel filesystem of the jobs (`$R`); note which
    one, for Q11.
 
@@ -78,7 +84,8 @@ python $REPO/tests/hpc/hpc_check.py prepare $R/fake_short --jobscript <job15.sh>
 ```
 
 `<job.sh>` and `<job15.sh>` are jobscripts with a fixed `--time`
-(`00:30:00` and `00:15:00`), not the template with `{time}`. Locks on two
+(`00:30:00` and `00:15:00`), not the template with `{time}`; `--walltime` is
+given to the submission of the jobs and overrides it. Locks on two
 nodes, within one allocation (`salloc -N 2 ...`, or a job with `--nodes=2`
 running the commands below), the contenders started by `mpirun` (or `srun`
 where it works):

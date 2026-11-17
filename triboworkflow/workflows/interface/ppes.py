@@ -55,7 +55,14 @@ above it writes:
   standard deviations ``sigma_g`` and ``sigma_l`` in the same units. The fit
   uses the shifts that are zero or positive and needs at least three of them;
   with exactly three the deviations are infinite, with fewer it fails and
-  nothing is saved.
+  nothing is saved;
+- in the folder of the system, the text file ``ppes/ppes_<kind>_<site>.output``
+  (``ppes_output``) and the figure ``ppes/ppes_<kind>_<site>_<name>.png`` and
+  ``.pdf`` (``draw_ppes``): the energy of each shift against the distance
+  between the slabs, referred so that the shift 0 has the adhesion energy of
+  the site (``ppes_curve``), with the UBER curve when fitted. They are renamed
+  into place once the entries are saved, and the step is done only with them
+  carrying the stamp of the provenance saved (``outputs``).
 
 The two entries of the kind and site run (``ppes_entries``) are emptied before
 being written, and nothing else is touched: the other sites, the other kind and
@@ -106,6 +113,7 @@ import math
 import warnings
 from dataclasses import dataclass, field
 
+import numpy as np
 from pymatgen.core.structure import Structure
 from pymatgen.io.vasp.sets import BadInputSetWarning
 
@@ -123,13 +131,16 @@ from triboworkflow.vendored.highput.utils.tasktools import read_default_params, 
 from triboworkflow.vendored.highput.utils.vasp_tools import VaspInputSet
 from triboworkflow.vendored.physics.base.solidstate import get_cell_info
 from triboworkflow.vendored.physics.base.units import Converter
-from triboworkflow.vendored.physics.tribology.ppes import fit_ppes
+from triboworkflow.vendored.physics.tribology.ppes import PPES, PPESModel, fit_ppes
 
 from .adhesion import STEP as ADHESION
 from .adhesion import AdhesionStep
-from .chain import check_upstream, upstream_done
+from .chain import check_upstream, upstream_done, upstream_entries_done
+from .figures import figure_paths, ppes_figure
 from .match import COLLECTION, DEFAULTS, FILTER_KEYS, clear_entries, match_parameters, set_filter
+from .outputs import analysis_stamp, header, place, slab_distance, staged, written_by
 from .pes import ID_KEYS, TRANSFER_FROM
+from .plotpes import interface_name
 
 logger = logging.getLogger(__name__)
 
@@ -692,6 +703,202 @@ def run_ppes_analysis(inputs, store, calc_ids):
                         historic_fit(inputs.fit))
 
 
+def uber_parameters(values, fit):
+    """``g``, ``l`` and ``s0`` of the UBER curve fitted, as the vendored fit finds them.
+
+    The fit gives back ``g`` and ``l`` only; ``s0``, the shift of the
+    minimum of the curve, is needed to draw it. The same fit is run again on
+    the same data, and its ``g`` and ``l`` must be those written.
+
+    Parameters
+    ----------
+    values : dict
+        As ``arrange_data`` returns it, with the fit ``uber``.
+    fit : str
+        ``uber``.
+
+    Returns
+    -------
+    tuple of float
+
+    Raises
+    ------
+    StoreError
+        If the fit run again gives another ``g`` or ``l``.
+
+    Notes
+    -----
+    To remove: ``fit_ppes`` (``physics/tribology/ppes.py:214-228``) with ``fit='uber'``,
+    whose ``popt`` holds the three parameters.
+    """
+    data = np.array(values['ppes_ev'])
+    fit_data = data[data[:, 0] >= 0.0, :]
+    # The warnings of the fit were given when the step fitted.
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        popt, _ = PPES(fit_data).fit(method=fit, p0=[-min(fit_data[:, 1]), 0.75, 0])
+    written = values[fit]
+    if not (math.isclose(popt[0], written['g'], rel_tol=1e-9)
+            and math.isclose(popt[1], written['l'], rel_tol=1e-9)):
+        raise StoreError(f'the fit {fit!r} run again gives g = {popt[0]!r}, l = {popt[1]!r}, not '
+                         f'those written ({written["g"]!r}, {written["l"]!r})')
+    return float(popt[0]), float(popt[1]), float(popt[2])
+
+
+def ppes_curve(inputs, values, document):
+    """What the text file and the figure of the step show.
+
+    Parameters
+    ----------
+    inputs : PpesInputs
+    values : dict
+        As ``arrange_data`` returns it.
+    document : SystemDocument
+        The document of the system, with the adhesion energy of the site.
+
+    Returns
+    -------
+    dict
+        ``shift``, ``energy_ev`` and ``energy_jm2``: arrays, one value per
+        shift; ``distance``: the distance between the slabs of the interface
+        read, in angstrom, or None (``outputs.slab_distance``);
+        ``adhesion``: the adhesion energy of the site in J/m^2
+        (``adhesion.<kind>.<site>``), or None; ``adhesion_jm2``:
+        ``energy_jm2`` minus its value at the shift 0 plus the adhesion
+        energy, or None without the shift 0 or the adhesion energy;
+        ``uber``: ``(g, l, s0)`` of the fit, or None; ``fit_values``: the fit
+        as written, with its deviations, or None; ``jm2_per_ev``: J/m^2 of one
+        eV on the area of the cell.
+
+    Notes
+    -----
+    To remove: the energies of TribChem's ``plot_ppes`` (``get_shifts``,
+    ``highput/utils/plotting.py:694-709``): the energy of the shift 0 is the
+    adhesion energy of the site.
+    """
+    shift = np.array([row[0] for row in values['ppes_ev']], dtype=float)
+    energy_ev = np.array([row[1] for row in values['ppes_ev']], dtype=float)
+    energy_jm2 = np.array([row[1] for row in values['ppes_jm2']], dtype=float)
+    adhesion = document.get((ADHESION, inputs.type, inputs.site, 'adhesion_energy_jm2'))
+    at_zero = np.flatnonzero(shift == 0.0)
+    adhesion_jm2 = None
+    if adhesion is not None and len(at_zero):
+        adhesion_jm2 = energy_jm2 - energy_jm2[at_zero[0]] + adhesion
+    fitted = inputs.fit != 'none'
+    area, _ = get_cell_info(Structure.from_dict(inputs.read['interface']).lattice.matrix)
+    return {'shift': shift, 'energy_ev': energy_ev, 'energy_jm2': energy_jm2,
+            'distance': slab_distance(inputs.read['interface']), 'adhesion': adhesion,
+            'adhesion_jm2': adhesion_jm2,
+            'uber': uber_parameters(values, inputs.fit) if fitted else None,
+            'fit_values': values[inputs.fit] if fitted else None,
+            'jm2_per_ev': Converter.eV_to_Jm2(1.0, area * 1e-20)}
+
+
+def output_path(sdir, kind, site):
+    """Text file of the step: ``ppes/ppes_<kind>_<site>.output`` in the folder of the system."""
+    return sdir / STEP / f'{STEP}_{kind}_{site}.output'
+
+
+def figure_path(sdir, kind, site, name):
+    """PNG of the figure: ``ppes/ppes_<kind>_<site>_<name>.png``; the PDF is next to it."""
+    return sdir / STEP / f'{STEP}_{kind}_{site}_{name}.png'
+
+
+def ppes_output(system, inputs, curve, now=None, stamp=None):
+    """Text of ``ppes_<kind>_<site>.output``: parameters, energies of the shifts and fit.
+
+    Parameters
+    ----------
+    system : str
+    inputs : PpesInputs
+    curve : dict
+        As ``ppes_curve`` returns it.
+    now : datetime.datetime or None, optional
+    stamp : str or None, optional
+        ``outputs.analysis_stamp`` of the analysis.
+
+    Returns
+    -------
+    str
+    """
+    distance, adhesion = curve['distance'], curve['adhesion']
+    lines = header('Perpendicular PES of the interface', system, STEP, now, stamp) + [
+        '#', '# Parameters',
+        f'#   [interface.ppes]      site = "{inputs.site}", fit = "{inputs.fit}", shifts = '
+        f'{inputs.shifts}',
+        f'#   [interface.adhesion]  type = "{inputs.type}"',
+        f'#   distance between the slabs of the interface relaxed by the adhesion at '
+        f'{inputs.site}: ' + ('not told' if distance is None else f'{distance:.6f} angstrom'),
+        f'#   adhesion energy at {inputs.site} (adhesion.{inputs.type}.{inputs.site}): '
+        + ('not written' if adhesion is None else f'{adhesion:.8f} J/m^2'),
+        '#', '# One row per shift of the slab on top:',
+        '#   shift         shift of the slab on top along z from the relaxed interface, angstrom',
+        '#   distance      distance between the slabs, angstrom (nan: not told)',
+        f'#   energy_eV     total energy of the cell, eV (ppes.{inputs.type}.energy.'
+        f'{inputs.site}.ppes_ev)',
+        '#   energy_Jm2    the same per area of the cell, J/m^2 (ppes_jm2)',
+        '#   adhesion_Jm2  energy_Jm2 minus its value at the shift 0 plus the adhesion energy',
+        '#                 (nan without the shift 0 or the adhesion energy)',
+        f'# {"shift":>10} {"distance":>12} {"energy_eV":>18} {"energy_Jm2":>18} '
+        f'{"adhesion_Jm2":>14}']
+    for i, shift in enumerate(curve['shift']):
+        lines.append(
+            f'  {shift:>10.4f} '
+            f'{"nan" if distance is None else f"{distance + shift:.6f}":>12} '
+            f'{curve["energy_ev"][i]:>18.8f} {curve["energy_jm2"][i]:>18.8f} '
+            + ('{:>14}'.format('nan') if curve['adhesion_jm2'] is None
+               else f'{curve["adhesion_jm2"][i]:>14.8f}'))
+    if curve['uber'] is not None:
+        g, l, s0 = curve['uber']
+        fit, written = inputs.fit, curve['fit_values']
+        lines += ['#', f'# Fit {fit} on the shifts >= 0 (ppes.{inputs.type}.energy.{inputs.site}.'
+                       f'{fit}): energy_eV minus its lowest value',
+                  '#   = g (1 - (1 + (shift - s0)/l) exp(-(shift - s0)/l))',
+                  f'#   g = {g:.8f} eV per cell ({g * curve["jm2_per_ev"]:.8f} J/m^2), '
+                  f'l = {l:.8f} angstrom, s0 = {s0:.8f} angstrom',
+                  f'#   sigma_g = {written["sigma_g"]:.4g} eV per cell, '
+                  f'sigma_l = {written["sigma_l"]:.4g} angstrom']
+    return '\n'.join(lines) + '\n'
+
+
+def draw_ppes(curve, png, pdf, stamp=None):
+    """The figure of the PPES: energy against the distance between the slabs.
+
+    The energy is the adhesion energy (``adhesion_jm2``) when the shift 0
+    and the adhesion energy are there, else the energy above the lowest one;
+    the distance is that between the slabs when told, else the shift. With a
+    fit, its UBER curve, from the shift 0 to the largest. ``stamp`` goes in
+    the metadata of the files.
+
+    Notes
+    -----
+    To remove: TribChem's ``plot_ppes`` (``highput/utils/plotting.py:631-661``) drew the
+    energies against the shift minus the z of the highest atom below the contact plane
+    (``estimate_interface(...)[0]``), the distance of the plane from the bottom slab; here
+    the abscissa is the distance between the two slabs, from the same structure.
+    """
+    if curve['adhesion_jm2'] is not None:
+        energy, ylabel = curve['adhesion_jm2'], r'adhesion energy (J/m$^2$)'
+        offset = curve['adhesion_jm2'][0] - curve['energy_jm2'][0]
+    else:
+        energy, ylabel = curve['energy_jm2'] - curve['energy_jm2'].min(), r'$\Delta E$ (J/m$^2$)'
+        offset = -curve['energy_jm2'].min()
+    if curve['distance'] is not None:
+        x, xlabel = curve['distance'] + curve['shift'], r'distance between the slabs ($\AA$)'
+        start = curve['distance']
+    else:
+        x, xlabel = curve['shift'], r'shift of the slab on top ($\AA$)'
+        start = 0.0
+    fitted = None
+    if curve['uber'] is not None:
+        g, l, s0 = curve['uber']
+        s = np.linspace(0.0, curve['shift'].max(), 200)
+        lowest = curve['energy_ev'][curve['shift'] >= 0.0].min()
+        fit_ev = lowest + PPESModel.uber(s, g, l, s0)
+        fitted = (start + s, fit_ev * curve['jm2_per_ev'] + offset)
+    ppes_figure(x, energy, png, pdf, xlabel, ylabel, fitted, stamp)
+
+
 def describe(inputs, values):
     """Lines of the message of the step: shifts, energies and fit.
 
@@ -737,26 +944,64 @@ class PpesStep(Step):
     name = STEP
 
     def done(self, run_dir, system):
+        """Whether its entries are done (``entries_done``) and its text file and the two
+        files of its figure were written by the analysis saved (``outputs.written_by``)."""
+        current = self._current(run_dir, system, upstream_done)
+        return current is not None and written_by(*self._exports(run_dir, system, *current))
+
+    def entries_done(self, run_dir, system):
         """Whether its entries (``ppes_leaves``) are written and current (``provenance``).
 
         The adhesion, the surface and ``match``, which it reads, have to be
         done too: the provenance holds the content of the entries read, not
-        whether they are still current.
+        whether they are still current. Their entries only, not their files
+        (``upstream_entries_done``).
+        """
+        return self._current(run_dir, system, upstream_entries_done) is not None
+
+    def exports(self, run_dir, system):
+        """Files of the analysis saved and the stamp each carries: ``(paths, stamp)``.
+
+        Only for entries done (``entries_done``): the files are named after
+        the interface that the inputs read.
+        """
+        return self._exports(run_dir, system,
+                             *self._current(run_dir, system, upstream_entries_done))
+
+    def _current(self, run_dir, system, upstream):
+        """The document and the inputs when the entries are written and current, else None.
+
+        ``upstream`` tells whether the steps upstream are done: ``upstream_done`` or
+        ``upstream_entries_done``.
         """
         sdir = system_dir(run_dir, system)
         document = read_system(sdir)
         settings = _load_run(run_dir)
-        entries = ppes_leaves(settings.interface.adhesion.type, settings.interface.ppes.site)
+        kind, site = settings.interface.adhesion.type, settings.interface.ppes.site
+        entries = ppes_leaves(kind, site)
         # Before any analysis the inputs are not read: the adhesion may not have run.
         if not all(document.get(entry) for entry in entries):
-            return False
-        if not upstream_done(self, run_dir, system):
-            return False
+            return None
+        if not upstream(self, run_dir, system):
+            return None
         try:
-            expected = self.provenance(run_dir, system)
+            inputs = self.inputs(run_dir, system)
         except PrerequisiteError:
-            return False
-        return all(is_done(document, entry, expected, sdir) for entry in entries)
+            return None
+        expected = ppes_provenance(inputs, {calc.calc_id: calc.record.fingerprint
+                                            for calc in ppes_calculations(system, inputs)})
+        if not all(is_done(document, entry, expected, sdir) for entry in entries):
+            return None
+        return document, inputs
+
+    @staticmethod
+    def _exports(run_dir, system, document, inputs):
+        sdir = system_dir(run_dir, system)
+        paths = [output_path(sdir, inputs.type, inputs.site),
+                 *figure_paths(figure_path(sdir, inputs.type, inputs.site,
+                                           interface_name(inputs.ids)))]
+        stamp = analysis_stamp(document.provenance(ppes_leaves(inputs.type, inputs.site)[0]))
+        return paths, stamp
 
     def analyse(self, run_dir, system, calculations):
         """Read the calculations, write the energies and the fit with their provenance.
@@ -800,13 +1045,22 @@ class PpesStep(Step):
                                        list(plan))
             for entry in ppes_leaves(inputs.type, inputs.site):
                 writer.document.set_provenance(entry, provenance)
-            writer.save()
+            curve = ppes_curve(inputs, values, writer.document)
+            (output, *figure), stamp = self._exports(run_dir, system, writer.document, inputs)
+            with staged([output, *figure]) as partials:
+                partials[output].write_text(ppes_output(system, inputs, curve, stamp=stamp),
+                                            encoding='utf-8')
+                draw_ppes(curve, *(partials[path] for path in figure), stamp)
+                writer.save()
+                place(partials)
         fit = values.get(inputs.fit)
         if fit is not None and not all(math.isfinite(fit[key]) for key in ('sigma_g', 'sigma_l')):
             logger.warning('%s/%s: the covariance of the fit could not be estimated: the '
                            'deviations of g and l are infinite', system, self.name)
         for line in describe(inputs, values):
             logger.info('%s: %s', system, line)
+        logger.info('%s: table of the PPES in %s, figure in %s', system, output,
+                    ' and '.join(path.name for path in figure))
 
     def inputs(self, run_dir, system):
         """``ppes_inputs`` of the step, from the settings of the run."""

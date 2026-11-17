@@ -20,6 +20,8 @@ import pytest
 
 import charge_files
 from chain_helpers import CUCU, posix_only
+from test_outputs import restamp
+from test_pes import edit_config
 from triboworkflow.core.structures import read_structure
 
 HPC = Path(__file__).resolve().parent / 'hpc'
@@ -100,8 +102,101 @@ def test_every_topic_is_reported(run):
                     'pes_scf', 'plotpes', 'plotpes job', 'plotpes_scf', 'plotpes_scf job',
                     'adhesion', 'ppes', 'charge fragments', 'charge densities',
                     'charge contact plane', 'shear job', 'shear time', 'shear warnings',
-                    'shear convergence', 'shear cell', 'accounting'):
+                    'shear convergence', 'shear output', 'shear cell', 'accounting'):
         assert subject in found, subject
+
+
+def test_the_figure_and_shear_output_are_read(run):
+    found = verdicts(run)
+    for name in ('plotpes', 'plotpes_scf'):
+        assert found[name][0] == 'ok'
+        assert 'figure pes_Cu111-Cu111.png (' in found[name][1]
+        assert 'pes_Cu111-Cu111.pdf (' in found[name][1]
+    assert found['shear output'][0] == 'ok'
+    assert 'the three shear strengths and nstep of shearstr' in found['shear output'][1]
+
+
+def test_a_run_made_before_the_files_of_the_later_version(run):
+    # A run of an earlier version: no PDF of the figure, no shear.output. Not a problem: a note
+    # that names the steps the package would analyse again.
+    for path in sdir(run).glob('plotpes*/*.pdf'):
+        path.unlink()
+    (sdir(run) / 'shear' / 'shear.output').unlink()
+    found = verdicts(run)
+    assert 'PROBLEM' not in {v for v, _ in found.values()}
+    verdict, text = found['steps']
+    assert verdict == 'note' and "'shear': ['shear/shear.output']" in text
+    assert "'plotpes': ['plotpes/pes_Cu111-Cu111.pdf']" in text
+    assert found['plotpes'] == ('ok', found['plotpes'][1])
+    assert 'no PDF (a run made before' in found['plotpes'][1]
+    assert found['shear output'][0] == 'not observed'
+
+
+def test_a_run_made_before_the_tables_and_figures_of_the_steps(run):
+    # Before the tables of adhesion, ppes and charge, their figures and the cube file, and the
+    # figures of the paths of shear: a note, as above.
+    for pattern in ('adhesion/*.output', 'ppes/*.output', 'ppes/*.png', 'ppes/*.pdf',
+                    'charge/*.output', 'charge/*.png', 'charge/*.pdf', 'charge/*.cube',
+                    'shear/mep_*'):
+        for path in sdir(run).glob(pattern):
+            path.unlink()
+    found = verdicts(run)
+    assert 'PROBLEM' not in {v for v, _ in found.values()}
+    verdict, text = found['steps']
+    assert verdict == 'note'
+    for name in ("'adhesion': ['adhesion/adhesion_regular.output']",
+                 "'ppes/ppes_regular_min_site.output', 'ppes/ppes_regular_min_site_Cu111-Cu111.png'",
+                 "'charge/charge_regular_min_site_Cu111-Cu111.cube'",
+                 "'shear/mep_Cu111-Cu111.png'"):
+        assert name in text, name
+
+
+def test_a_step_not_current_is_never_taken_for_a_run_made_before(run):
+    # The fit changed after the run: the entries of ppes are not current. A file of the step
+    # missing too must not make it pass for a run made before the files were written.
+    edit_config(run, 'fit = "none"', 'fit = "uber"')
+    next((sdir(run) / 'ppes').glob('*.png')).unlink()
+    verdict, text = verdicts(run)['steps']
+    assert verdict == 'not observed'
+    assert "'ppes': False" in text and 'run made before' not in text
+
+
+def test_a_file_of_another_analysis_is_a_problem(run):
+    path = next((sdir(run) / 'charge').glob('*.cube'))
+    restamp(path)
+    verdict, text = verdicts(run)['steps']
+    assert verdict == 'PROBLEM' and 'another stamp' in text
+    assert f"'charge': ['charge/{path.name}']" in text
+
+
+def test_a_run_copied_before_match(run):
+    # Started, the first pass not over: no system.json, no step done. No traceback of a
+    # document that is not there.
+    shutil.rmtree(sdir(run))
+    edit_json(run / 'orchestrator.json', lambda data: data['systems'][CUCU].update(
+        {step: {**entry, 'status': 'waiting'} for step, entry in data['systems'][CUCU].items()
+         if isinstance(entry, dict)}))
+    found = verdicts(run)
+    verdict, text = found['steps']
+    assert verdict == 'not observed' and "'match': False" in text
+    assert not [subject for subject, (_, text) in found.items() if 'Error' in text]
+
+
+def test_a_shear_output_that_differs_from_the_entries(run):
+    path = sdir(run) / 'shear' / 'shear.output'
+    lines = path.read_text().splitlines()
+    at = next(i for i, line in enumerate(lines) if line.startswith('  x '))
+    words = lines[at].split()
+    lines[at] = lines[at].replace(words[1], f'{float(words[1]) + 1:.10f}', 1)
+    path.write_text('\n'.join(lines) + '\n')
+    verdict, text = verdicts(run)['shear output']
+    assert verdict == 'PROBLEM' and text.startswith('x: ') and 'in shearstr' in text
+
+
+def test_a_figure_that_is_not_a_pdf(run):
+    (sdir(run) / 'plotpes' / 'pes_Cu111-Cu111.pdf').write_bytes(b'not a pdf')
+    verdict, text = verdicts(run)['plotpes']
+    assert verdict == 'PROBLEM' and text == 'pes_Cu111-Cu111.pdf is not a PDF'
 
 
 def test_the_report_changes_nothing(run, capsys):

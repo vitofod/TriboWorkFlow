@@ -37,8 +37,8 @@ from pathlib import Path
 from dacite import (Config, DaciteError, MissingValueError, WrongTypeError,
                     from_dict)
 
-from .schema import (KEY_HINTS, SCHEMA_VERSION, GenerationParams, Settings, SettingsError, join,
-                     walk)
+from .schema import (KEY_HINTS, SCHEMA_VERSION, TYPE_HINTS, GenerationParams, Settings,
+                     SettingsError, join, walk)
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +105,10 @@ def settings_from_dict(data):
     try:
         settings = from_dict(Settings, data, config)
     except WrongTypeError as error:
+        hint = TYPE_HINTS.get(error.field_path)
         raise SettingsError(error.field_path, f'expected {_type_name(error.field_type)}, '
-                                              f'got {error.value!r}') from None
+                                              f'got {error.value!r}'
+                                              + (f' ({hint})' if hint else '')) from None
     except MissingValueError as error:
         raise SettingsError(error.field_path, 'required key missing') from None
     except DaciteError as error:

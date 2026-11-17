@@ -58,7 +58,13 @@ the kind of adhesion and ``<data>`` the entry ``data`` (``data.short`` with
   of the two slabs, in eV and in J/m^2 on the area of the cell of the relaxed
   interface at the lowest site; the corrugation, the energy at the highest
   site minus the energy at the lowest one;
-- with ``short``, ``structure.init.short`` (``write_short_init``).
+- with ``short``, ``structure.init.short`` (``write_short_init``);
+- the text file ``adhesion/adhesion_<kind>.output`` in the folder of the
+  system (``adhesion_output``): the energies of the four calculations, the
+  adhesion energy, the work of separation and the distance between the
+  slabs at the two sites, and the corrugation. It is renamed into place once
+  the entries are saved, and the step is done only with it carrying the
+  stamp of the provenance saved (``outputs``).
 
 Each entry written (``adhesion_leaves``) gets the provenance of the step: the
 parameters, the calculations with their results, and the entries read. The
@@ -118,9 +124,10 @@ from triboworkflow.vendored.highput.utils.vasp_tools import VaspInputSet
 from triboworkflow.vendored.physics.base.solidstate import get_cell_info
 from triboworkflow.vendored.physics.base.units import Converter
 
-from .chain import upstream_done
+from .chain import upstream_done, upstream_entries_done
 from .match import (COLLECTION, DEFAULTS, FILTER_KEYS, match_parameters, match_provenance,
                     set_filter)
+from .outputs import analysis_stamp, header, place, slab_distance, staged, written_by
 from .pes import ID_KEYS, TRANSFER_FROM, RelaxedPesStep, StaticPesStep
 
 logger = logging.getLogger(__name__)
@@ -733,6 +740,66 @@ def run_adhesion_analysis(inputs, store, calc_ids):
     return adhesion
 
 
+def output_path(sdir, kind):
+    """Text file of the step: ``adhesion/adhesion_<kind>.output`` in the folder of the system."""
+    return sdir / STEP / f'{STEP}_{kind}.output'
+
+
+def adhesion_output(system, inputs, document, sites, now=None, stamp=None):
+    """Text of ``adhesion_<kind>.output``: parameters, energies, adhesion and distances.
+
+    Parameters
+    ----------
+    system : str
+    inputs : AdhesionInputs
+    document : SystemDocument
+        The document of the system with the entries of the analysis.
+    sites : tuple of str
+        The sites of lowest and highest energy of the surface.
+    now : datetime.datetime or None, optional
+        Time written in the header; the current local time by default.
+    stamp : str or None, optional
+        ``outputs.analysis_stamp`` of the analysis.
+
+    Returns
+    -------
+    str
+        Lines starting with ``#`` describe the parameters, the units and the
+        columns; the others are the table of the two sites.
+    """
+    kind = inputs.type
+    values = document.get((STEP, kind))
+    surface = 'relaxed along z' if inputs.pes == 'pes' else 'static'
+    inter_min = document.get(('structure', 'opt', kind, 'interface_min'))
+    area, _ = get_cell_info(Structure.from_dict(inter_min).lattice.matrix)
+    lines = header('Adhesion of the interface', system, STEP, now, stamp) + [
+        '#', '# Parameters',
+        f'#   [interface.adhesion]  pes = "{inputs.pes}", type = "{kind}"',
+        f'#   PES {inputs.pes} ({surface}): lowest energy at {sites[0]}, highest at {sites[1]}',
+        '#', '# Total energy of each calculation, eV']
+    for label in LABELS:
+        lines.append(f'#   {label:<14} {document.get(data_entry(kind) + (label, "energy")):.8f}')
+    lines += [f'# Area of the cell of the interface at the lowest site: {area:.6f} angstrom^2',
+              '#',
+              '# Adhesion energy: E(interface) - E(bot_slab) - E(top_slab), negative for an',
+              f'# interface that binds, as in adhesion.{kind} of system.json; work of separation:',
+              '# minus the adhesion energy. Distance: the lowest atom of the top slab minus the',
+              '# highest atom of the bottom slab in the relaxed interface, angstrom (nan: not told).',
+              f'# {"site":<9} {"high_symmetry":<14} {"adhesion_eV":>14} {"adhesion_Jm2":>14} '
+              f'{"separation_Jm2":>14} {"distance_A":>11}']
+    for site, name, label in zip(sites, ('min_site', 'max_site'),
+                                 ('interface_min', 'interface_max')):
+        energy = values[name]
+        distance = slab_distance(document.get(('structure', 'opt', kind, label)))
+        lines.append(f'  {name:<9} {site:<14} {energy["adhesion_energy_ev"]:>14.8f} '
+                     f'{energy["adhesion_energy_jm2"]:>14.8f} '
+                     f'{-energy["adhesion_energy_jm2"]:>14.8f} '
+                     f'{"nan" if distance is None else f"{distance:.6f}":>11}')
+    lines += ['#', f'# Corrugation (highest site minus lowest site): '
+                   f'{values["corrugation_ev"]:.8f} eV, {values["corrugation_jm2"]:.8f} J/m^2']
+    return '\n'.join(lines) + '\n'
+
+
 def describe(inputs, adhesion, sites):
     """Lines of the message of the step: surface, sites, adhesion energy and corrugation.
 
@@ -776,25 +843,44 @@ class AdhesionStep(Step):
     name = STEP
 
     def done(self, run_dir, system):
+        """Whether its entries are done (``entries_done``) and ``adhesion_<kind>.output``
+        was written by the analysis saved (``outputs.written_by``)."""
+        return self._entries(run_dir, system, upstream_done) and \
+            written_by(*self.exports(run_dir, system))
+
+    def entries_done(self, run_dir, system):
         """Whether its entries (``adhesion_leaves``) are written and current (``provenance``).
 
         The surface and ``match``, which it reads, have to be done too: the
         provenance holds the content of the entries read, not whether they are
-        still current.
+        still current. Their entries only, not their files
+        (``upstream_entries_done``).
         """
+        return self._entries(run_dir, system, upstream_entries_done)
+
+    def _entries(self, run_dir, system, upstream):
+        """``entries_done``, with ``upstream`` (``upstream_done`` or
+        ``upstream_entries_done``) for the steps upstream."""
         sdir = system_dir(run_dir, system)
         document = read_system(sdir)
         entries = adhesion_leaves(_load_run(run_dir).interface.adhesion.type)
         # Before any analysis the inputs are not read: the PES may not have run.
         if not all(document.get(entry) for entry in entries):
             return False
-        if not upstream_done(self, run_dir, system):
+        if not upstream(self, run_dir, system):
             return False
         try:
             expected = self.provenance(run_dir, system)
         except PrerequisiteError:
             return False
         return all(is_done(document, entry, expected, sdir) for entry in entries)
+
+    def exports(self, run_dir, system):
+        """Files of the analysis saved and the stamp each carries: ``(paths, stamp)``."""
+        sdir = system_dir(run_dir, system)
+        kind = _load_run(run_dir).interface.adhesion.type
+        provenance = read_system(sdir).provenance(adhesion_leaves(kind)[0])
+        return [output_path(sdir, kind)], analysis_stamp(provenance)
 
     def analyse(self, run_dir, system, calculations):
         """Read the four calculations, write the adhesion energy and the entries with their provenance.
@@ -834,9 +920,16 @@ class AdhesionStep(Step):
                 writer.document.set_provenance(entry, provenance)
             sites = tuple(writer.document.get((inputs.pes, 'energy', name))
                           for name in ('min_site', 'max_site'))
-            writer.save()
+            output = output_path(sdir, inputs.type)
+            stamp = analysis_stamp(provenance)
+            with staged([output]) as partials:
+                partials[output].write_text(adhesion_output(system, inputs, writer.document,
+                                                            sites, stamp=stamp), encoding='utf-8')
+                writer.save()
+                place(partials)
         for line in describe(inputs, adhesion, sites):
             logger.info('%s: %s', system, line)
+        logger.info('%s: table of the adhesion in %s', system, output)
 
     def inputs(self, run_dir, system):
         """``adhesion_inputs`` of the step, from the settings of the run."""

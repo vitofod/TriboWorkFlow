@@ -34,7 +34,7 @@ CuAl/                       the run
 ├── config.toml             settings, written by the user (configuration.md)
 ├── jobscript.sh            resources and environment of the jobs, written by the user
 ├── slabs/...               the two slabs named in config.toml
-├── systems/mp-30_mp-134/   system.json and one directory per calculation
+├── systems/Cu111_Al111/    system.json and one directory per calculation
 ├── jobs/                   groups of jobs
 ├── jobs.json               registry of the jobs
 ├── orchestrator.json       state of the steps
@@ -43,8 +43,8 @@ CuAl/                       the run
 └── cli.log                 log of the commands that changed the run
 ```
 
-- The system is the interface `<mid1>_<mid2>` of the two slabs: one run, one
-  interface.
+- The system is the interface `<id1>_<id2>` of the two slabs (their `id` in
+  `[[interface.slabs]]`, e.g. `Cu111_Al111`): one run, one interface.
 - Relative paths of the settings (jobscript, slabs) hold from the folder of
   the run, so a run prepared on a laptop is copied to the cluster as it is
   (e.g. with `rsync -a`).
@@ -54,10 +54,15 @@ CuAl/                       the run
   chosen in `[interface.adhesion]`, `pes` or `pes_scf`; the order of the list decides only
   between steps ready at the same time. A step already done and current is not run again;
   an entry it reads that is valid is reused even if its step is not listed.
-- `[execution].groups` (jobs, i.e. workers, per group) is optional: it comes
-  from `--groups M`, then from the settings; when both are missing the
-  command asks for it if it runs in a terminal, and stops with an error
-  otherwise, so that a command started by a script never waits.
+- The jobs (workers) per group of a step come from `--groups M`, which holds
+  for every step, then from `groups` of its section `[execution.<step>]`,
+  then from `[execution].groups`; when a step that runs calculations has none,
+  the command asks once if it runs in a terminal (the answer takes the place
+  of `[execution].groups`), and stops with an error otherwise, so that a
+  command started by a script never waits.
+- The jobs are named `<step>_<name>`, `<name>` being the `--job-name` of the
+  jobscript (Slurm), else the system: `ppes_testFe`, `charge_testFe`
+  ([configuration.md](configuration.md), `[execution.<step>]`).
 
 ## Commands
 
@@ -65,13 +70,13 @@ CuAl/                       the run
 
 | Command | What it does |
 |---|---|
-| `check` | reads and validates `config.toml` and prints a summary: system, steps, scheduler, groups, placeholders to fill in; code 1 if the settings are not valid, with the TOML path of the field |
+| `check` | reads and validates `config.toml` and prints a summary: system, steps, scheduler, groups, the walltime and the jobs per group of each step that submits jobs (`[execution.<step>]`, `24:00:00 (default)` when not given), placeholders to fill in, in the settings and in the jobscripts (e.g. `jobscript.sh line 9: <venv>`); a warning names the steps without a walltime and, with Slurm, the jobscripts with a `--time`, which the walltime of the step replaces; code 1 if the settings are not valid, with the TOML path of the field |
 | `gen SETTINGS.toml` | one calculation, not a run: writes the pw.x input of `[structure]` and the extxyz of its structure next to the settings file (see *One calculation*); nothing is run |
-| `status [--calcs]` | the orchestrator (running, stopped, on another host), who holds the lock of the run, each step with its state, reason and time of its last update, the calculations that need the user and why, the jobs. **It reads only the files: it is the state last saved, not a query to the scheduler.** `--calcs` lists every calculation with its state (`pending`, `running`, `completed`, `not_converged`, `crashed`, `unknown`) |
+| `status [--calcs]` | the orchestrator (running, stopped, on another host), who holds the lock of the run, each step with its state, reason and time of its last update, the calculations that need the user and why, the jobs. **It reads only the files: it is the state last saved, not a query to the scheduler.** `--calcs` lists every calculation with its state: for one that has run, the state of its record (`running`, `completed`, `not_converged`, `crashed`, …); for one not started yet, the state the reconciliation gives it from the files: `ready for the first run` (prepared, in no group of jobs), `pending` (in a group whose job is not over, named), `not_taken` or `manual` (every job of its group is over and no worker took it) |
 | `prepare <step> [--replace]` | phase 1: checks the entries the step reads and writes its calculations (directories, inputs, extxyz of the structures, records). A missing or stale entry blocks the step with what is missing; nothing is computed in its place. A calculation already prepared is never overwritten: one that differs from the settings stops the preparation with the list, one that differs only in keys of the attempts (e.g. `mixing_beta`, `max_seconds`) is kept with the values logged. `--replace` moves every calculation that differs, with its attempts, to `replaced/` and prepares it again (`execution.md`, *Preparation and replacement*) |
-| `analyse <step>` | phase 3, from the files only: every calculation of the step must be done according to its claim, its record and the groups of jobs, with the fingerprint the settings give now; otherwise nothing is written and the error says what is missing for each calculation. For `match`, `plotpes`, `plotpes_scf` and `shear` it is the whole step; `plotpes`, `plotpes_scf` and `shear` are analysed by this command where there is enough memory, or in a job of their own with `[execution.analysis]`, and the command is refused while that job may run (*The interpolation of the PES*) |
+| `analyse <step>` | phase 3, from the files only: every calculation of the step must be done according to its claim, its record and the groups of jobs, with the fingerprint the settings give now; otherwise nothing is written and the error says what is missing for each calculation. For `match`, `plotpes`, `plotpes_scf` and `shear` it is the whole step; `plotpes`, `plotpes_scf` and `shear` are analysed by this command where there is enough memory, or in a job of their own by `submit` and `start`, and the command is refused while that job may run (*The interpolation of the PES*) |
 | `retry <step>` | a step failed for an error of its own (while it was prepared or analysed, because the settings changed after its preparation, or because the job of its analysis ended without completing it) starts again; for a job of an analysis, the next `submit` or pass submits a new one |
-| `clear-refusal <group>` | a group whose submission the scheduler refused is submitted again by the next `submit` or pass, once its copy of the jobscript (`jobs/<group>/jobscript.sh`) is fixed |
+| `clear-refusal <group>` | a group whose submission the scheduler refused is submitted again by the next `submit` or pass, once its copy of the jobscript (`jobs/<group>/jobscript.sh`) or the walltime of its step in `[execution.<step>]` is fixed; a group none of whose jobs was submitted takes that walltime as it is now |
 | `resolve-submission <group> --job-id ID` or `--no-job` | a submission whose answer was lost (e.g. `sbatch` timed out) created that job, or none |
 | `release-claim <calc_id> --worker-over [--group G]` | releases an empty claim once the user has checked that its worker no longer runs |
 
@@ -80,7 +85,7 @@ found; elsewhere the command stops before writing anything):
 
 | Command | What it does |
 |---|---|
-| `submit <step> [--groups M]` | phase 2: asks the scheduler for the jobs, reconciles the calculations of the step, writes a group with what has to run and submits it, then exits. **Running it again is how a step is followed by hand, and it may start relaunches** (a crash, `max_seconds`), never the same attempt twice. For `plotpes` and `plotpes_scf`, with `[execution.analysis]`, it submits the job of the analysis (one job, no `--groups`) and, run again, follows it |
+| `submit <step> [--groups M]` | phase 2: asks the scheduler for the jobs, reconciles the calculations of the step, writes a group with what has to run and submits it, then exits. **Running it again is how a step is followed by hand, and it may start relaunches** (a crash, `max_seconds`), never the same attempt twice. For `plotpes`, `plotpes_scf` and `shear` it submits the job of the analysis (one job, no `--groups`) and, run again, follows it |
 | `start [--groups M] [--dry-run]` | starts the orchestrator of the steps of `[interface].steps` in the background, on the login node, and returns |
 | `relaunch <calc_id> [--groups M] [--group G] [--level L] [--from-scratch]` | relaunches a calculation by hand, at the level of its last attempt or at level `L` (1–3), once its worker is surely over; it continues the last attempt from `OUT/` when the workflow would, or after a stop by request of the user, unless `--from-scratch` |
 
@@ -152,7 +157,7 @@ triboworkflow status
 
 `analyse match` checks the entries it reads, matches the two slabs with the
 parameters of `[interface.inter_params]` and writes its entries in
-`systems/mp-30_mp-134/system.json`. Run again with the same inputs it does
+`systems/Cu111_Al111/system.json`. Run again with the same inputs it does
 nothing more. When a parameter of the match (or a slab) changes, its entries
 are no longer current: the match is done again, by hand or by `start`, also
 if `orchestrator.json` had it completed. The steps after it are then no
@@ -170,7 +175,7 @@ steps = ["match", "pes", "pes_scf"]
 calculations and entries; each needs only `match`, so either can be
 prepared, submitted and analysed first, by hand as below or by `start`.
 `prepare pes_scf` writes one calculation per high-symmetry point, in
-`systems/mp-30_mp-134/pes_scf/<point>/`; `analyse pes_scf` writes the entry
+`systems/Cu111_Al111/pes_scf/<point>/`; `analyse pes_scf` writes the entry
 `pes_scf` and the structures of its minimum and maximum
 ([interface.md](interface.md)).
 
@@ -195,6 +200,15 @@ triboworkflow submit adhesion
 triboworkflow analyse adhesion    # writes data, structure.opt.<type> and adhesion.<type>
 ```
 
+With the entries it writes the table `systems/<system>/adhesion/adhesion_<type>.output`:
+the energies of the four calculations, and for each site the adhesion energy,
+the work of separation and the distance between the slabs. `ppes` and
+`charge` write their tables and figures the same way, next to their
+calculations ([interface.md](interface.md)): `ppes/ppes_<type>_<site>.output`
+and the figure of the PPES, `charge/charge_<type>_<site>.output`, the figure of
+the charge displacement along z and its cube file in three dimensions, for
+VESTA or OVITO.
+
 `prepare adhesion` is blocked with what is missing while the PES is not done
 and current. When the PES, `match` or `[interface.adhesion]` change after the
 calculations were prepared, those that differ are not overwritten:
@@ -213,15 +227,20 @@ points of the PES, from a few MiB for a small interface to tens of GiB for a
 large one ([interface.md](interface.md#cost)). It is never run by the
 orchestrator on the login node.
 
-**In a job of its own.** With a jobscript for it in the settings:
+**In a job of its own.** With the walltime of its job in the settings, and
+optionally a lighter jobscript for the analyses (else the one of
+`[execution]` is used):
 
 ```toml
+[execution.plotpes]
+walltime = "00:30:00"         # given to the submission of the job (sbatch --time)
+
 [execution.analysis]
-jobscript = "analysis.sh"     # e.g. #SBATCH --mem=200G, --time=04:00:00, the partition
+jobscript = "analysis.sh"     # e.g. #SBATCH --gres=gpu:1, --mem=200G, the partition
 ```
 
 once `pes` is completed the orchestrator writes the group
-`jobs/mp-30_mp-134.plotpes.1/`, submits its job and follows it; the job
+`jobs/Cu111_Al111.plotpes.1/`, submits its job and follows it; the job
 interpolates on the compute node and writes the entries and the figure, and
 the next pass finds `plotpes` completed and goes on with what depends on it.
 `start` does it all; by hand:
@@ -233,35 +252,30 @@ triboworkflow submit plotpes      # follows the job: completed once its entries 
 ```
 
 ```text
-mp-30_mp-134/plotpes: running (job 4171882 RUNNING)
-  job of the analysis: group mp-30_mp-134.plotpes.1, folder jobs/mp-30_mp-134.plotpes.1
+Cu111_Al111/plotpes: running (job 4171882 RUNNING)
+  job of the analysis: group Cu111_Al111.plotpes.1, folder jobs/Cu111_Al111.plotpes.1
 ```
 
-- The steps of a system run one at a time: `plotpes_scf` waits while the job
-  of `plotpes` runs, and the job waits for a step that runs.
+- The steps that do not read each other run together: the jobs of `plotpes`
+  and `plotpes_scf` start in the same pass, also while `adhesion` runs its
+  calculations ([execution.md](execution.md), *Steps that run together*).
 - A job that ends without the entries (out of memory, walltime, an error)
   makes the step **failed**, with the state of the job, the outcome it wrote
   in `jobs/<group>/outcome.json` and the folder of its log; the steps after
   it are blocked. **It is never submitted again automatically**: give the
-  jobscript more memory or time, then `triboworkflow retry plotpes`, and the
-  next `submit` or pass submits a new job (group `.2`).
+  jobscript more memory, or the step more time in `[execution.plotpes]`,
+  then `triboworkflow retry plotpes`, and the next `submit` or pass submits a
+  new job (group `.2`).
 - `analyse plotpes` by hand is refused while the job may still run according
   to the last query of the scheduler (`jobs.json`). The job does not take
   `run.lock`: a job killed on a compute node leaves no lock of the run.
 - Set the threads of the linear algebra in the jobscript (e.g. `export
   OMP_NUM_THREADS=8`) and the memory from the cost ([interface.md](interface.md#cost)).
 
-**By hand.** Without `[execution.analysis]`, once `pes` is completed the
-orchestrator leaves `plotpes` **manual**, goes on with the other steps and
-exits when nothing else waits or runs; the steps that depend on `plotpes`
-are blocked until it is done:
-
-```text
-mp-30_mp-134/plotpes: manual (to analyse by hand: run "triboworkflow analyse plotpes" where there is enough memory, or give [execution.analysis] to analyse it in a job of its own)
-```
-
-Run it on a node with enough memory, e.g. in an interactive session or a job
-of the scheduler on a compute node, with the orchestrator ended or stopped:
+**By hand.** Outside the orchestrator, the step can also be analysed on a
+node with enough memory, e.g. in an interactive session or a job of the
+scheduler on a compute node, with the orchestrator ended or stopped and no
+job of the analysis that may run:
 
 ```bash
 cd /scratch/.../CuAl
@@ -272,31 +286,51 @@ triboworkflow start                   # goes on with what depends on them
 ```
 
 - The two steps are independent: each is analysed with its own command,
-  writes its own entries and its own figure
-  (`systems/<system>/plotpes/pes_<name>.png`,
-  `systems/<system>/plotpes_scf/pes_<name>.png`).
+  writes its own entries and its own figure of the PES, sized for one column
+  of an article, without title and with the colour bar as tall as the map
+  (ΔE, the energy above the minimum, in J/m^2):
+  `systems/<system>/plotpes/pes_<name>.png` (600 dpi) and `pes_<name>.pdf`
+  (vector, for LaTeX), the same in `plotpes_scf/`.
 - While the orchestrator runs, `analyse plotpes` is refused (`the run is in
   use by triboworkflow start …`), and nothing is written: wait for it to
   end, or `stop` it; the jobs already submitted go on.
 - While `analyse plotpes` runs, it holds the run: `start`, `submit` and the
   other commands that change the run are refused until it ends.
 - A step already analysed and current is recognised from its entries and
-  its figure, without interpolating again: `analyse plotpes` and `start`
+  the two files of its figure, without interpolating again: `analyse plotpes` and `start`
   report it completed. Analysing `pes` again makes it no longer current.
+- Each file that an analysis writes next to its entries (figures, tables,
+  the cube file of `charge`) carries the stamp of the analysis: the text
+  `triboworkflow analysis sha256:…`, a digest of the provenance saved in
+  `system.json`, in a header line of a text file, in the metadata of a PNG
+  (`Comment`) or a PDF (`Subject`), in the comment of a cube file. A step is
+  done only when each of its files carries the stamp of the provenance
+  saved: a file left by another analysis (an interruption between the save
+  of `system.json` and the renaming of the files, a file copied by hand) is
+  never taken for the current one, and the step is analysed again.
 
 **The shear strength.** `shear` is analysed in the same two ways, with the
-same command (`analyse shear`, `submit shear`), the same job and the same
-jobscript of `[execution.analysis]`, once `plotpes` is completed: it reads the
+same commands (`analyse shear`, `submit shear`) and the same jobscript, its
+walltime in `[execution.shear]`, once `plotpes` is completed: it reads the
 interpolation of `plotpes` and never the one of `plotpes_scf`. It interpolates
 the PES again and then runs the string method, which takes long even on a
 small interface: a job for it needs time more than memory
 ([interface.md](interface.md), *Step `shear`*). Without `plotpes` done and
 current the step is blocked with `entries missing or not current:
-pes.energy.pes_jm2`.
+pes.energy.pes_jm2`. The shear strength along the three paths is in the
+entry `shearstr` of `system.json`; the text file
+`systems/<system>/shear/shear.output` gives the parameters, the shear
+strength, `nstep` and `tol` of each path, and the profile along each path,
+one row per point (`x`, `y`, `lxy`, `dvx`, `dvy`, `vz`, `ve`, `force`, with
+their units in its header). Next to it, two figures for an article:
+`mep_<name>.png` and `.pdf`, the map of the PES with the three paths drawn on
+it, and `mep_profile_<name>.png` and `.pdf`, ΔE and the shear stress along
+each path. The step is done only with the file and the figures, each with
+the stamp of the analysis saved.
 - **Stopped before its end** (Ctrl-C, a signal, the walltime of a job):
   nothing is written, neither the entries nor the figure; the step stays
-  running with no calculations, `start` leaves it manual again, and the
-  next `analyse plotpes` starts it from the beginning. The other
+  running with no calculations, and the next `analyse plotpes`, or the next
+  pass of the orchestrator in a job of its own, starts it from the beginning. The other
   interpolation, if already done, is kept. A process killed on the same
   host leaves `run.lock`, which the next command replaces with a warning; a
   job killed on a compute node leaves a `run.lock` of another host, which
@@ -319,7 +353,7 @@ triboworkflow analyse ppes
   are not done and current; it can be run on a laptop before copying the
   run.
 - `submit ppes`, with `groups = 10` and 9 calculations, writes the group
-  `mp-30_mp-134.ppes.1` and submits 9 jobs, not 10, each with a worker that
+  `Cu111_Al111.ppes.1` and submits 9 jobs, not 10, each with a worker that
   takes the free calculations one at a time. Away from the HPC machine it
   exits with code 1 and writes nothing:
   `Command 'sbatch' not found: calculations run only on an HPC machine with
@@ -389,8 +423,11 @@ triboworkflow check
 triboworkflow start
 ```
 
-`start` prints `Orchestrator: running: pid 48211 on login03 since …` and the
-shell comes back; the terminal can be closed. The orchestrator runs on the
+`start` prints the walltime and the jobs per group of each step (`Jobs of
+the steps: pes 12:00:00, 6 jobs per group; pes_scf 04:00:00, 10 jobs per
+group; …`; a warning names the steps without a walltime, which get
+`24:00:00`), then `Orchestrator: running: pid 48211 on login03 since …`,
+and the shell comes back; the terminal can be closed. The orchestrator runs on the
 login node, holds `run.lock` while it lives and, every `polling_interval`:
 
 1. asks the scheduler for the jobs;
@@ -400,15 +437,16 @@ login node, holds `run.lock` while it lives and, every `polling_interval`:
    entries it reads missing, blocked with the reason; otherwise it prepares
    the calculations, checks that they match the settings, submits them in a
    group, follows them, relaunches them as the policy says and, once they are
-   all completed, analyses them; `plotpes` and `plotpes_scf` are left
-   **manual**, with the command that analyses them (*The interpolation of
-   the PES*);
+   all completed, analyses them; `plotpes`, `plotpes_scf` and `shear` are
+   analysed in a job of their own, which it submits and follows (*The
+   interpolation of the PES*);
 4. a failure blocks only what depends on it: if `ppes` fails, `charge` goes
-   on; a manual step blocks what depends on it until it is analysed by hand;
-5. the steps of a system run one at a time, the order of `steps` deciding
-   which one starts first when two are ready;
-6. it ends when no step waits or runs: a manual step does not keep it
-   alive.
+   on;
+5. the steps ready start together: two steps of which neither reads the
+   other (e.g. `ppes` and `charge`, or the jobs of `plotpes` and
+   `plotpes_scf` while `adhesion` runs) run at the same time, the order of
+   `steps` deciding only the order of their groups in the pass;
+6. it ends when no step waits or runs.
 
 Meanwhile:
 
@@ -425,7 +463,7 @@ When a calculation needs the user (an error of pw.x, `CANCELLED`,
 
 ```bash
 triboworkflow stop --wait 60
-# look at the output in systems/mp-30_mp-134/<step>/<label>/ (or attempts/<n>/)
+# look at the output in systems/Cu111_Al111/<step>/<label>/ (or attempts/<n>/)
 triboworkflow relaunch adhesion/interface_max
 triboworkflow start
 ```
@@ -444,7 +482,7 @@ how it starts:
 
 ```bash
 triboworkflow relaunch adhesion/interface_max --level 2 --from-scratch
-# mp-30_mp-134/adhesion/interface_max: relaunched by hand, attempt 4 at level 2, from scratch
+# Cu111_Al111/adhesion/interface_max: relaunched by hand, attempt 4 at level 2, from scratch
 ```
 
 When the launch of the last attempt is not recorded and the groups that list

@@ -22,12 +22,14 @@ compare the step with TribChem's ``FT_StartShearStrength`` and
 import dataclasses
 import json
 import logging
+import re
 import shutil
 
 import numpy as np
 import pytest
 
 from cli_helpers import fake_scheduler_bin, fake_slurm  # noqa: F401 (fixtures)
+from test_outputs import restamp
 from test_pes import edit_config, finish, pes_run
 from test_plotpes import analysis_group, run_files, the_node_runs, with_analysis_job
 from triboworkflow.cli.analysis_job import run_analysis
@@ -46,7 +48,7 @@ from triboworkflow.workflows.interface import pes, plotpes, shear
 from triboworkflow.workflows.interface.match import MatchStep, match_provenance
 from triboworkflow.workflows.interface.registry import get_step
 
-CUCU = 'mp-30_mp-30'
+CUCU = 'Cu111_Cu111'
 STEPS = ('match', 'pes', 'plotpes', 'shear')
 # Parameters of the string method that keep the tests short.
 FAST = {'npts': 21, 'extent': [1.5, 1.5], 'h': 0.01, 'nstepmax': 25, 'tol': 1e-3, 'delta': 1e-4}
@@ -75,8 +77,8 @@ def with_shear(run_dir, delta=None, seed=None, mep=None):
 def cucu_run(tmp_path, name='run', steps=STEPS, **mep):
     """The example run with Cu(111) as both slabs, and the fast string method."""
     run_dir = pes_run(tmp_path, name=name, steps=steps)
-    edit_config(run_dir, 'file = "slabs/Al111.json"\nmid = "mp-134"',
-                'file = "slabs/Cu111.json"\nmid = "mp-30"')
+    edit_config(run_dir, 'file = "slabs/Al111.json"\nid = "Al111"',
+                'file = "slabs/Cu111.json"\nid = "Cu111"')
     with_shear(run_dir, mep=FAST | mep)
     return run_dir
 
@@ -384,6 +386,119 @@ def test_the_six_keys_hold_the_first_six_rows_of_the_table_of_the_path(plotted):
 def test_same_values_as_the_vendored_code(analysed):
     expected = by_the_vendored_code(inputs_of(analysed), mep=FAST)
     assert document(analysed)['shearstr'] == expected
+
+
+# --- shear.output -------------------------------------------------------------------------
+
+def read_output(run_dir):
+    """Lines of ``shear.output``, its table of the strengths and its profiles."""
+    lines = shear.output_path(sdir(run_dir)).read_text(encoding='utf-8').splitlines()
+    strengths, profiles, current = {}, {}, None
+    for line in lines:
+        found = re.match(r'# Profile along (\w+): (\d+) points$', line)
+        if found:
+            current = profiles.setdefault(found.group(1), [])
+        elif not line.startswith('#'):
+            words = line.split()
+            if current is None:
+                strengths[words[0]] = (float(words[1]), int(words[2]), float(words[3]))
+            else:
+                current.append([float(word) for word in words])
+    return lines, strengths, {opt: np.array(rows) for opt, rows in profiles.items()}
+
+
+def test_shear_output_written(analysed):
+    assert shear.output_path(sdir(analysed)) == sdir(analysed) / 'shear' / 'shear.output'
+    lines, strengths, profiles = read_output(analysed)
+    assert lines[0] == f'# Shear strength of the interface {CUCU}'
+    text = '\n'.join(lines)
+    assert '[interface.shear]      delta = 0.01, seed = 0' in text
+    assert ("[interface.shear.mep]  npts = 21, extent = [1.5, 1.5], h = 0.01, nstepmax = 25, "
+            "tol = 0.001, delta = 0.0001") in text
+    assert 'J/m^2 per angstrom' in text and 'first six rows of the profile' in text
+    shearstr = document(analysed)['shearstr']
+    assert list(strengths) == list(profiles) == list(OPTIMIZATIONS)
+    for opt in OPTIMIZATIONS:
+        entry = shearstr[f'along_{opt}']
+        strength, nstep, tol = strengths[opt]
+        assert strength == pytest.approx(entry['shear_strength_GPa'], rel=1e-9)
+        assert nstep == entry['nstep'] and tol == pytest.approx(entry['tol'], rel=1e-3)
+        profile = profiles[opt]
+        assert profile.shape == (FAST['npts'], 8)
+        x, y, lxy, force = profile[:, 0], profile[:, 1], profile[:, 2], profile[:, 7]
+        # The six keys of the document are the first six rows of the profile (A98).
+        keys = np.array([entry[key] for key in ('lxy', 'dvx', 'dvy', 'vz', 've', 'force')])
+        np.testing.assert_allclose(profile[:6, 2:], keys, rtol=1e-9)
+        # The shear strength is 10 times the largest force, and lxy the length along x, y.
+        assert 10 * np.max(np.abs(force)) == pytest.approx(strength, rel=1e-9)
+        np.testing.assert_allclose(np.diff(lxy), np.hypot(np.diff(x), np.diff(y)), rtol=1e-6)
+        assert lxy[0] == 0 and min(profile[:, 5]) == 0 and min(profile[:, 6]) == 0  # vz, ve
+
+
+def test_the_profile_is_the_table_of_the_vendored_code(analysed):
+    inputs = inputs_of(analysed)
+    cell = np.array(inputs.cell)
+    solver = PES(np.array(inputs.pes_jm2), cell)
+    solver.make_pes(replicate_of=(5, 5), density=20, tol=1e-4)
+    string = MEP(rbf=solver._rbf, cell=cell)
+    string.get_mep(method='zerotemp', optimization='x', **FAST)
+    _, table = string.get_shear_strenght(delta=0.01, npts=FAST['npts'], optimization='x')
+    profile = read_output(analysed)[2]['x']
+    np.testing.assert_allclose(profile, np.column_stack((string.mep, table)), rtol=1e-9,
+                               atol=1e-300)
+
+
+def test_done_needs_shear_output(analysed_copy):
+    assert shear.ShearStep().done(analysed_copy, CUCU)
+    shear.output_path(sdir(analysed_copy)).unlink()
+    assert not shear.ShearStep().done(analysed_copy, CUCU)
+
+
+def test_the_figures_of_the_paths(analysed):
+    files = shear.figure_files(sdir(analysed), 'Cu111-Cu111')
+    assert [path.name for path in files] == ['mep_Cu111-Cu111.png', 'mep_Cu111-Cu111.pdf',
+                                             'mep_profile_Cu111-Cu111.png',
+                                             'mep_profile_Cu111-Cu111.pdf']
+    for path in files:
+        assert path.read_bytes()[:4] in (b'\x89PNG', b'%PDF')
+    # Nothing else in the folder of the step: the temporary files are renamed.
+    assert sorted(p.name for p in (sdir(analysed) / 'shear').iterdir()) == \
+        sorted(['shear.output'] + [path.name for path in files])
+
+
+@pytest.mark.parametrize('index', range(4))
+def test_done_needs_the_figures(analysed_copy, index):
+    shear.figure_files(sdir(analysed_copy), 'Cu111-Cu111')[index].unlink()
+    assert not shear.ShearStep().done(analysed_copy, CUCU)
+
+
+@pytest.mark.parametrize('index', range(5))
+def test_done_needs_the_files_of_the_analysis_saved(analysed_copy, index):
+    # A file left by another analysis (another stamp) is not one of the analysis saved.
+    files = [shear.output_path(sdir(analysed_copy)),
+             *shear.figure_files(sdir(analysed_copy), 'Cu111-Cu111')]
+    assert shear.ShearStep().exports(analysed_copy, CUCU)[0] == files
+    restamp(files[index])
+    assert shear.ShearStep().entries_done(analysed_copy, CUCU)
+    assert not shear.ShearStep().done(analysed_copy, CUCU)
+
+
+def test_the_map_of_the_paths_covers_them(analysed):
+    # The paths on the map: the bounds of the map hold every point of the paths, with a margin,
+    # and the interpolation is evaluated one row at a time.
+    from triboworkflow.workflows.interface import figures as figures_module
+
+    settings = load_run(analysed)
+    inputs = shear.shear_inputs(sdir(analysed), read_system(sdir(analysed)), settings)
+    result = shear.compute_shear(inputs, settings.interface.shear)
+    paths = {opt: result.profiles[opt][:, :2] for opt in OPTIMIZATIONS}
+    x0, x1, y0, y1 = figures_module.path_bounds(paths)
+    points = np.vstack(list(paths.values()))
+    assert x0 < points[:, 0].min() and x1 > points[:, 0].max()
+    assert y0 < points[:, 1].min() and y1 > points[:, 1].max()
+    x, y, z = figures_module.pes_map(result.solver, (x0, x1, y0, y1), rows=True)
+    whole = result.solver.rbf(x.reshape(1, -1), y.reshape(1, -1)).reshape(x.shape)
+    assert np.allclose(z, whole - whole.min(), atol=1e-12) and z.min() == 0
 
 
 def test_the_arguments_of_the_string_method_are_the_settings():
@@ -697,6 +812,7 @@ def test_failure_of_a_string_writes_nothing(plotted_copy, monkeypatch):
     assert 'shearstr' not in document(plotted_copy)
     assert not SystemWriter(sdir(plotted_copy)).lock_path.exists()
     assert not shear.ShearStep().done(plotted_copy, CUCU)
+    assert not any(shear.output_path(sdir(plotted_copy)).parent.glob('*'))  # nor a partial file
 
 
 def test_entries_changed_during_the_analysis(plotted_copy, monkeypatch):
@@ -760,20 +876,19 @@ def no_string(monkeypatch):
 
 
 def test_the_passes_never_analyse_the_shear(plotted_copy, fake_slurm, monkeypatch):
+    # Without [execution.analysis], the job has the jobscript of [execution].
     calls = no_string(monkeypatch)
     orch = build_orchestrator(plotted_copy)
     report = orch.run_pass()
     assert statuses(orch) == {'match': 'completed', 'pes': 'completed', 'plotpes': 'completed',
-                              'shear': 'manual'}
-    assert orch.entry(CUCU, 'shear')['reason'] == (
-        'to analyse by hand: run "triboworkflow analyse shear" where there is enough memory, or '
-        'give [execution.analysis] to analyse it in a job of its own')
-    assert report.finished and not report.success and calls == []
+                              'shear': 'running'}
+    assert orch.entry(CUCU, 'shear')['reason'] == \
+        f'analysis in a job of its own, group {CUCU}.shear.1'
+    assert not report.finished and fake_slurm.submitted == 1 and calls == []
 
 
 def test_analysis_by_hand_completes_the_step(plotted_copy, fake_slurm, monkeypatch):
     calls = no_string(monkeypatch)
-    build_orchestrator(plotted_copy).run_pass()
     assert build_orchestrator(plotted_copy).analyse_step(CUCU, 'shear').status == 'completed'
     assert len(calls) == 1
     orch = build_orchestrator(plotted_copy)
@@ -785,12 +900,12 @@ def test_analysis_by_hand_completes_the_step(plotted_copy, fake_slurm, monkeypat
 def test_analyse_by_hand_from_the_command_line(plotted_copy, fake_slurm, fake_scheduler_bin,
                                                monkeypatch, capsys):
     calls = no_string(monkeypatch)
-    assert cli(plotted_copy, 'prepare', 'shear') == 0  # left to the user, not an error
-    assert f'{CUCU}/shear: manual (to analyse by hand: run "triboworkflow analyse shear"' in \
+    assert cli(plotted_copy, 'prepare', 'shear') == 0  # nothing to prepare, not an error
+    assert (f'{CUCU}/shear: waiting (ready: nothing to prepare; its analysis runs in a job of '
+            'its own, submitted by "submit shear" or by the orchestrator)') in \
         capsys.readouterr().out
-    assert cli(plotted_copy, 'submit', 'shear') == 1
-    assert 'it is analysed by hand, with "analyse shear"' in capsys.readouterr().err
     assert calls == []
+    # By hand, before any job of the analysis.
     assert cli(plotted_copy, 'analyse', 'shear') == 0
     assert f'{CUCU}/shear: completed' in capsys.readouterr().out and len(calls) == 1
     # Again: recognised from the entries, nothing computed.
@@ -819,10 +934,10 @@ def test_shear_waits_for_plotpes_in_the_run(tmp_path, fake_slurm):
                                                        system=CUCU))
     orch = build_orchestrator(run_dir)
     orch.run_pass()
-    # plotpes is left to the user and shear, which needs it, does not go on.
-    assert statuses(orch) == {'match': 'completed', 'pes': 'completed', 'plotpes': 'manual',
-                              'shear': 'blocked'}
-    assert orch.entry(CUCU, 'shear')['reason'] == 'depends on plotpes manual'
+    # plotpes runs in its job and shear, which needs it, waits for it.
+    assert statuses(orch) == {'match': 'completed', 'pes': 'completed', 'plotpes': 'running',
+                              'shear': 'waiting'}
+    assert orch.entry(CUCU, 'shear')['reason'] == 'waits for plotpes'
 
 
 def test_the_job_analyses_while_the_orchestrator_holds_the_run(plotted_copy, analysed):

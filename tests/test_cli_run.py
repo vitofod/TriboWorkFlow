@@ -16,8 +16,9 @@ import shutil
 import pytest
 
 from cli_helpers import EXAMPLE, ROOT, SYSTEM, fake_steps, write_run  # noqa: F401 (fixture)
-from triboworkflow.cli.run import (CONFIG_FILE, RunError, build_orchestrator, daemon_factory,
-                                   load_run, resolve_groups, system_name, terminal_ask)
+from triboworkflow.cli.run import (CONFIG_FILE, GROUPS_DEFAULT, GROUPS_OVERRIDE, RunError,
+                                   build_orchestrator, daemon_factory, load_run, resolve_groups,
+                                   system_name, terminal_ask)
 from triboworkflow.core.settings.schema import INTERFACE_STEPS
 from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
 from triboworkflow.workflows.interface.registry import STEPS, StepNotAvailable, get_step
@@ -42,26 +43,36 @@ def test_structure_settings_have_no_steps(tmp_path):
 
 
 def test_system_is_the_interface_of_the_two_slabs(tmp_path):
-    assert system_name(load_run(write_run(tmp_path))) == SYSTEM == 'mp-30_mp-134'
+    assert system_name(load_run(write_run(tmp_path))) == SYSTEM == 'Cu111_Al111'
 
 
-@pytest.mark.parametrize('given, toml, answer, expected', [
-    (4, 10, None, 4), (None, 10, None, 10), (None, None, 3, 3),
-])
-def test_groups_resolution(tmp_path, caplog, given, toml, answer, expected):
-    settings = load_run(write_run(tmp_path, groups=toml))
-    ask = (lambda: answer) if answer is not None else None
+def test_groups_resolution(tmp_path, caplog):
+    never = lambda: pytest.fail('nothing to ask')  # noqa: E731
+    steps = ('match', 'pes', 'ppes')
+    settings = load_run(write_run(tmp_path, steps=steps, groups=10))
     with caplog.at_level('INFO'):
-        assert resolve_groups(settings, given, ask) == expected
-    origin = {4: '--groups', 10: '[execution].groups', 3: 'terminal'}[expected]
-    assert f'groups: {expected}' in caplog.text and origin in caplog.text
+        # --groups holds for every step, over their sections.
+        assert resolve_groups(settings, 4, never) == (4, True)
+        assert 'groups: 4, from --groups' in caplog.text
+        caplog.clear()
+        # The settings give every step: pes its section, ppes [execution].
+        assert resolve_groups(settings, None, never) == (None, False)
+        assert 'groups: pes 6 (from [execution.pes]), ppes 10 (from [execution])' in caplog.text
+        caplog.clear()
+        # ppes has none: the answer takes the place of [execution].groups.
+        settings = load_run(write_run(tmp_path, steps=steps, groups=None, name='none'))
+        assert resolve_groups(settings, None, lambda: 3) == (3, False)
+        assert 'groups: 3, from the answer in the terminal, for pes, ppes' in caplog.text
+        # Only the steps the command writes groups for.
+        assert resolve_groups(settings, None, None, steps=['match']) == (None, False)
 
 
 def test_groups_missing_without_terminal_is_an_error(tmp_path):
     settings = load_run(write_run(tmp_path, groups=None))
     ask = terminal_ask(io.StringIO('5\n'), io.StringIO())
     assert ask is None
-    with pytest.raises(RunError, match=r'groups not given: set \[execution\]\.groups or pass '
+    with pytest.raises(RunError, match=r'groups not given for pes: set groups in their sections '
+                                       r'\[execution.<step>\] or in \[execution\], or pass '
                                        '--groups'):
         resolve_groups(settings, None, ask)
 
@@ -138,6 +149,16 @@ def test_daemon_factory_takes_the_groups_of_start(tmp_path, fake_steps):
     assert daemon_factory(run_dir, '7').execution.groups == 7
     with pytest.raises(RunError, match='groups not given'):  # no terminal in the background
         daemon_factory(run_dir)
+    # --groups holds for every step; an answer only for those without groups of their own.
+    run_dir = write_run(tmp_path, steps=('match', 'pes', 'ppes'), groups=None, name='kinds')
+    config = run_dir / CONFIG_FILE
+    config.write_text(config.read_text().replace('[execution.pes]\n',
+                                                 '[execution.pes]\ngroups = 6\n'))
+    override = daemon_factory(run_dir, '7', GROUPS_OVERRIDE).execution
+    assert (override.groups_of('pes'), override.groups_of('ppes')) == (7, 7)
+    answer = daemon_factory(run_dir, '7', GROUPS_DEFAULT).execution
+    assert (answer.groups_of('pes'), answer.groups_of('ppes')) == (6, 7)
+    assert daemon_factory(write_run(tmp_path, name='given')).execution.groups_of('pes') == 6
 
 
 def test_orchestrator_of_the_run(tmp_path, fake_steps):

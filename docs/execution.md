@@ -56,8 +56,9 @@ jobscript (`execution/jobs.py`):
 
 - `manifest.json`: the calculations, in the order the workers take them, and
   how to run them: scheduler, `run_command`, `pp_command` (null when not
-  given), `walltime`, `max_seconds_margin` (from `[execution]`, see
-  `configuration.md`) and the digest of the jobscript of the user
+  given), `walltime` (in seconds, the one of the step in
+  `[execution.<step>]`, `24:00:00` when not given), `max_seconds_margin`
+  (from `[execution]`, see `configuration.md`) and the digest of the jobscript of the user
   (`jobscript_digest`). A group with a calculation that gives the charge
   density is not written without `pp_command`, nor if that calculation has
   no `input.ppi`. Each calculation names the
@@ -86,7 +87,8 @@ jobscript (`execution/jobs.py`):
 - `withdrawn.json`: only for a group withdrawn before any of its jobs was
   submitted (see *Preparation and replacement*).
 
-`submit_jobs` submits the jobscript once per worker, `groups` times but never
+`submit_jobs` submits the jobscript once per worker, `groups` times (the
+jobs per group of the step, `ExecutionParams.groups_of`) but never
 more than the calculations of the group (the reduction is logged), from the
 directory of the group, where the scheduler writes the logs. With 16
 calculations, `groups = 1` runs them one after the other, `groups = 4` up to
@@ -155,7 +157,9 @@ plans `min(count, calculations)` jobs; each `cycle`:
    counts, and so does every submission of outcome not known.
 
 A failed submission is never repeated automatically. A refused one (no job
-created) waits for `clear_refusal`; one of outcome not known takes the place
+created) waits for `clear_refusal` (`triboworkflow clear-refusal`, which also
+gives a group none of whose jobs was submitted the walltime of its step in
+`[execution.<step>]` as it is then); one of outcome not known takes the place
 of a job, stops the group and survives a restart until `resolve_submission`
 registers the job found, or frees its place.
 
@@ -263,11 +267,17 @@ user. A manual relaunch runs pw.x again from scratch, then pp.x.
 
 **Time limit.** `max_seconds` of each attempt is `walltime` minus the time
 since the worker started minus `max_seconds_margin`, capped by the
-`max_seconds` of `input.pwi` when given. pw.x then stops in time to write its
+`max_seconds` of `input.pwi` when given (the settings of a workflow do not
+give it: an error in `[namelists.CONTROL]`). pw.x then stops in time to write its
 restart files. When nothing is left, the worker takes no more calculations.
 pp.x runs in the time `max_seconds_margin` keeps free, with no limit of its
 own: the margin must cover it too.
-The `walltime` of `[execution]` must be the one of the jobscript. In
+The walltime is the one of the manifest, which every job of the group is
+submitted with (`sbatch --time=HH:MM:SS` and the like, `configuration.md`,
+`[execution.<step>]`): the scheduler and the worker use the same value, and
+a time limit in the jobscript is overridden by the command line. The jobs
+are named `<step>_<name>` by the same command (`jobs.job_name`: `<name>` is
+the `--job-name` of the jobscript with Slurm, else the system). In
 `input.pwi`, `max_seconds`, `nstep` and `restart_mode` must be alone on
 their line of `&CONTROL`, `mixing_beta` on its line of `&ELECTRONS`, when
 given.
@@ -482,19 +492,20 @@ Each pass:
    step that wrote it is still current): one no longer current is **waiting**
    again, and is evaluated again in the same pass. A step whose dependency failed or is
    blocked is **blocked**; one whose dependency is not completed is
-   **waiting**; the steps of a system run one at a time. A step starts by
+   **waiting**; a step whose dependencies are all completed starts whatever
+   the other steps of the system are doing (*Steps that run together*,
+   below). A step starts by
    checking its entries (already done and current: **completed** without
    running) and the entries it reads (`check_prerequisites`: missing or
    stale, **blocked** with what is missing, nothing computed again), then
    prepares its calculations. A step whose analysis needs a compute node
    (`Step.manual_analysis`: `plotpes`, `plotpes_scf`, `shear`) is checked the same
-   way once ready, and never analysed by the orchestrator: with
-   `[execution.analysis]` it is analysed in a job of its own (below,
-   *Analyses in a job of their own*); without it, when it is not completed
-   or blocked it is **manual**, with the command that analyses it (`to
-   analyse by hand: run "triboworkflow analyse plotpes" where there is
-   enough memory, or give [execution.analysis] …`), and a step that depends
-   on it is **blocked** (`depends on plotpes manual`) until it is completed. Right after the preparation, and before a
+   way once ready, and never analysed by the orchestrator: it is analysed in
+   a job of its own (below, *Analyses in a job of their own*). An
+   orchestrator built without a jobscript for the analyses (none in a run,
+   which always has the one of `[execution]`) leaves it **manual** instead,
+   with the command that analyses it, and a step that depends on it is
+   **blocked** (`depends on plotpes manual`) until it is completed. Right after the preparation, and before a
    **running** step is followed, the calculations prepared are compared with
    those the settings give now (`Step.plan`: `calc_id` and fingerprint): one
    missing, one no longer given or a fingerprint that differs makes the step
@@ -526,31 +537,45 @@ until `retry`. After a restart, or a pass interrupted at any point, the next
 pass recovers the jobs, reconciles the attempts and only then submits,
 without duplicates.
 
+**Steps that run together.** The steps of a system of which neither reads
+the other, even through other steps, run at the same time: `pes` and
+`pes_scf`; the jobs of `plotpes` and `plotpes_scf` while `adhesion` runs its
+calculations; `shear` with `adhesion`, `ppes` and `charge`; `ppes` with
+`charge`. Such steps read and write different entries of `system.json`
+(a test of the chain of the nine steps checks it on every pair), so the
+order in which they end changes no number. Their saves take turns on the
+lock of `system.json`: a writer that finds it taken waits for it, trying
+every second, up to ten minutes (`SystemWriter`), then stops with the owner
+of the lock in the error. More jobs in the queue at once can meet the limits
+of the queue: a submission refused is handled as any other
+(`clear-refusal`). The original workflow ran the steps one after the other.
+
 A **manual** step ends the passes as a failure does: the orchestrator exits
 when every step is completed, failed, blocked or manual, so it never waits
-for the user while holding the run, and the workflow has not succeeded. The
-user then runs `analyse <step>` where there is enough memory, with the
-orchestrator ended or stopped (it holds `run.lock`); the command holds the
-lock for the whole analysis, saves the step as **running** with no
-calculations before it starts, and **completed** at its end. The next
-`start` finds it completed from its entries, without analysing it again, and
-goes on with the steps that depend on it. An analysis stopped before its end
-(a signal, the walltime of a job) writes nothing: the step stays running with
-no calculations, a pass leaves it manual again without analysing it, and the
-next `analyse` starts it from the beginning, or the next pass gives it to a
-job with `[execution.analysis]`. The interpolation of the PES never runs in
-the orchestrator because its memory grows with the square of its points
+for the user while holding the run, and the workflow has not succeeded.
+Outside the orchestrator the user can run `analyse <step>` where there is
+enough memory, with the orchestrator ended or stopped (it holds
+`run.lock`); the command holds the lock for the whole analysis, saves the
+step as **running** with no calculations before it starts, and **completed**
+at its end. The next `start` finds it completed from its entries, without
+analysing it again, and goes on with the steps that depend on it. An
+analysis stopped before its end (a signal, the walltime of a job) writes
+nothing: the step stays running with no calculations, and the next
+`analyse` starts it from the beginning, or the next pass gives it to a job
+of its own. The interpolation of the PES never runs in the orchestrator
+because its memory grows with the square of its points
 ([interface.md](interface.md)).
 
 ### Analyses in a job of their own
 
-With `[execution.analysis]` ([configuration.md](configuration.md)) a ready
-step with `Step.manual_analysis` gets a group of jobs
+A ready step with `Step.manual_analysis` gets a group of jobs
 `jobs/<system>.<step>.<k>/`, as the calculations do, holding:
 
-- `analysis.json`: system, step, scheduler and digest of the jobscript, in
-  place of `manifest.json`;
-- `jobscript.sh`: the jobscript of `[execution.analysis]`, copied unchanged,
+- `analysis.json`: system, step, scheduler, walltime (in seconds, the one of
+  the step in `[execution.<step>]`, given to the submission of the job)
+  and digest of the jobscript, in place of `manifest.json`;
+- `jobscript.sh`: the jobscript of `[execution.analysis]`, else the one of
+  `[execution]` ([configuration.md](configuration.md)), copied unchanged,
   with one line added that runs the analysis: `<python> -m
   triboworkflow.cli.analysis_job <run>/jobs/<group>/analysis.json`;
 - `submitted.json`, as for every group, and `outcome.json`, written by the
@@ -574,8 +599,9 @@ at every pass:
   its end (walltime, memory, node)` when it wrote none) and the folder of its
   logs. It is never submitted again automatically, whatever the state: the
   analysis has no checkpoint, and a job killed for its memory or walltime
-  would be killed again. The user gives the jobscript what it needs and runs
-  `retry <step>`; the next pass writes a new group, `<k>` + 1.
+  would be killed again. The user gives the jobscript, or the walltime of the
+  step, what it needs and runs `retry <step>`; the next pass writes a new
+  group, `<k>` + 1.
 
 The job runs `Step.analyse`, as `analyse` does by hand, after checking that
 the step is not done yet and that its prerequisites are current. It never
@@ -583,8 +609,8 @@ takes `run.lock`, which the orchestrator holds, and writes only the entries
 of its step (under the lock of `system.json`, after checking again the
 entries it read) and its outcome; it exits without analysing if a later
 group of the step exists (a `retry` replaced it) or the group was withdrawn.
-The steps of a system still run one at a time: a step waits while the job of
-another runs, and the job waits for the steps that run. After an
+The job of an analysis runs together with the other steps of the system
+that are ready (*Steps that run together*). After an
 interruption between the writing of the group and the saving of the state,
 the next pass takes the group again instead of writing another, so two jobs
 never run the same analysis. `analyse <step>` by hand is refused while the
@@ -764,9 +790,10 @@ The report says whether each calculation ran at most once, compares the
 exit code of the fake engine with the one the worker saw through the
 launcher, lists the `max_seconds` written for each job, how the
 calculations were spread over jobs and hosts, and the logs that cannot be
-read. With a short walltime (e.g.
-`--walltime 900 --margin 600 --sleep 120` and `--time=00:15:00`) each
-worker stops after three calculations for lack of time.
+read. `--walltime` is given to the submission of each job (`sbatch
+--time`), over the `--time` of the jobscript. With a short walltime (e.g.
+`--walltime 900 --margin 600 --sleep 120`) each worker stops after three
+calculations for lack of time.
 
 **Locks.** Many processes on several nodes try to take the same locks, with
 `O_EXCL` and with `mkdir`; within one allocation (e.g. `salloc -N 2`):

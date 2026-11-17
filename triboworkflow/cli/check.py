@@ -17,7 +17,11 @@ class CLICommand(CLICommandBase):
 
 The settings are read as every command reads them: an error names the TOML
 path of the field. The advice on the values changed by the relaunches is
-printed as a warning. Nothing is written.
+printed as a warning. The walltime and the jobs per group of each step are
+printed; the steps without a walltime in [execution.<step>] (they get
+24:00:00) and, with Slurm, the jobscripts with a --time, which the walltimes
+replace, are printed as warnings. The placeholders left in the settings and
+in the jobscripts (e.g. <venv>) are listed. Nothing is written.
 
 Example:
  $ triboworkflow check
@@ -32,7 +36,7 @@ Example:
     def run(self, args, run_dir, settings):
         from triboworkflow.core.settings import SCHEMA_VERSION, load_settings
 
-        from .run import config_file, system_name
+        from .run import config_file, print_placeholders, print_step_jobs, system_name
 
         path = config_file(run_dir)
         settings = load_settings(path)
@@ -46,8 +50,9 @@ Example:
         if execution is None:
             print('Execution: no [execution]')
         else:
-            groups = 'not set (give --groups, or answer in a terminal)' \
-                if execution.groups is None else execution.groups
+            groups = 'not set (give them in [execution.<step>], --groups, or answer in a ' \
+                'terminal)' if execution.groups is None else execution.groups
             print(f'Execution: scheduler {execution.scheduler}, groups: {groups}')
-        missing = settings.missing_values()
-        print(f'Placeholders: {", ".join(missing) if missing else "none"}')
+            if settings.interface is not None:
+                print_step_jobs(settings)
+        print_placeholders(settings)

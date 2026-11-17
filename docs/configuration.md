@@ -24,7 +24,8 @@ settings.require_complete()                 # SettingsError if placeholders are 
   keys the generator writes itself, the conventions of the project
   (`ibrav = 0`, cell and positions in angstrom, `scf` and `relax` only), and
   the keys the relaunches change: `max_seconds`, written for
-  every run, and `nstep` and `mixing_beta`, checked here and changed by the
+  every run from the walltime (an error in `[namelists.CONTROL]` of a
+  workflow), and `nstep` and `mixing_beta`, checked here and changed by the
   remedies (see [Values changed by the relaunches](#values-changed-by-the-relaunches)),
   and `wfcdir`, which the relaunches remove (see below).
 - **The other tables are strict.** In the tables of the project
@@ -252,6 +253,65 @@ The `pw.x` expected on the machine that runs the calculations.
   automatically: an analysis that needs them (e.g. an adhesion energy)
   stops with an error that names the calculations and the missing parts.
 
+## `[mlip]`
+
+The machine-learned interatomic potential (MLIP) of the calculations that use
+one. Optional; one model for the whole run. The table is read and checked,
+but no step uses it yet: the engines of `[interface]` are still `qe` only.
+
+| Key | Type | | Notes |
+|---|---|---|---|
+| `type` | str | R | `DP`, `MACE` or `MACE_MP`, written whole and with its case |
+| `path` | str | R | absolute path of the model file on the machine that runs the calculations: it starts with `/` |
+| `kwargs` | table | `{}` | keyword arguments of the function that loads the model, passed as written |
+| `version` | str | — | version of the package that loads the model, `major.minor` (every `major.minor.x`) or `major.minor.patch` |
+| `fmax` | float | `0.01` | eV/Å: a relaxation stops when no force on an atom is larger; > 0 |
+| `maxsteps` | int | `500` | largest number of steps of a relaxation; ≥ 1 |
+
+The types of model are in `triboworkflow/engines/mlip/registry.py`:
+
+| `type` | Package | Loader in ASE | The path reaches it as | Set by the workflow | Required in `kwargs` with ASE | Backends |
+|---|---|---|---|---|---|---|
+| `DP` | `deepmd-kit` | `deepmd.calculator.DP` | first argument | — | — | `ase`, `lammps` |
+| `MACE` | `mace-torch` | `mace.calculators.MACECalculator` | `model_path` | `device = "cuda"` | `default_dtype` | `ase`, `lammps` |
+| `MACE_MP` | `mace-torch` | `mace.calculators.mace_mp` | `model` | `device = "cuda"` | `default_dtype` | `ase` |
+
+```toml
+[mlip]
+type = "MACE_MP"                   # A universal MACE model (e.g. MACE-OMAT-0).
+path = "/path/to/mace-omat-0-medium.model"
+version = "0.3.14"                 # Version of mace-torch; optional.
+kwargs = { default_dtype = "float64", head = "Omat24" }
+fmax = 0.01                        # Default, eV/angstrom.
+maxsteps = 500                     # Default.
+```
+
+- **The model file is not looked at**: existence, content and size are not
+  checked, and the settings are also read where the file does not exist. The
+  user chooses the model, carries it to the machine that runs the
+  calculations and writes its path; the loader fails there if the file is
+  wrong. That is why the path must be absolute: the calculations run in a
+  directory of their own, where a relative path would not lead to the model.
+- **GPU only.** MLIP calculations run on GPU: for the types that take it,
+  `device` is `cuda` and cannot be changed. `device`, and the key with which
+  the path reaches the loader (`model_path`, `model`), are refused in
+  `kwargs`, since the loader would receive them twice. The keys of another
+  type are not refused: `DP` takes neither of them from the workflow.
+- **`kwargs` is passed as written**, after what the workflow sets, and is
+  never completed with defaults. `head` of MACE reaches the loader only if it
+  is written in `kwargs`; no head is chosen otherwise.
+- **`default_dtype`** (`"float32"` or `"float64"`) of `MACE` and `MACE_MP`
+  changes the energies, so with the `ase` backend it must be written in
+  `kwargs`: it is never filled in. A step that chooses the `ase` backend
+  checks it; the table alone cannot, since the backend is not known when the
+  file is read. With `lammps` the precision is that of the model file, and
+  `kwargs` is not used.
+- **A new type** is added with `register_model_type` of the registry, which
+  also makes it valid in this table. The registry only describes the call of
+  the ASE loader (`ase_calculator_call`: name of the function, arguments) and
+  imports no MLIP library (`torch`, `mace`, `deepmd`), which live in a
+  separate environment.
+
 ## Fingerprint and energy model
 
 Each calculation has a fingerprint, which tells whether an existing result
@@ -297,40 +357,122 @@ Needed only to run on HPC. No value is tied to a specific machine.
 | Key | Type | | Notes |
 |---|---|---|---|
 | `scheduler` | str | R | `slurm`, `pbs`, `torque`, `lsf`, `sge`, `htcondor`, `condor` (the names of Xsorb) |
-| `jobscript` | str | R | user jobscript, relative to the folder of the settings file; copied for every group of jobs with the launch line of the worker added, never changed |
+| `jobscript` | str | R | user jobscript, relative to the folder of the settings file: resources and environment of every job of the run (the calculations and, without `[execution.analysis]`, the analyses); copied for every group of jobs with the launch line added, never changed. Walltime and name of the jobs come from the settings (below) |
 | `run_command` | str | R | command up to the input file, e.g. `mpirun -np 32 pw.x -nk 4` |
 | `pp_command` | str | none | command of pp.x up to the input file, e.g. `mpirun -np 32 pp.x`: run after pw.x, in the same job, in the calculations that also give the charge density (the charge analysis, [qe_charge.md](qe_charge.md)); required only when such calculations are prepared or submitted, not empty |
-| `walltime` | int | R | > 0 s, walltime of each job; keep it equal to the one of the jobscript |
 | `polling_interval` | int | R | > 0 s, time between two checks of the jobs |
-| `groups` | int | none | > 0, jobs (workers) over which the calculations of a group are spread: 1 runs them one after the other, one per calculation runs them all at once; never more jobs than calculations are submitted. When left out, give it on the command line (`--groups`); in a terminal the command asks for it, elsewhere it stops with an error |
-| `max_seconds_margin` | int | `600` | > 0 s and < `walltime`, time kept free at the end of the walltime |
+| `groups` | int | none | > 0, jobs (workers) over which the calculations of a group are spread, for the steps without `groups` in their section (below): 1 runs them one after the other, one per calculation runs them all at once; never more jobs than calculations are submitted. When a step that runs calculations has no value, give it on the command line (`--groups`); in a terminal the command asks for it, elsewhere it stops with an error |
+| `max_seconds_margin` | int | `600` | > 0 s and below the walltime of every step of `[interface].steps` that runs calculations (the walltime of a step not run is not compared), time kept free at the end of the walltime |
 | `job_report_wait` | int | `3600` | > 0 s, time after its submission during which a job that the scheduler does not report is still waited for; after that it needs attention, and it is never submitted again automatically |
+| `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`, `plotpes`, `plotpes_scf`, `shear` | table | see below | `[execution.<step>]`: walltime and jobs per group of the jobs of the step |
 
-Before each run the worker writes `max_seconds` in the input it runs:
-`walltime` minus the time since the worker started minus
-`max_seconds_margin`, capped by the
-`max_seconds` of `[namelists.CONTROL]` when given. pw.x then stops in time to
-write its restart files. When nothing is left, the worker takes no more
-calculations. The margin must cover the time between two checks of pw.x, the
-writing of the restart files and the commands of the jobscript that run
-before the worker; 600 s is a starting value. Both values are recorded with
-each run.
+Before each run the worker writes `max_seconds` in the input it runs: the
+walltime of its step minus the time since the worker started minus
+`max_seconds_margin`. pw.x then stops in time to write its restart files.
+When nothing is left, the worker takes no more calculations. The margin must
+cover the time between two checks of pw.x, the writing of the restart files
+and the commands of the jobscript that run before the worker; 600 s is a
+starting value. Both values are recorded with each run. `max_seconds` in
+`[namelists.CONTROL]` of a workflow is an error: the walltime of the step
+gives it.
+
+### `[execution.<step>]`
+
+The jobs of each step that submits them, in a section of its own:
+`[execution.pes]`, `[execution.pes_scf]`, `[execution.adhesion]`,
+`[execution.ppes]`, `[execution.charge]` (the jobs of the calculations) and
+`[execution.plotpes]`, `[execution.plotpes_scf]`, `[execution.shear]` (the
+job of the analysis).
+
+```toml
+[execution.pes]
+walltime = "12:00:00"
+groups = 6
+
+[execution.charge]
+walltime = "04:00:00"
+groups = 1
+
+[execution.plotpes]
+walltime = "00:30:00"
+```
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `walltime` | str | `"24:00:00"` | walltime of each job of the step, `"HH:MM:SS"` as `--time` of Slurm; hours may pass 24 (`"48:00:00"`); minutes and seconds are below 60 |
+| `groups` | int | `[execution].groups` | > 0, jobs (workers) per group of the step; only in the sections of the steps that run calculations: `plotpes`, `plotpes_scf` and `shear` run in one job, and `groups` there is an error |
+
+- The walltime goes to the command that submits each job of the step:
+  `sbatch --time=HH:MM:SS` (Slurm), `qsub -l walltime=HH:MM:SS` (PBS,
+  Torque), `qsub -l h_rt=HH:MM:SS` (SGE), `bsub -W HH:MM` (LSF, minutes
+  rounded up). HTCondor takes no walltime from the command: there it only
+  sets `max_seconds`. The jobscript is never changed; a time limit written
+  in it is overridden by the command line (with Slurm, `check` and `start`
+  warn about a `--time` in the jobscripts).
+- The jobs are named `<step>_<name>`, `<name>` being the `--job-name` (or
+  `-J`) of the jobscript with Slurm, else the system: with
+  `#SBATCH --job-name=testFe` the jobs of `ppes` are `ppes_testFe`, those of
+  `charge` `charge_testFe`. The name goes to the same command (`--job-name`
+  with Slurm, `-N` with PBS, Torque and SGE, `-J` with LSF; none with
+  HTCondor), over the one of the jobscript.
+- Jobs per group: `--groups` on the command line holds for every step, over
+  the sections; else `groups` of the section of the step; else
+  `[execution].groups`. When a step that runs calculations has none of
+  them, a command in a terminal asks once, and the answer takes the place of
+  `[execution].groups`; elsewhere it stops with an error that names the
+  steps.
+- The section of a step that the run does not request has no effect.
+  Another section or key (a typo, `match`, which submits no job) is an
+  error that lists the keys allowed.
+- A step that submits jobs without a walltime gets `24:00:00`, with a
+  warning from `check` and `start` (`no walltime in [execution.<step>] for
+  …`) and in the log when its group is written. A queue with a shorter limit
+  (e.g. a debug QoS of 30 min) refuses those jobs: the submission is
+  `refused` ([execution.md](execution.md)); write the walltime in the
+  section and run `triboworkflow clear-refusal`.
+- `check` and `start` print the jobs of each step that submits them, e.g.
+  `Jobs of the steps: pes 12:00:00, 6 jobs per group; adhesion 24:00:00
+  (default), 4 jobs per group; plotpes 00:30:00, 1 job`.
+- `walltime` in `[execution]`, as a number of seconds or as the table
+  `[execution.walltime]` (the forms of earlier versions), is an error that
+  points to the sections of the steps.
 
 ### `[execution.analysis]`
 
-Optional: the job of the analyses that need a compute node, i.e. the
-interpolations of the PES (`plotpes`, `plotpes_scf`), whose memory grows with
-the square of the points ([interface.md](interface.md#cost)), and the shear
-strength (`shear`), which interpolates the PES again and then runs the string
-method for a long time. The orchestrator never runs them on the login node:
-with this table it submits each in a job of its own and follows it; without it
-those steps wait to be analysed by hand (`triboworkflow analyse plotpes`). One
-jobscript serves all of them: give it the memory and the walltime of the
-heaviest.
+Optional: a jobscript of its own for the jobs of the analyses that need a
+compute node, i.e. the interpolations of the PES (`plotpes`, `plotpes_scf`),
+whose memory grows with the square of the points
+([interface.md](interface.md#cost)), and the shear strength (`shear`), which
+interpolates the PES again and then runs the string method for a long time.
+The orchestrator never runs them on the login node: it submits each in a job
+of its own and follows it, with the jobscript of this table, else with the
+one of `[execution]`. They run Python only, so a lighter jobscript is enough:
+one GPU where the partition asks for one (e.g. `#SBATCH --gres=gpu:1`), the
+memory of the heaviest, or another queue. The walltime of each is the one of
+its step in `[execution.<step>]`. Outside the orchestrator they can also be
+analysed by hand (`triboworkflow analyse plotpes`).
 
 | Key | Type | | Notes |
 |---|---|---|---|
-| `jobscript` | str | R | jobscript of these jobs, relative to the folder of the settings file; copied for each job with the line that runs the analysis added, never changed. Its lines give memory, walltime and partition (e.g. `#SBATCH --mem=200G`, `#SBATCH --time=04:00:00`) and the threads of the linear algebra (`export OMP_NUM_THREADS=...`); the scheduler is the one of `[execution]` |
+| `jobscript` | str | R | jobscript of these jobs, relative to the folder of the settings file; copied for each job with the line that runs the analysis added, never changed. Its lines give memory and partition (e.g. `#SBATCH --mem=200G`, `#SBATCH --qos=...`) and the threads of the linear algebra (`export OMP_NUM_THREADS=...`); the scheduler is the one of `[execution]` |
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=testFe
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:1
+#SBATCH --mem=64G
+#SBATCH --account=<account>
+#SBATCH --partition=boost_usr_prod
+export OMP_NUM_THREADS=8
+source <venv>/bin/activate
+```
+
+An example for a partition of GPU nodes, with one GPU (the analyses do not
+use it) and the memory of a large interface. `check` lists the placeholders
+like `<account>` left in the jobscripts.
 
 A job that ends without completing its step is never submitted again
 automatically: the step fails with the state of the job, and after the
@@ -341,8 +483,8 @@ one ([execution.md](execution.md), *Analyses in a job of their own*).
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `slabs` | list | R | two `[[interface.slabs]]` entries, slab 1 then slab 2: their order gives the interface id (`mid1_mid2`) and the strain weights (`strain_weight_1` goes with slab 1); the slab on top is decided by the matching (see below) |
-| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both; `plotpes` interpolates `pes` and `plotpes_scf` interpolates `pes_scf`, each run only when listed, also both ([interface.md](interface.md)); `adhesion` reads the PES chosen in `[interface.adhesion]`; `ppes` reads the interface that `adhesion` relaxed, of the kind of `[interface.adhesion]` and at the site of `[interface.ppes]`; `charge` reads the same interface and the density of the slabs; `shear` reads the PES relaxed along z that `plotpes` interpolated (so it needs `pes` and `plotpes`, not `pes_scf`). `plotpes`, `plotpes_scf` and `shear` are analysed in a job of their own with `[execution.analysis]`, or by hand (`analyse plotpes`) |
+| `slabs` | list | R | two `[[interface.slabs]]` entries, slab 1 then slab 2: their order gives the name of the system (`<id1>_<id2>`) and the strain weights (`strain_weight_1` goes with slab 1); the slab on top is decided by the matching (see below) |
+| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both; `plotpes` interpolates `pes` and `plotpes_scf` interpolates `pes_scf`, each run only when listed, also both ([interface.md](interface.md)); `adhesion` reads the PES chosen in `[interface.adhesion]`; `ppes` reads the interface that `adhesion` relaxed, of the kind of `[interface.adhesion]` and at the site of `[interface.ppes]`; `charge` reads the same interface and the density of the slabs; `shear` reads the PES relaxed along z that `plotpes` interpolated (so it needs `pes` and `plotpes`, not `pes_scf`). `plotpes`, `plotpes_scf` and `shear` are analysed in a job of their own (`[execution.analysis]`), or by hand (`analyse plotpes`) |
 | `set_bm` | bool | `true` | strain weights from the bulk moduli of the two materials |
 | `engine` | str | `"qe"` | engine of the steps that run calculations |
 | `engines` | table | `{}` | per-step engine for `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`; only `qe` for now |
@@ -352,17 +494,19 @@ one ([execution.md](execution.md), *Analyses in a job of their own*).
 | Key | Type | | Notes |
 |---|---|---|---|
 | `file` | str | R | slab structure, relative to the folder of the settings file; `""` is a placeholder. A pymatgen JSON slab is used as stored, any other file is turned into a slab ([structures.md](structures.md)) |
-| `mid` | str | R | material id; the interface id is `mid1_mid2` |
+| `id` | str | R | name of the slab chosen by the user, e.g. `"Fe110"` or `"Cu111"`: letters, digits, `-` and `.`, starting with a letter or a digit; no `_`, which joins the two ids. The system is `<id1>_<id2>` (e.g. `Fe110_Fe110`), its folder `systems/<id1>_<id2>` |
 | `miller` | 3 int | R | |
 | `formula` | str | — | given for both slabs together with `name`, or for neither |
 | `name` | str | — | tells apart homonyms (e.g. C diamond, C graphene); given for both slabs together with `formula`, or for neither |
 | `bulk_modulus` | float | R with `set_bm = true` | bulk modulus of the material in GPa; read only with `set_bm = true` |
 
-The ids of the interface are `mid1_mid2`, `formula1_formula2` and
-`name1_name2`. Without `formula` and `name` the interface takes the reduced
-formulas of the slabs and a name made of formula and Miller indices: Cu(111)
-and Al(111) give `Cu_Al` and `Cu111-Al111`. `formula` without `name`, or the
-reverse, or the ids of one slab only, are errors.
+The ids of the interface are `<id1>_<id2>` (the key `mid` of its document),
+`formula1_formula2` and `name1_name2`. Without `formula` and `name` the
+interface takes the reduced formulas of the slabs and a name made of formula
+and Miller indices: Cu(111) and Al(111) give `Cu_Al` and `Cu111-Al111`.
+`formula` without `name`, or the reverse, or the ids of one slab only, are
+errors. The key `mid` of earlier versions (the id of the material in
+Materials Project) is an error that points to `id`.
 
 With `set_bm = true` the workflow sets `strain_weight_1` and
 `strain_weight_2` to the two bulk moduli, replacing any value given in
@@ -524,7 +668,7 @@ shear strength along each path is the largest force along it, in GPa. The
 defaults are the recommended values: the step logs which parameters of a run
 are not the recommended ones. Changing any key
 computes the shear strength again. The step has no calculation of its own: it
-runs in a job of its own with `[execution.analysis]`, or by hand with `analyse
+runs in a job of its own (`[execution.analysis]`), or by hand with `analyse
 shear`, where there is enough memory.
 
 | Key | Type | Default | Notes |

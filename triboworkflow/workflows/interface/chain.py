@@ -74,6 +74,18 @@ def upstream_done(step, run_dir, system):
     return all(other.done(run_dir, system) for other in upstream_steps(step, run_dir))
 
 
+def upstream_entries_done(step, run_dir, system):
+    """Whether the entries of every step that ``step`` reads from are done, whatever their files.
+
+    ``upstream_done`` without the files that the steps upstream write next to
+    their entries: ``entries_done`` of each, where the step has it, else its
+    ``done``. Used by ``entries_done``, which tells the provenance apart from
+    the files.
+    """
+    return all(getattr(other, 'entries_done', other.done)(run_dir, system)
+               for other in upstream_steps(step, run_dir))
+
+
 def not_done_upstream(step, run_dir, system):
     """Names of the steps upstream of ``step`` that are not done, the farthest first.
 

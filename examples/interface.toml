@@ -19,20 +19,22 @@ schema_version = 1
 # potential energy surface relaxed along z, pes_scf the static one: two steps,
 # run when listed, also both. plotpes interpolates pes and plotpes_scf
 # interpolates pes_scf; shear reads the interpolation of plotpes. The three are
-# analysed in a job of their own ([execution.analysis]) or by hand
+# analysed in a job of their own (see [execution.analysis]) or by hand
 # ("triboworkflow analyse plotpes"), where there is enough memory.
 steps = ["match", "pes", "pes_scf", "plotpes", "plotpes_scf", "shear", "adhesion", "ppes", "charge"]
 engine = "qe"                      # Engine of the steps that run calculations.
 # engines = { pes = "qe" }         # Per-step engine: pes, pes_scf, adhesion, ppes, charge.
 set_bm = true                      # Strain weights = bulk moduli of the two materials.
 
-# The two slabs; the interface id is mid1_mid2. The slab on top is the one
-# whose formula and Miller indices come first alphabetically (here Al(111)),
-# whatever the order of this list. formula and name are given for both slabs
-# or for neither: here the interface takes Cu_Al and Cu111-Al111 from the slabs.
+# The two slabs. id names a slab (letters, digits, "-" and ".", no "_"); the
+# system is <id1>_<id2>, here Cu111_Al111, the folder systems/Cu111_Al111. The
+# slab on top is the one whose formula and Miller indices come first
+# alphabetically (here Al(111)), whatever the order of this list. formula and
+# name are given for both slabs or for neither: here the interface takes Cu_Al
+# and Cu111-Al111 from the slabs.
 [[interface.slabs]]
 file = "slabs/Cu111.extxyz"
-mid = "mp-30"
+id = "Cu111"
 # formula = "Cu"
 # name = "Cu-fcc"                  # Tells apart homonyms.
 miller = [1, 1, 1]
@@ -40,7 +42,7 @@ bulk_modulus = 140.0               # GPa, bulk modulus of the material.
 
 [[interface.slabs]]
 file = "slabs/Al111.extxyz"
-mid = "mp-134"
+id = "Al111"
 miller = [1, 1, 1]
 bulk_modulus = 76.0                # GPa
 
@@ -96,7 +98,7 @@ site = "min_site"                  # Default: min_site or max_site, the interfac
 # interpolated (the relaxed one), from the best straight line, the axis x and the axis y of
 # the cell. The values of both tables are the recommended ones, which are also the defaults;
 # the step tells which parameters of a run differ. Changing any of them computes the shear
-# strength again. It is analysed in a job of its own ([execution.analysis]) or by hand
+# strength again. It is analysed in a job of its own (see [execution.analysis]) or by hand
 # ("triboworkflow analyse shear").
 [interface.shear]
 delta = 0.01                       # Default: step (angstrom) of the derivative along each path,
@@ -116,7 +118,6 @@ delta = 1.0e-4                     # Default: step (angstrom) of the derivative 
 
 [namelists.CONTROL]
 nstep = 150                        # Relax; recommended 150, at most 250. Raised by the relaunches.
-max_seconds = 84600                # Seconds; upper limit of the value set from the walltime left.
 tstress = false
 tprnfor = true
 pseudo_dir = "/path/to/pseudo"
@@ -170,24 +171,78 @@ version = "7.2"                    # Required: 7.1 | 7.2 | 7.3, compared with th
 upf_md5 = "pseudo.md5"             # Expected MD5 of the UPF files, relative to this file;
                                    # made with: md5sum *.UPF > pseudo.md5 (in pseudo_dir).
 
+# The MLIP model, for the calculations that use one. Read and checked, but no step uses it yet:
+# the engines above are still qe only.
+# [mlip]
+# type = "MACE_MP"                 # DP | MACE | MACE_MP, written whole.
+# path = "/path/to/mace-omat-0-medium.model"   # Absolute; on the machine that runs the calculations.
+# version = "0.3.14"               # Version of the package that loads the model; optional.
+# kwargs = { default_dtype = "float64", head = "Omat24" }   # Passed to the loader as written.
+#                                  # device is cuda and cannot be given; default_dtype is
+#                                  # required by MACE and MACE_MP with ASE.
+# fmax = 0.01                      # Default: eV/angstrom.
+# maxsteps = 500                   # Default.
+
 [execution]
 scheduler = "slurm"
-jobscript = "jobscript.sh"         # Relative to this file; copied with the worker line added.
+jobscript = "jobscript.sh"         # Relative to this file; copied for every job, with the
+                                   # worker or analysis line added. Resources and environment
+                                   # only: walltime and name of the jobs come from here.
 run_command = "mpirun -np 32 pw.x -nk 4"
 # pp_command = "mpirun -np 32 pp.x"  # Required by the calculations that give the charge
                                      # density (charge): pp.x after pw.x, in the same job.
-groups = 10                        # Jobs (workers); never more than the calculations.
+groups = 10                        # Jobs (workers) per group of the steps without groups in
+                                   # their section; never more than the calculations.
                                    # Optional: else --groups, or asked in a terminal.
-walltime = 86400                   # Seconds, as in the jobscript.
 polling_interval = 1800            # Seconds between two checks of the jobs.
-max_seconds_margin = 600           # Seconds kept free at the end of the walltime.
+max_seconds_margin = 600           # Seconds kept free at the end of the walltime; below the
+                                   # walltime of every step that runs calculations. pw.x gets
+                                   # max_seconds from these: not in [namelists.CONTROL].
 job_report_wait = 3600             # Seconds a submitted job may stay unreported by the scheduler.
 
-# Job of the analyses that need a compute node (plotpes and plotpes_scf, which can need
-# tens of GiB on large interfaces; shear, which takes long): never run by the
-# orchestrator. With this table the orchestrator submits each on a compute node and
-# follows it; without it those steps wait to be analysed by hand (triboworkflow
-# analyse plotpes).
+# The jobs of each step, in a section of its own. walltime: "HH:MM:SS" (hours may pass 24,
+# e.g. "48:00:00"), given to the submission of every job of the step (sbatch --time, qsub
+# -l walltime or h_rt, bsub -W; none with HTCondor), in place of a --time of the
+# jobscripts. A step run without a walltime gets 24:00:00, with a warning from check,
+# start and the log: a queue with a shorter limit (e.g. a debug QoS of 30 min) refuses
+# those jobs. groups: jobs (workers) per group of the step, for the steps that run
+# calculations; else [execution].groups; --groups holds for every step. plotpes,
+# plotpes_scf and shear run in one job each. A section of a step that is not run has no
+# effect. The jobs are named <step>_<name>, <name> being the --job-name of the jobscript
+# (else the system): ppes_testFe.
+[execution.pes]
+walltime = "12:00:00"
+groups = 6
+
+[execution.pes_scf]
+walltime = "04:00:00"
+
+[execution.adhesion]
+walltime = "12:00:00"
+groups = 4
+
+[execution.ppes]
+walltime = "04:00:00"
+
+[execution.charge]
+walltime = "04:00:00"
+groups = 1
+
+[execution.plotpes]
+walltime = "00:30:00"
+
+[execution.plotpes_scf]
+walltime = "00:30:00"
+
+[execution.shear]
+walltime = "00:30:00"
+
+# Jobscript of the analyses in a job (plotpes and plotpes_scf, which can need tens of GiB on
+# large interfaces; shear, which takes long): never run by the orchestrator, always in a
+# job of their own on a compute node. Without this table they use the jobscript of
+# [execution]; with it, a lighter one (they run Python only: one GPU is enough where the
+# partition asks for one, e.g. #SBATCH --gres=gpu:1) or another queue.
 # [execution.analysis]
 # jobscript = "analysis.sh"        # Relative to this file; copied with the analysis line added.
-#                                  # Memory, walltime and partition in its #SBATCH lines.
+#                                  # Memory and partition in its #SBATCH lines; the walltime
+#                                  # is the one of the step in its section above.

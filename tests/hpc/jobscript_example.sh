@@ -4,7 +4,9 @@
 #
 # Jobscript of tests/hpc/qe_check.py: resources and environment only. The
 # worker line (or, in the case single, the pw.x line) is added to a copy of
-# it, and the walltime of each case goes in the --time line. Example for a Slurm
+# it, and the walltime of each case goes in the --time line (and, but for the case
+# single, in [execution.<step>] of its config.toml, given to sbatch). The jobs of a
+# run are named <step>_<job-name>, e.g. pes_qe_check. Example for a Slurm
 # machine with 4 GPUs per node, QE from a module and mpirun as launcher: fill
 # in account and venv, check partition, QoS and module on your machine.
 #SBATCH --job-name=qe_check

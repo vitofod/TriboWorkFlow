@@ -28,6 +28,7 @@ import numpy as np
 import pytest
 
 from cli_helpers import fake_scheduler_bin, fake_slurm  # noqa: F401 (fixtures)
+from test_outputs import restamp
 from test_pes import edit_config, finish, pes_run
 from triboworkflow.cli.analysis_job import run_analysis
 from triboworkflow.cli.main import main
@@ -41,10 +42,11 @@ from triboworkflow.workflows.interface.registry import get_step
 from triboworkflow.vendored.physics.base.solidstate import get_cell_info
 from triboworkflow.vendored.physics.base.units import Converter
 from triboworkflow.vendored.physics.tribology import potensurf
+from triboworkflow.workflows.interface import figures as figures_module
 from triboworkflow.workflows.interface import pes, plotpes
 from triboworkflow.workflows.interface.match import MatchStep
 
-CUCU = 'mp-30_mp-30'
+CUCU = 'Cu111_Cu111'
 STEPS = {'plotpes': plotpes.RelaxedPlotPesStep, 'plotpes_scf': plotpes.StaticPlotPesStep}
 PES_STEPS = {'pes': pes.RelaxedPesStep, 'pes_scf': pes.StaticPesStep}
 PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
@@ -54,8 +56,8 @@ def cucu_run(tmp_path, name='run'):
     """The example run with Cu(111) as both slabs, and every step up to the interpolations."""
     run_dir = pes_run(tmp_path, name=name,
                       steps=('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf'))
-    edit_config(run_dir, 'file = "slabs/Al111.json"\nmid = "mp-134"',
-                'file = "slabs/Cu111.json"\nmid = "mp-30"')
+    edit_config(run_dir, 'file = "slabs/Al111.json"\nid = "Al111"',
+                'file = "slabs/Cu111.json"\nid = "Cu111"')
     return run_dir
 
 
@@ -110,7 +112,13 @@ def system_bytes(run_dir):
 
 
 def figures(run_dir):
+    """The PNG files of the figures of the steps; each has its PDF (``figure_files``)."""
     return sorted(str(path.relative_to(sdir(run_dir))) for path in sdir(run_dir).rglob('*.png'))
+
+
+def figure_files(run_dir, name):
+    """The files of the figure that the step ``name`` left, by name."""
+    return sorted(path.name for path in (sdir(run_dir) / name).glob('pes_*'))
 
 
 def png_size(path):
@@ -183,7 +191,7 @@ def test_name_of_the_interface(ids, title):
 
 
 @pytest.mark.parametrize('ids, message', [
-    ({'mid': 'mp-30_mp-134'}, 'neither a name nor a formula'),
+    ({'mid': 'Cu111_Al111'}, 'neither a name nor a formula'),
     ({'name': 'Cu/Al'}, 'cannot name a file'),
 ])
 def test_name_of_the_interface_errors(ids, message):
@@ -253,16 +261,16 @@ def test_two_interpolations_eV_then_J_m2_with_the_figure(pes_copy, monkeypatch):
                                     load_run(pes_copy), 'plotpes')
     assert [call['E'] for call in calls] == [list(map(list, v)) for v in inputs.values]
     assert [call['title'] for call in calls] == ['Cu111-Cu111'] * 2
-    assert calls[0]['to_fig'] is None
-    assert calls[1]['to_fig'].endswith('.partial.png')
+    # The vendored code draws no figure (DEV-60).
+    assert [call['to_fig'] for call in calls] == [None, None]
 
 
 def test_figures_of_the_two_steps(interpolated):
     assert figures(interpolated) == ['plotpes/pes_Cu111-Cu111.png',
                                      'plotpes_scf/pes_Cu111-Cu111.png']
     first, second = (sdir(interpolated) / name / 'pes_Cu111-Cu111.png' for name in STEPS)
-    # 7 x 7 inches at 300 dpi; the two PES differ, so do the figures.
-    assert png_size(first) == png_size(second) == (2100, 2100)
+    # The two PES differ, so do the figures.
+    assert png_size(first) == png_size(second)
     assert first.read_bytes() != second.read_bytes()
 
 
@@ -289,7 +297,80 @@ def test_message_of_the_analysis(pes_copy, caplog):
     assert lines[2] == (f'{CUCU}: plotpes_scf: PES pes_scf (slab_from_scratch) interpolated: '
                         '4 high-symmetry points, 8 in the cell, 8 after removing the duplicates')
     assert lines[3].startswith(f'{CUCU}: interpolation in eV ')
-    assert lines[4] == f'{CUCU}: figure written in plotpes_scf/pes_Cu111-Cu111.png'
+    assert lines[4] == (f'{CUCU}: figure written in plotpes_scf/: pes_Cu111-Cu111.png and '
+                        'pes_Cu111-Cu111.pdf')
+
+
+# --- figure for an article ----------------------------------------------------------------
+
+FIGURE = ['pes_Cu111-Cu111.pdf', 'pes_Cu111-Cu111.png']
+
+
+def png_dpi(path):
+    """Dots per inch of a PNG, from its chunk pHYs (pixels per metre)."""
+    data = path.read_bytes()
+    at = data.index(b'pHYs') + 4
+    return round(int.from_bytes(data[at:at + 4], 'big') * 0.0254)
+
+
+@pytest.mark.parametrize('name', ['plotpes', 'plotpes_scf'])
+def test_figure_for_an_article(interpolated, name):
+    assert figure_files(interpolated, name) == FIGURE
+    pdf, png = (sdir(interpolated) / name / file for file in FIGURE)
+    assert pdf.read_bytes()[:5] == b'%PDF-'
+    # One column, 8.5 cm (2008 dots at 600 dpi), cropped to what is drawn.
+    width, _ = png_size(png)
+    assert png_dpi(png) == 600 and 1600 < width < 2100
+
+
+def solver_jm2(run_dir):
+    """The interpolation of the PES in J/m^2 of plotpes, as the step computes it."""
+    inputs = plotpes.plotpes_inputs(sdir(run_dir), read_system(sdir(run_dir)), load_run(run_dir),
+                                    'plotpes')
+    solver, *_ = potensurf.get_pes(inputs.all_shifts, inputs.values[1], inputs.cell,
+                                   title=inputs.title, to_fig=None)
+    return solver
+
+
+def test_the_map_is_the_interpolation_on_the_grid_of_the_original_figure(interpolated_copy):
+    # The grid of PES.plot as get_pes called it: two cells along x and y, 300 x 300 points.
+    solver = solver_jm2(interpolated_copy)
+    a, b = (np.sum(np.abs(solver.cell_2d[:, i])) for i in (0, 1))
+    x, y = np.mgrid[0:2 * a:300j, 0:2 * b:300j]
+    z = solver.rbf(x.reshape(1, -1), y.reshape(1, -1)).reshape(300, 300)
+    mx, my, mz = figures_module.pes_map(solver)
+    assert np.array_equal(mx, x) and np.array_equal(my, y)
+    assert np.array_equal(mz, z - z.min()) and mz.min() == 0
+
+
+def test_the_figure_has_no_title_and_a_bar_as_tall_as_the_map(interpolated_copy, monkeypatch):
+    import matplotlib.pyplot as plt
+
+    close, drawn = plt.close, []
+    monkeypatch.setattr(plt, 'close', drawn.append)  # the figure stays open, to be looked at
+    figures_module.pes_figure(solver_jm2(interpolated_copy), interpolated_copy / 'a.png',
+                              interpolated_copy / 'a.pdf')
+    (fig,) = drawn
+    try:
+        ax, bar = fig.axes
+        assert ax.get_title() == '' and fig.get_size_inches()[0] == pytest.approx(8.5 / 2.54)
+        mapped, barred = ax.get_position(), bar.get_position()
+        assert barred.y0 == pytest.approx(mapped.y0, rel=1e-3)
+        assert barred.y1 == pytest.approx(mapped.y1, rel=1e-3) and barred.x0 > mapped.x1
+        assert ax.xaxis.label.get_size() == ax.yaxis.label.get_size() == 9
+        assert bar.yaxis.label.get_size() == 9
+        assert {label.get_size() for label in ax.get_xticklabels() + bar.get_yticklabels()} == {8}
+        (filled,) = [c for c in ax.collections if hasattr(c, 'levels')]
+        assert filled.cmap.name == 'RdYlBu_r'  # the colours of the original figure
+    finally:
+        close(fig)
+
+
+@pytest.mark.parametrize('file', FIGURE)
+def test_done_needs_the_two_files_of_the_figure(interpolated_copy, file):
+    (sdir(interpolated_copy) / 'plotpes' / file).unlink()
+    assert not plotpes.RelaxedPlotPesStep().done(interpolated_copy, CUCU)
+    assert plotpes.StaticPlotPesStep().done(interpolated_copy, CUCU)
 
 
 def test_analysis_again_gives_the_same_document(interpolated_copy):
@@ -311,6 +392,17 @@ def test_done_only_after_the_analysis(pes_copy):
 def test_done_needs_the_figure(interpolated_copy):
     (sdir(interpolated_copy) / 'plotpes' / 'pes_Cu111-Cu111.png').unlink()
     assert not plotpes.RelaxedPlotPesStep().done(interpolated_copy, CUCU)
+    assert plotpes.StaticPlotPesStep().done(interpolated_copy, CUCU)
+
+
+@pytest.mark.parametrize('file', FIGURE)
+def test_done_needs_the_figure_of_the_analysis_saved(interpolated_copy, file):
+    # A figure left by another analysis (another stamp) is not the one of the analysis saved.
+    step = plotpes.RelaxedPlotPesStep()
+    assert sorted(path.name for path in step.exports(interpolated_copy, CUCU)[0]) == \
+        sorted(FIGURE)
+    restamp(sdir(interpolated_copy) / 'plotpes' / file)
+    assert step.entries_done(interpolated_copy, CUCU) and not step.done(interpolated_copy, CUCU)
     assert plotpes.StaticPlotPesStep().done(interpolated_copy, CUCU)
 
 
@@ -380,13 +472,11 @@ def test_without_the_pes_the_step_stops(tmp_path, name):
 
 
 def test_failure_of_the_interpolation_writes_nothing(pes_copy, monkeypatch):
-    def fail(hs_all, E, cell, to_fig=None, **kwargs):
-        if to_fig is not None:
-            potensurf.get_pes(hs_all, E, cell, to_fig=to_fig, **kwargs)
-            raise MemoryError('no memory left')
-        return potensurf.get_pes(hs_all, E, cell, to_fig=to_fig, **kwargs)
+    def fail(solver, png, pdf, stamp=None):
+        figures_module.pes_figure(solver, png, pdf, stamp=stamp)  # written, then the failure
+        raise MemoryError('no memory left')
 
-    monkeypatch.setattr(plotpes, 'get_pes', fail)
+    monkeypatch.setattr(plotpes, 'pes_figure', fail)
     before = system_bytes(pes_copy)
     with pytest.raises(MemoryError):
         plotpes.RelaxedPlotPesStep().analyse(pes_copy, CUCU, [])
@@ -401,8 +491,8 @@ def test_failure_of_the_interpolation_writes_nothing(pes_copy, monkeypatch):
 def test_entries_changed_during_the_interpolation(pes_copy, monkeypatch):
     interpolate = plotpes.interpolate
 
-    def change(inputs, figure):
-        result = interpolate(inputs, figure)
+    def change(inputs, figures=None, stamp=None):
+        result = interpolate(inputs, figures, stamp)
         # Another analysis of the PES in the meantime, with other energies.
         points = document(pes_copy)['highsym']['inter_unique']
         calc_ids = finish(pes_copy, 'pes', {p: -1000.0 - 0.03 * i for i, p in enumerate(points)},
@@ -414,7 +504,7 @@ def test_entries_changed_during_the_interpolation(pes_copy, monkeypatch):
     with pytest.raises(StoreError, match='the entries read changed during the interpolation'):
         plotpes.RelaxedPlotPesStep().analyse(pes_copy, CUCU, [])
     assert 'pes_ev' not in document(pes_copy)['pes']['energy']
-    assert figures(pes_copy) == []
+    assert figures(pes_copy) == [] and not list((sdir(pes_copy) / 'plotpes').iterdir())
     assert not plotpes.RelaxedPlotPesStep().done(pes_copy, CUCU)
 
 
@@ -446,16 +536,19 @@ def no_pes_analysis(monkeypatch):
 
 
 def test_the_passes_never_interpolate(pes_copy, fake_slurm, monkeypatch):
+    # Without [execution.analysis], the job of each analysis has the jobscript of [execution].
     calls = count_get_pes(monkeypatch)
     orch = build_orchestrator(pes_copy)
     report = orch.run_pass()
     assert statuses(orch) == {'match': 'completed', 'pes': 'completed', 'pes_scf': 'completed',
-                              'plotpes': 'manual', 'plotpes_scf': 'manual'}
+                              'plotpes': 'running', 'plotpes_scf': 'running'}
     for name in STEPS:
-        assert orch.entry(CUCU, name)['reason'] == (
-            f'to analyse by hand: run "triboworkflow analyse {name}" where there is enough '
-            'memory, or give [execution.analysis] to analyse it in a job of its own')
-    assert report.finished and not report.success
+        group = f'{CUCU}.{name}.1'
+        assert orch.entry(CUCU, name)['job'] == group
+        assert orch.entry(CUCU, name)['reason'] == f'analysis in a job of its own, group {group}'
+        assert (pes_copy / 'jobs' / group / 'jobscript.sh').read_bytes().startswith(
+            (pes_copy / 'jobscript.sh').read_bytes())
+    assert not report.finished and fake_slurm.submitted == 2
     assert calls == [] and figures(pes_copy) == []
 
 
@@ -465,7 +558,6 @@ def test_analysis_by_hand_leaves_the_pes_completed(pes_copy, fake_slurm, monkeyp
     # with a step completed whose entries are not current.
     calls = count_get_pes(monkeypatch)
     pes_runs = no_pes_analysis(monkeypatch)
-    build_orchestrator(pes_copy).run_pass()
     for name in STEPS:  # each as the command analyse builds it
         assert build_orchestrator(pes_copy).analyse_step(CUCU, name).status == 'completed'
     assert len(calls) == 4
@@ -481,12 +573,12 @@ def test_analysis_by_hand_leaves_the_pes_completed(pes_copy, fake_slurm, monkeyp
 def test_analyse_by_hand_from_the_command_line(pes_copy, fake_slurm, fake_scheduler_bin,
                                                monkeypatch, capsys, name):
     calls = count_get_pes(monkeypatch)
-    assert cli(pes_copy, 'prepare', name) == 0  # left to the user, not an error
+    assert cli(pes_copy, 'prepare', name) == 0  # nothing to prepare, not an error
     out = capsys.readouterr().out
-    assert f'{CUCU}/{name}: manual (to analyse by hand: run "triboworkflow analyse {name}"' in out
-    assert cli(pes_copy, 'submit', name) == 1
-    assert f'it is analysed by hand, with "analyse {name}"' in capsys.readouterr().err
+    assert (f'{CUCU}/{name}: waiting (ready: nothing to prepare; its analysis runs in a job of '
+            f'its own, submitted by "submit {name}" or by the orchestrator)') in out
     assert calls == [] and figures(pes_copy) == []
+    # By hand, where there is enough memory, before any job of the analysis.
     assert cli(pes_copy, 'analyse', name) == 0
     assert f'{CUCU}/{name}: completed' in capsys.readouterr().out
     assert len(calls) == 2 and figures(pes_copy) == [f'{name}/pes_Cu111-Cu111.png']
@@ -540,17 +632,18 @@ class Stopped(BaseException):
     """The process stopped during the interpolation (a signal, the walltime)."""
 
 
+def stop_interpolation(inputs, figures=None, stamp=None):
+    """An interpolation stopped once its figure is begun."""
+    figures[0].write_bytes(PNG_SIGNATURE)
+    raise Stopped
+
+
 def test_an_analysis_stopped_is_done_again_alone(pes_copy, fake_slurm, monkeypatch, capsys):
     calls = count_get_pes(monkeypatch)
     assert cli(pes_copy, 'analyse', 'plotpes') == 0
     done = system_bytes(pes_copy)
     interpolate = plotpes.interpolate
-
-    def stop(inputs, figure):
-        figure.write_bytes(PNG_SIGNATURE)  # the figure begun
-        raise Stopped
-
-    monkeypatch.setattr(plotpes, 'interpolate', stop)
+    monkeypatch.setattr(plotpes, 'interpolate', stop_interpolation)
     with pytest.raises(Stopped):
         cli(pes_copy, 'analyse', 'plotpes_scf')
     monkeypatch.setattr(plotpes, 'interpolate', interpolate)
@@ -560,11 +653,6 @@ def test_an_analysis_stopped_is_done_again_alone(pes_copy, fake_slurm, monkeypat
     assert system_bytes(pes_copy) == done and len(calls) == 2
     assert figures(pes_copy) == ['plotpes/pes_Cu111-Cu111.png']
     assert not plotpes.StaticPlotPesStep().done(pes_copy, CUCU)
-    # A pass: the interpolation done is kept, the one stopped left to the user.
-    orch = build_orchestrator(pes_copy)
-    orch.run_pass()
-    assert statuses(orch)['plotpes'] == 'completed' and statuses(orch)['plotpes_scf'] == 'manual'
-    assert len(calls) == 2
     # What a process killed leaves: its lock, on this host, and the figure begun.
     (pes_copy / 'run.lock').write_text(json.dumps(
         {'pid': dead_pid(), 'host': socket.gethostname(), 'token': 'bb',
@@ -580,6 +668,25 @@ def test_an_analysis_stopped_is_done_again_alone(pes_copy, fake_slurm, monkeypat
     assert len(calls) == 4 and not partial.exists() and not (pes_copy / 'run.lock').exists()
     assert figures(pes_copy) == ['plotpes/pes_Cu111-Cu111.png', 'plotpes_scf/pes_Cu111-Cu111.png']
     assert all(step().done(pes_copy, CUCU) for step in STEPS.values())
+    # A pass: both completed, nothing interpolated again.
+    orch = build_orchestrator(pes_copy)
+    orch.run_pass()
+    assert statuses(orch)['plotpes'] == statuses(orch)['plotpes_scf'] == 'completed'
+    assert len(calls) == 4
+
+
+def test_a_pass_gives_an_analysis_stopped_to_a_job(pes_copy, fake_slurm, monkeypatch, caplog):
+    calls = count_get_pes(monkeypatch)
+    monkeypatch.setattr(plotpes, 'interpolate', stop_interpolation)
+    with pytest.raises(Stopped):
+        cli(pes_copy, 'analyse', 'plotpes')
+    orch = build_orchestrator(pes_copy)
+    orch.run_pass()
+    entry = orch.entry(CUCU, 'plotpes')
+    assert (entry['status'], entry['job']) == ('running', f'{CUCU}.plotpes.1')
+    assert (f'{CUCU}/plotpes: its analysis by hand stopped before its end; it runs again from the '
+            'beginning, in a job of its own') in caplog.text
+    assert calls == []
 
 
 # --- the analysis in a job of its own -------------------------------------------------------
@@ -588,7 +695,8 @@ def analysis_group(run_dir, name, k=1):
     """The group of the analysis of ``name``, as the orchestrator writes it: its analysis.json."""
     jobscript = run_dir / 'analysis.sh'
     jobscript.write_text('#!/bin/bash\n#SBATCH --mem=8G\n')
-    group = Analysis(name=f'{CUCU}.{name}.{k}', system=CUCU, step=name, scheduler='slurm')
+    group = Analysis(name=f'{CUCU}.{name}.{k}', system=CUCU, step=name, scheduler='slurm',
+                     walltime=1800)
     return write_analysis(run_dir, group, jobscript) / ANALYSIS_FILE
 
 
@@ -630,8 +738,8 @@ def test_the_jobscript_of_the_group_runs_the_analysis(pes_copy):
 def test_the_job_writes_nothing_when_the_pes_changes(pes_copy, monkeypatch):
     interpolate = plotpes.interpolate
 
-    def change(inputs, figure):
-        result = interpolate(inputs, figure)
+    def change(inputs, figures=None, stamp=None):
+        result = interpolate(inputs, figures, stamp)
         points = document(pes_copy)['highsym']['inter_unique']
         calc_ids = finish(pes_copy, 'pes', {p: -1000.0 - 0.03 * i for i, p in enumerate(points)},
                           prepare=False, system=CUCU)
@@ -668,15 +776,15 @@ def test_a_run_interpolates_in_jobs_of_their_own(pes_copy, fake_slurm, monkeypat
     orch = build_orchestrator(pes_copy)
     report = orch.run_pass()
     first, second = f'{CUCU}.plotpes.1', f'{CUCU}.plotpes_scf.1'
+    # The two interpolations read different entries: their jobs run together (DEV-59).
     assert statuses(orch) == {'match': 'completed', 'pes': 'completed', 'pes_scf': 'completed',
-                              'plotpes': 'running', 'plotpes_scf': 'waiting'}
-    assert orch.entry(CUCU, 'plotpes_scf')['reason'] == 'ready; plotpes runs first'
-    assert report.submitted == [first] and fake_slurm.submitted == 1 and not report.finished
-    assert calls == []  # the orchestrator never interpolates
+                              'plotpes': 'running', 'plotpes_scf': 'running'}
+    assert report.submitted == [first, second] and fake_slurm.submitted == 2
+    assert calls == [] and not report.finished  # the orchestrator never interpolates
     assert the_node_runs(pes_copy, fake_slurm, first)['result'] == 'analysed'
     report = orch.run_pass()
     assert statuses(orch)['plotpes'] == 'completed' and statuses(orch)['plotpes_scf'] == 'running'
-    assert report.submitted == [second] and len(calls) == 2
+    assert report.submitted == [] and len(calls) == 2
     assert the_node_runs(pes_copy, fake_slurm, second)['result'] == 'analysed'
     for _ in range(2):
         report = orch.run_pass()

@@ -142,7 +142,7 @@ def test_analyse_writes_the_interface_files(analysed):
 def test_analyse_tells_the_slab_on_top_the_attempts_and_the_strain(analysed):
     run_dir, _ = analysed
     log = (run_dir / 'cli.log').read_text(encoding='utf-8')
-    assert 'Al(111) (slab 2, mp-134) on top of Cu(111) (slab 1, mp-30)' in log
+    assert 'Al(111) (slab 2, Al111) on top of Cu(111) (slab 1, Cu111)' in log
     assert 'match found at attempt 1' in log
     assert 'max_angle_tol = 0.4 (never enlarged)' in log
     assert 'strain of the top slab: a ' in log and 'of the bottom slab: a ' in log
@@ -234,8 +234,8 @@ def test_nothing_written_when_the_matching_does_not_converge(tmp_path):
 
 
 def test_slabs_of_the_wrong_system_are_an_error(run_copy):
-    with pytest.raises(ValueError, match="make the interface 'mp-30_mp-134'"):
-        get_step('match').analyse(run_copy, 'mp-1_mp-2', [])
+    with pytest.raises(ValueError, match="make the interface 'Cu111_Al111'"):
+        get_step('match').analyse(run_copy, 'Cu100_Al100', [])
 
 
 # --- matching ------------------------------------------------------------------------
@@ -294,7 +294,7 @@ def test_the_two_matchings_give_the_same_slabs(tmp_path):
 def test_formula_and_name_of_the_settings(tmp_path):
     run_dir = match_run(tmp_path, {
         '# formula = "Cu"\n# name = "Cu-fcc"': 'formula = "Cu"\nname = "Cu-fcc"',
-        'mid = "mp-134"': 'mid = "mp-134"\nformula = "Al"\nname = "Al-fcc"'})
+        'id = "Al111"': 'id = "Al111"\nformula = "Al"\nname = "Al-fcc"'})
     inputs = step.match_inputs(load_run(run_dir))
     assert inputs.ids == {'mid': SYSTEM, 'formula': 'Cu_Al', 'name': 'Cu-fcc_Al-fcc',
                           'miller': [[1, 1, 1], [1, 1, 1]]}

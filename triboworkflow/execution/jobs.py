@@ -12,7 +12,7 @@ lives in ``<run>/jobs/<name>/`` (see ``layout.py``):
   each with the attempt to run (``Launch``), and how to run them
   (scheduler, command, command of the post-processing of the calculations
   that give the charge density, digest of the jobscript of the user,
-  walltime, time margin);
+  walltime of the step, time margin);
 - ``jobscript.sh``: the jobscript of the user, copied unchanged, with one
   line added at the end that starts the worker on the manifest;
 - ``submitted.json``: the ids of the jobs submitted so far and, while a
@@ -23,13 +23,18 @@ lives in ``<run>/jobs/<name>/`` (see ``layout.py``):
   submitted and its launches no longer count for any calculation.
 
 The jobscript of the user is never changed. The jobs of a group differ only
-by their ids.
+by their ids. The walltime of the step (``[execution.<step>]``) and the name
+of the job (``job_name``: ``<step>_<name>``, the name of the jobscript after
+the step) go to the submission command of each job, e.g. ``sbatch
+--time=12:00:00 --job-name=ppes_testFe``, which overrides a time limit and a
+name written in the jobscript (``JobScheduler.submit_job``).
 
 A group can also hold, instead of calculations, the analysis of one step of
 one system that needs a compute node (e.g. the interpolation of a potential
 energy surface, too large for the login node where the orchestrator runs).
 Such a group has ``analysis.json`` in place of ``manifest.json`` (system,
-step, scheduler, digest of the jobscript of ``[execution.analysis]``) and
+step, scheduler, walltime, digest of its jobscript: the one of
+``[execution.analysis]``, else the one of ``[execution]``) and
 runs one job; the line added to its jobscript starts the analysis
 (``ANALYSIS_MODULE``), which leaves its outcome in ``outcome.json``. Its name
 is ``<system>.<step>.<k>`` as for the groups of calculations, and a group of
@@ -56,12 +61,14 @@ import copy
 import datetime
 import logging
 import os
+import re
 import shlex
 import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from triboworkflow.core.guard import NotOnHPCError, hpc_only
+from triboworkflow.core.settings.schema import DEFAULT_WALLTIME
 from triboworkflow.core.store.atomic import check_json_value, read_json, write_json
 from triboworkflow.core.store.fingerprint import bytes_digest, check_fingerprint
 from triboworkflow.core.store.record import check_keys, check_name, read_record, split_calc_id
@@ -76,7 +83,7 @@ MANIFEST_FILE = 'manifest.json'
 JOBSCRIPT_FILE = 'jobscript.sh'
 SUBMITTED_FILE = 'submitted.json'
 WITHDRAWN_FILE = 'withdrawn.json'
-ANALYSIS_VERSION = 1
+ANALYSIS_VERSION = 2
 ANALYSIS_FILE = 'analysis.json'
 OUTCOME_FILE = 'outcome.json'
 
@@ -97,7 +104,8 @@ LAUNCH_KINDS = ('initial', 'unchanged', 'remedy', 'manual')
 _MANIFEST_KEYS = ('schema_version', 'name', 'scheduler', 'run_command', 'pp_command',
                   'jobscript_digest', 'walltime', 'max_seconds_margin', 'calculations')
 _LAUNCH_KEYS = ('system', 'calc_id', 'n', 'kind', 'level', 'values', 'initial_values', 'restart')
-_ANALYSIS_KEYS = ('schema_version', 'name', 'system', 'step', 'scheduler', 'jobscript_digest')
+_ANALYSIS_KEYS = ('schema_version', 'name', 'system', 'step', 'scheduler', 'walltime',
+                  'jobscript_digest')
 
 
 class JobError(ValueError):
@@ -242,7 +250,8 @@ class Manifest:
     run_command : str
         Command up to the input file, e.g. ``mpirun -np 32 pw.x -nk 4``.
     walltime : int
-        Walltime of each job, in seconds.
+        Walltime of each job, in seconds: passed to the submission command,
+        it sets the time the worker may use.
     max_seconds_margin : int
         Seconds kept free at the end of the walltime; < ``walltime``.
     calculations : tuple of Launch
@@ -308,7 +317,7 @@ class Manifest:
         object.__setattr__(self, 'calculations', calculations)
 
     @classmethod
-    def from_execution(cls, name, calculations, execution):
+    def from_execution(cls, name, calculations, execution, walltime):
         """Manifest of a group from the ``[execution]`` settings.
 
         Parameters
@@ -319,9 +328,12 @@ class Manifest:
             The attempt to run for each calculation.
         execution : triboworkflow.core.settings.schema.ExecutionParams
             Settings of ``[execution]``.
+        walltime : int
+            Walltime of the jobs, in seconds: the one of the step
+            (``ExecutionParams.walltime_of``).
         """
         return cls(name=name, scheduler=execution.scheduler, run_command=execution.run_command,
-                   walltime=execution.walltime, max_seconds_margin=execution.max_seconds_margin,
+                   walltime=walltime, max_seconds_margin=execution.max_seconds_margin,
                    calculations=tuple(calculations), pp_command=execution.pp_command)
 
     def to_dict(self):
@@ -381,6 +393,211 @@ def jobscript_path(settings):
     if not path.is_absolute() and settings.source is not None:
         path = Path(settings.source).parent / path
     return path
+
+
+def slurm_seconds(value):
+    """Seconds of a time limit of Slurm, as ``--time`` takes it.
+
+    The formats are those of ``sbatch``: ``M``, ``M:S``, ``H:M:S``, ``D-H``,
+    ``D-H:M`` and ``D-H:M:S``.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not in one of these formats (e.g. ``UNLIMITED``).
+    """
+    days, dash, clock = value.partition('-')
+    if not dash:
+        days, clock = '0', value
+    try:
+        days, parts = int(days), [int(part) for part in clock.split(':')]
+    except ValueError:
+        parts = None
+    if parts is None or len(parts) > 3 or min(days, *parts) < 0:
+        raise ValueError(f'{value!r} is not a time limit of Slurm')
+    if dash:  # D-H, D-H:M, D-H:M:S
+        hours, minutes, seconds = parts + [0] * (3 - len(parts))
+    elif len(parts) == 3:  # H:M:S
+        hours, minutes, seconds = parts
+    else:  # M, M:S
+        hours, (minutes, seconds) = 0, parts + [0] * (2 - len(parts))
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def jobscript_time(path):
+    """``--time`` of the ``#SBATCH`` lines of a jobscript of Slurm, in seconds.
+
+    As ``sbatch``, the ``#SBATCH`` lines are read up to the first line that
+    is neither blank nor a comment; ``--time=T``, ``--time T``, ``-t T`` and
+    ``-tT`` are recognised, and the last one counts.
+
+    Returns
+    -------
+    int or None
+        None if the jobscript gives no ``--time``.
+
+    Raises
+    ------
+    OSError
+        If the jobscript cannot be read.
+    ValueError
+        If a ``--time`` is not a time limit of Slurm (``slurm_seconds``).
+    """
+    found = None
+    for line in Path(path).read_text(encoding='utf-8').splitlines():
+        if line.strip() and not line.lstrip().startswith('#'):
+            break
+        if not line.startswith('#SBATCH'):
+            continue
+        words = shlex.split(line[len('#SBATCH'):], comments=True)
+        for i, word in enumerate(words):
+            if word.startswith('--time='):
+                found = word[len('--time='):]
+            elif word in ('--time', '-t') and i + 1 < len(words):
+                found = words[i + 1]
+            elif word.startswith('-t') and not word.startswith('--') and len(word) > 2:
+                found = word[2:]
+    return None if found is None else slurm_seconds(found)
+
+
+def jobscript_name(path):
+    """``--job-name`` of the ``#SBATCH`` lines of a jobscript of Slurm.
+
+    The lines are read as ``jobscript_time`` reads them; ``--job-name=N``,
+    ``--job-name N``, ``-J N`` and ``-JN`` are recognised, and the last one
+    counts.
+
+    Returns
+    -------
+    str or None
+        None if the jobscript gives no name.
+
+    Raises
+    ------
+    OSError
+        If the jobscript cannot be read.
+    """
+    found = None
+    for line in Path(path).read_text(encoding='utf-8').splitlines():
+        if line.strip() and not line.lstrip().startswith('#'):
+            break
+        if not line.startswith('#SBATCH'):
+            continue
+        words = shlex.split(line[len('#SBATCH'):], comments=True)
+        for i, word in enumerate(words):
+            if word.startswith('--job-name='):
+                found = word[len('--job-name='):]
+            elif word in ('--job-name', '-J') and i + 1 < len(words):
+                found = words[i + 1]
+            elif word.startswith('-J') and len(word) > 2:
+                found = word[2:]
+    return found or None
+
+
+# A placeholder of an example jobscript left in a jobscript, e.g. <venv> or <account>; a
+# redirection of the shell (< file, <<EOF) has no closing ">" right after the name.
+_PLACEHOLDER = re.compile(r'<[A-Za-z][A-Za-z0-9_.-]*>')
+# Directives of the schedulers: the comment lines read for placeholders.
+_DIRECTIVES = ('#SBATCH', '#PBS', '#BSUB', '#$')
+
+
+def jobscript_placeholders(path):
+    """Placeholders like ``<venv>`` left in a jobscript, for ``check``.
+
+    The lines of commands and of directives of the schedulers are read, not
+    the other comments.
+
+    Returns
+    -------
+    list of tuple
+        ``(line number, placeholder)`` for each one found, counted from 1.
+
+    Raises
+    ------
+    OSError
+        If the jobscript cannot be read.
+    """
+    found = []
+    for number, line in enumerate(Path(path).read_text(encoding='utf-8').splitlines(), 1):
+        text = line.strip()
+        if text.startswith('#') and not text.startswith(_DIRECTIVES):
+            continue
+        found += [(number, match) for match in _PLACEHOLDER.findall(text)]
+    return found
+
+
+def group_step(path):
+    """Step and system of a group, read from ``analysis.json`` or the first calculation.
+
+    Not from the name of the group, ``<system>.<step>.<k>``, where a dot of an
+    id of a slab would be ambiguous.
+
+    Returns
+    -------
+    step, system : str
+    """
+    path = Path(path)
+    if is_analysis(path):
+        analysis, _ = read_analysis(path / ANALYSIS_FILE)
+        return analysis.step, analysis.system
+    first = read_manifest(path / MANIFEST_FILE)[0].calculations[0]
+    return split_calc_id(first.calc_id)[0], first.system
+
+
+def job_name(path, scheduler):
+    """Name of the jobs of a group: ``<step>_<name>``.
+
+    ``<name>`` is the ``--job-name`` of its jobscript with Slurm
+    (``jobscript_name``), else the system (``group_step``).
+
+    Parameters
+    ----------
+    path : path-like
+        Directory of the group.
+    scheduler : str
+        Name of the scheduler.
+    """
+    path = Path(path)
+    step, system = group_step(path)
+    base = jobscript_name(path / JOBSCRIPT_FILE) if scheduler == 'slurm' else None
+    return f'{step}_{base or system}'
+
+
+def walltime_notes(execution, steps, jobscripts):
+    """Warnings on the walltimes of the jobs of a run, for ``check`` and ``start``.
+
+    Parameters
+    ----------
+    execution : triboworkflow.core.settings.schema.ExecutionParams
+        Settings of ``[execution]``.
+    steps : iterable of str
+        Steps of the run.
+    jobscripts : iterable of path-like
+        Jobscripts of the run (``jobscript_path``, ``analysis_jobscript_path``).
+
+    Returns
+    -------
+    list of str
+        The steps without a walltime, which get ``DEFAULT_WALLTIME``; with
+        Slurm, the jobscripts with a ``--time``, which the walltime of the
+        step overrides. A jobscript that cannot be read is left to the
+        writing of the jobs, which reports it.
+    """
+    notes = []
+    missing = execution.missing_walltimes(list(steps))
+    if missing:
+        notes.append(f'no walltime in [execution.<step>] for {", ".join(missing)}: their jobs '
+                     f'get {DEFAULT_WALLTIME}')
+    if execution.scheduler == 'slurm':
+        for path in jobscripts:
+            try:
+                found = jobscript_time(path)
+            except (OSError, ValueError):
+                continue
+            if found is not None:
+                notes.append(f'{path} has an #SBATCH --time: the walltime of each step in '
+                             '[execution.<step>] replaces it')
+    return notes
 
 
 def worker_line(manifest_path, python=None):
@@ -482,10 +699,13 @@ class Analysis:
         The step analysed and its system.
     scheduler : str
         Scheduler the job runs under.
+    walltime : int
+        Walltime of the job, in seconds, passed to the submission command:
+        the one of the step (``ExecutionParams.walltime_of``).
     jobscript_digest : str or None, optional
-        ``file_digest`` of the jobscript of ``[execution.analysis]``, which
-        sets the resources of the job; ``write_analysis`` sets it from the
-        jobscript it copies.
+        ``file_digest`` of the jobscript of the analyses
+        (``analysis_jobscript_path``), which sets the resources of the job;
+        ``write_analysis`` sets it from the jobscript it copies.
 
     Raises
     ------
@@ -497,6 +717,7 @@ class Analysis:
     system: str
     step: str
     scheduler: str
+    walltime: int
     jobscript_digest: str | None = None
 
     def __post_init__(self):
@@ -511,6 +732,7 @@ class Analysis:
             raise JobError(f'name: {self.name!r} is not {self.system}.{self.step}.<k>, k >= 1')
         if not isinstance(self.scheduler, str) or not self.scheduler.strip():
             raise JobError(f'scheduler: a non-empty string is required, not {self.scheduler!r}')
+        _seconds(self.walltime, 'walltime')
         if self.jobscript_digest is not None:
             try:
                 check_fingerprint(self.jobscript_digest, 'jobscript_digest')
@@ -525,7 +747,7 @@ class Analysis:
     def to_dict(self):
         """JSON object of the group."""
         return {'schema_version': ANALYSIS_VERSION, 'name': self.name, 'system': self.system,
-                'step': self.step, 'scheduler': self.scheduler,
+                'step': self.step, 'scheduler': self.scheduler, 'walltime': self.walltime,
                 'jobscript_digest': self.jobscript_digest}
 
     @classmethod
@@ -538,7 +760,8 @@ class Analysis:
                 raise JobError(f'schema_version: {version!r}; this version reads '
                                f'{ANALYSIS_VERSION}')
             return cls(name=data['name'], system=data['system'], step=data['step'],
-                       scheduler=data['scheduler'], jobscript_digest=data['jobscript_digest'])
+                       scheduler=data['scheduler'], walltime=data['walltime'],
+                       jobscript_digest=data['jobscript_digest'])
         except ValueError as error:  # JobError, and StoreError from check_keys
             raise JobError(f'{source}: {error}' if source else str(error)) from None
 
@@ -565,17 +788,20 @@ def read_analysis(path):
 
 
 def analysis_jobscript_path(settings):
-    """Jobscript of ``[execution.analysis]``, relative to the folder of the settings file.
+    """Jobscript of the analyses in a job, relative to the folder of the settings file.
 
     Returns
     -------
     pathlib.Path or None
-        None without ``[execution]`` or ``[execution.analysis]``. Without a
-        settings file a relative path is relative to the current directory.
+        The one of ``[execution.analysis]``, else the one of ``[execution]``
+        (``jobscript_path``); None without ``[execution]``. Without a settings
+        file a relative path is relative to the current directory.
     """
     execution = settings.execution
-    if execution is None or execution.analysis is None:
+    if execution is None:
         return None
+    if execution.analysis is None:
+        return jobscript_path(settings)
     path = Path(execution.analysis.jobscript)
     if not path.is_absolute() and settings.source is not None:
         path = Path(settings.source).parent / path
@@ -607,7 +833,8 @@ def write_analysis(run_dir, analysis, jobscript, python=None):
     analysis : Analysis
         The step analysed and how the job runs.
     jobscript : path-like
-        Jobscript of ``[execution.analysis]``; it is copied, never changed.
+        Jobscript of the analyses (``analysis_jobscript_path``); it is
+        copied, never changed.
     python : str or None, optional
         Python interpreter of the job (see ``analysis_line``).
 
@@ -623,7 +850,7 @@ def write_analysis(run_dir, analysis, jobscript, python=None):
     """
     jobscript = Path(jobscript)
     if not jobscript.is_file():
-        raise JobError(f'jobscript {jobscript} of [execution.analysis] not found')
+        raise JobError(f'jobscript {jobscript} of the analyses not found')
     template = jobscript.read_bytes()
     analysis = replace(analysis, jobscript_digest=bytes_digest(template))
     path = job_dir(run_dir, analysis.name)
@@ -654,6 +881,36 @@ def most_jobs(path):
         raise JobError(f'{path / MANIFEST_FILE} not found: write the group first')
     manifest, _ = read_manifest(path / MANIFEST_FILE)
     return len(manifest.calculations)
+
+
+def group_walltime(path):
+    """Walltime of the jobs of a group, in seconds, from its manifest or ``analysis.json``."""
+    path = Path(path)
+    if is_analysis(path):
+        return read_analysis(path / ANALYSIS_FILE)[0].walltime
+    return read_manifest(path / MANIFEST_FILE)[0].walltime
+
+
+def set_group_walltime(path, walltime):
+    """Write another walltime, in seconds, in the manifest or ``analysis.json`` of a group.
+
+    For a group none of whose jobs was submitted (e.g. refused by the
+    scheduler for its walltime): the jobs submitted later and their workers
+    read the new one.
+
+    Raises
+    ------
+    JobError
+        If the walltime is not valid (an integer > 0, above the margin of a
+        manifest).
+    """
+    path = Path(path)
+    if is_analysis(path):
+        analysis, _ = read_analysis(path / ANALYSIS_FILE)
+        write_json(path / ANALYSIS_FILE, replace(analysis, walltime=walltime).to_dict())
+    else:
+        manifest, _ = read_manifest(path / MANIFEST_FILE)
+        write_json(path / MANIFEST_FILE, replace(manifest, walltime=walltime).to_dict())
 
 
 def is_withdrawn(path):
@@ -688,7 +945,9 @@ def submit_jobs(path, scheduler, count, now=None):
     failure after which the job may exist leaves it to the caller
     (``JobManager``), which records the submission as one of outcome not
     known. Submissions run from the directory of the group, where the
-    scheduler writes the logs of the jobs. In a dry run nothing is submitted
+    scheduler writes the logs of the jobs, with the walltime of the group
+    (``group_walltime``) and the name of its jobs (``job_name``) as options
+    of the command. In a dry run nothing is submitted
     or written, and the commands are left in ``scheduler.commands``.
 
     Parameters
@@ -727,6 +986,8 @@ def submit_jobs(path, scheduler, count, now=None):
     if not jobscript.is_file():
         raise JobError(f'{jobscript} not found: write the group first')
     jobs = min(count, most_jobs(path))
+    walltime = group_walltime(path)
+    name = job_name(path, scheduler.scheduler_name)
     if jobs < count:
         logger.warning('Group %s: %d jobs submitted instead of %d, %s', path.name, jobs, count,
                        'one for an analysis' if is_analysis(path) else 'one per calculation')
@@ -744,7 +1005,8 @@ def submit_jobs(path, scheduler, count, now=None):
             write_json(submitted, {**data, PENDING_KEY: stamp()})
         try:
             with hpc_only(scheduler.scheduler_name):
-                job_id = scheduler.submit_job(str(jobscript), cwd=path)
+                job_id = scheduler.submit_job(str(jobscript), cwd=path, walltime=walltime,
+                                              job_name=name)
         except (NotOnHPCError, JobSchedulerError) as error:
             if data is not None and surely_not_created(error):
                 if existed or data['job_ids']:

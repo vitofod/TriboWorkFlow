@@ -66,8 +66,8 @@ def run_dir(tmp_path):
     write_entry(run, 'pes')
     jobscript = tmp_path / 'analysis.sh'
     jobscript.write_text('#!/bin/bash\n#SBATCH --mem=200G\n')
-    write_analysis(run, Analysis(name=GROUP, system=SYSTEM, step='plotpes', scheduler='slurm'),
-                   jobscript)
+    write_analysis(run, Analysis(name=GROUP, system=SYSTEM, step='plotpes', scheduler='slurm',
+                                 walltime=1800), jobscript)
     return run
 
 
@@ -113,7 +113,7 @@ def test_a_step_already_done_is_not_analysed(run_dir):
 def test_a_group_replaced_by_a_later_one(run_dir, tmp_path):
     later = f'{SYSTEM}.plotpes.2'
     write_analysis(run_dir, Analysis(name=later, system=SYSTEM, step='plotpes',
-                                     scheduler='slurm'), tmp_path / 'analysis.sh')
+                                     scheduler='slurm', walltime=1800), tmp_path / 'analysis.sh')
     step = JobStep()
     outcome = run_job(run_dir, step)
     assert (outcome['result'], outcome['error']) == \

@@ -20,7 +20,10 @@ python tests/hpc/interface_check.py report <local folder>/<run> [--sacct <file>]
 
 The output directories of pw.x (`OUT/`) are not needed. Copy the rest: the
 records, the outputs (`output.pwo`), the structures, the group folders with
-the logs of the jobs (`jobs/*/job.*.err`), the figures, the slab files, and
+the logs of the jobs (`jobs/*/job.*.err`), the figures, the text files of the
+steps (`adhesion/*.output`, `ppes/*.output`, `charge/*.output`,
+`shear/shear.output`), the cube files of `charge` (large: copy them only to
+look at them), the slab files, and
 the charge densities (`density.filplot`, large) if you want the charge checked.
 The path of the run in the report is where you copied it.
 
@@ -49,12 +52,12 @@ a verdict is `PROBLEM`.
 
 | Topic | What it reads | `PROBLEM` when |
 |---|---|---|
-| `steps` | `orchestrator.json`; the entries of `system.json` of each step, done and current | a step is `failed` or `blocked`. `not observed` while a step is waiting, running or `manual` |
+| `steps` | `orchestrator.json`; the entries of `system.json` of each step, done and current; apart, the files of the analysis of each step whose entries are current, with their stamp ([interface.md](interface.md), *Files of an analysis*) | a step is `failed` or `blocked`, or a file of a step carries the stamp of another analysis than the one saved. `not observed` while a step is waiting, running or `manual`, or when the entries of a step are not current, whatever its files. `note` for a run made before the files of the later versions were written (the PDF of the figure of the PES; `shear.output` and the figures of the paths; the tables, figures and cube file of `adhesion`, `ppes` and `charge`; the stamps): the text names, for each step, the files it lacks or that carry no stamp, which this version of the package writes analysing it again. A cube file not copied counts as lacking |
 | `<step> calculations` | the record of each calculation of `pes`, `pes_scf`, `adhesion`, `ppes`, `charge` | parsing is not `ok`; the version or the pseudopotentials (checksums) printed differ from the expected; `structure_out.extxyz` is missing; the charge density is not `ok`; the calculations of the step do not share one energy model |
 | `spin` | `nspin` and `starting_magnetization(i)` of every `input.pwi`, against `[[atomic_species]]` | `nspin` differs among the inputs, or a magnetization differs from the settings. `note` when none is spin-polarized |
 | `slab 1`, `slab 2` (`slabs` when a file cannot be read) | the slab files as the workflow reads them ([structures.md](structures.md)) | a file cannot be read (e.g. its c is not perpendicular to a and b). `note` when a slab was rotated or lost data: it says which |
 | `pes`, `pes_scf` | the entries `<pes>.data`, `energy.grid`, `min_site`, `max_site`, `structure.opt` | a key of the results is missing (the verdict names the point and the key; the other comparisons go on); an energy in eV differs from `Final energy` or the last `!` line of its output times the Ry in eV; `hs_unique_ev` is not sorted, or `min_site` and `max_site` are not its ends; a row of `hs_unique_ev` does not have the energy of its point or its first lateral shift; a row of `hs_unique_jm2` is not the same row with the energy converted to J/m^2 on the area of the cell of the lowest point |
-| `plotpes`, `plotpes_scf` | `energy.pes_ev`, `pes_jm2`, `grid.hs_all_*`; the figure | the minimum of `pes_ev` is not 0, or the figure is not a PNG |
+| `plotpes`, `plotpes_scf` | `energy.pes_ev`, `pes_jm2`, `grid.hs_all_*`; the figure, `pes_<name>.png` and, when there, `pes_<name>.pdf` | the minimum of `pes_ev` is not 0, or a figure is not a PNG or a PDF. The text names the files of the figure, or says that the run has no PDF |
 | `plotpes job`, `plotpes_scf job`, `shear job` | the group folder of the analysis (`outcome.json`, `submitted.json`, the logs), the line of `sacct` | the outcome is not `analysed` or `done`, or the group folder is missing. The text gives the job, the time of the outcome, the size of the log and the warnings; with `--sacct` also the state, the walltime used and the memory |
 | `adhesion` | `structure.opt.<type>.*`, `data.*`, `adhesion.<type>` | a slab is not a `Slab` with Miller indices; an interface carries no `interface_region` on both slabs; the adhesion energies or the corrugation differ from those recomputed from the energies of the four calculations. The text gives the k-point grids |
 | `ppes` | the input of each shift against the interface of the adhesion | an atom of the bottom slab moved, or an atom of the top slab moved other than by the shift along z, by more than 1e-5 Å |
@@ -63,6 +66,7 @@ a verdict is `PROBLEM`.
 | `charge contact plane` | `charge.<type>.displacement.<site>.z` | the region between the slabs has no width or no finite integral |
 | `shear time`, `shear warnings` | the log of the job of the shear | `note` when the log has `DeprecationWarning` lines; the text gives their number, the warnings and the log size |
 | `shear convergence` | `shearstr.*` against `[interface.shear.mep]` | a shear strength is not a finite number. `note` when a string stopped at `nstepmax` without reaching `tol`: it is written like one that converged ([interface.md](interface.md), *Step `shear`*) |
+| `shear output` | `shear/shear.output` against `shearstr.*` and `npts` of `[interface.shear.mep]` | a shear strength (to 1e-9) or an `nstep` of its table differs from the entry, or a profile does not have `npts` rows. `not observed` when the file is not there (a run made before it was written, or not copied) |
 | `shear cell` | `a`, `b` of `structure.init.interface` against the cell of the lowest point of the PES | the difference is above 1e-3 Å. `note` above 1e-6 Å |
 | `accounting` | the file of `sacct` | a job ended `OUT_OF_MEMORY` or `TIMEOUT`. `note` when some jobs are not in the file |
 

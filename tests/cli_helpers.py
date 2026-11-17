@@ -35,7 +35,7 @@ from triboworkflow.workflows.interface import registry
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / 'examples' / 'interface.toml'
-SYSTEM = 'mp-30_mp-134'
+SYSTEM = 'Cu111_Al111'
 # Calculations of each fictitious step; match, plotpes and shear only analyse.
 CALCS = {'pes': 2, 'adhesion': 2, 'ppes': 1, 'charge': 1}
 
@@ -126,13 +126,17 @@ def fake_steps(monkeypatch):
 def write_run(tmp_path, steps=('match', 'pes'), groups=10, name='run'):
     """A run folder: ``config.toml`` from the example, with ``steps`` and ``groups``; a jobscript.
 
-    ``groups=None`` leaves ``groups`` out of ``[execution]``.
+    ``groups`` replaces the one of ``[execution]``; the sections of the steps
+    keep theirs. ``groups=None`` leaves ``groups`` out of ``[execution]`` and
+    of the sections.
     """
     text = EXAMPLE.read_text(encoding='utf-8')
     listed = ', '.join(f'"{step}"' for step in steps)
     text = re.sub(r'^steps = .*$', f'steps = [{listed}]', text, count=1, flags=re.M)
-    line = '' if groups is None else f'groups = {groups}'
-    text = re.sub(r'^groups = \d+.*$', line, text, count=1, flags=re.M)
+    if groups is None:
+        text = re.sub(r'^groups = \d+.*$', '', text, flags=re.M)
+    else:
+        text = re.sub(r'^groups = \d+.*$', f'groups = {groups}', text, count=1, flags=re.M)
     run_dir = tmp_path / name
     run_dir.mkdir()
     (run_dir / cli_run.CONFIG_FILE).write_text(text, encoding='utf-8')

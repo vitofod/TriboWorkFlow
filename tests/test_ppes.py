@@ -53,8 +53,10 @@ from triboworkflow.core.store.legacy import LegacyStore
 from triboworkflow.core.structures.readers import read_extxyz_text
 from triboworkflow.engines.qe.results import parse_output
 from triboworkflow.execution.layout import system_dir
-from triboworkflow.vendored.physics.tribology.ppes import fit_ppes
+from triboworkflow.vendored.physics.tribology.ppes import PPESModel, fit_ppes
 from triboworkflow.workflows.interface import adhesion, pes, ppes
+from triboworkflow.workflows.interface.figures import figure_paths
+from triboworkflow.workflows.interface.outputs import file_stamp
 
 SHIFT_LABELS = [f'min_site_{shift}' for shift in PPES_SHIFTS]
 
@@ -1112,10 +1114,30 @@ def test_the_other_site_is_computed_beside_the_first(ppes_copy):
 # --- only the fit changes: the calculations are reused (P4) -------------------------------------------
 
 def files_of(run_dir):
-    """Bytes of every file of the calculations of the step."""
+    """Bytes of every file of the calculations of the step, each in its own folder.
+
+    The table and the figure of the analysis, in the folder of the step, are not among them:
+    they change with the fit (``exports_of``).
+    """
     base = system_dir(run_dir, SYSTEM) / 'ppes'
     return {str(path.relative_to(base)): path.read_bytes() for path in sorted(base.rglob('*'))
-            if path.is_file()}
+            if path.is_file() and path.parent != base}
+
+
+def exports_of(run_dir):
+    """Bytes of the table and of the two files of the figure, and the stamp of the analysis saved."""
+    paths, stamp = ppes.PpesStep().exports(run_dir, SYSTEM)
+    return {path.name: path.read_bytes() for path in paths}, stamp
+
+
+def check_exports_of_the_new_fit(run_dir, before, new):
+    """The table and the figure are those of the analysis just saved, with the fit ``new``."""
+    paths, stamp = ppes.PpesStep().exports(run_dir, SYSTEM)
+    exports, old_stamp = before
+    assert stamp != old_stamp and [path.name for path in paths] == list(exports)
+    for path in paths:
+        assert file_stamp(path) == stamp and path.read_bytes() != exports[path.name]
+    assert ('# Fit uber' in paths[0].read_text()) == (new == 'uber')
 
 
 @pytest.mark.parametrize('old, new', [('none', 'uber'), ('uber', 'none')])
@@ -1126,6 +1148,7 @@ def test_changing_only_the_fit_runs_the_analysis_again(ppes_copy, old, new):
     step = ppes.PpesStep()
     assert step.done(ppes_copy, SYSTEM)
     plan, files, before = step.plan(ppes_copy, SYSTEM), files_of(ppes_copy), document(ppes_copy)
+    exports = exports_of(ppes_copy)
 
     edit_config(ppes_copy, f'fit = "{old}"', f'fit = "{new}"')
     # Not done any more, with the same calculations: nothing to launch.
@@ -1134,10 +1157,12 @@ def test_changing_only_the_fit_runs_the_analysis_again(ppes_copy, old, new):
     calc_ids = step.prepare(ppes_copy, SYSTEM)
     assert calc_ids == list(plan)
     assert files_of(ppes_copy) == files
-    # The analysis alone: the files of the calculations are not touched, the entries are written.
+    # The analysis alone: the files of the calculations are not touched, the entries, the table
+    # and the figure are written again.
     step.analyse(ppes_copy, SYSTEM, calc_ids)
     assert files_of(ppes_copy) == files
     assert step.done(ppes_copy, SYSTEM)
+    check_exports_of_the_new_fit(ppes_copy, exports, new)
     energy = ppes_doc(ppes_copy)['energy']['min_site']
     assert ('uber' in energy) == (new == 'uber')
     after = document(ppes_copy)
@@ -1145,6 +1170,75 @@ def test_changing_only_the_fit_runs_the_analysis_again(ppes_copy, old, new):
     assert without(after, own) == without(before, own)
     assert {k: v for k, v in energy.items() if k != 'uber'} == \
         {k: v for k, v in before['ppes']['regular']['energy']['min_site'].items() if k != 'uber'}
+
+
+# --- the table and the figure belong to the analysis saved (T38B-R2) ------------------------------
+
+def partials_left(run_dir):
+    return sorted(path.name for path in (system_dir(run_dir, SYSTEM) / 'ppes').glob('.*partial*'))
+
+
+def test_a_save_that_fails_leaves_the_table_and_the_figure_as_they_were(ppes_copy, monkeypatch):
+    step = ppes.PpesStep()
+    paths, _ = step.exports(ppes_copy, SYSTEM)
+    before, json_before = {path: path.read_bytes() for path in paths}, system_bytes(ppes_copy)
+    edit_config(ppes_copy, 'fit = "none"', 'fit = "uber"')
+    calc_ids = step.prepare(ppes_copy, SYSTEM)
+
+    def fails(self):
+        raise OSError('disk full')
+
+    monkeypatch.setattr(SystemWriter, 'save', fails)
+    with pytest.raises(OSError, match='disk full'):
+        step.analyse(ppes_copy, SYSTEM, calc_ids)
+    monkeypatch.undo()
+    # Nothing moved: the files of the fit none beside system.json of the fit none.
+    assert {path: path.read_bytes() for path in paths} == before
+    assert system_bytes(ppes_copy) == json_before and partials_left(ppes_copy) == []
+    edit_config(ppes_copy, 'fit = "uber"', 'fit = "none"')
+    assert step.done(ppes_copy, SYSTEM)
+
+
+def test_an_interruption_after_the_save_is_never_done(ppes_copy, monkeypatch):
+    # system.json saved with the fit uber, the table and the figure still those of the fit none.
+    step = ppes.PpesStep()
+    paths, _ = step.exports(ppes_copy, SYSTEM)
+    edit_config(ppes_copy, 'fit = "none"', 'fit = "uber"')
+    calc_ids = step.prepare(ppes_copy, SYSTEM)
+
+    def interrupted(partials):
+        raise OSError('interrupted')
+
+    monkeypatch.setattr(ppes, 'place', interrupted)
+    with pytest.raises(OSError, match='interrupted'):
+        step.analyse(ppes_copy, SYSTEM, calc_ids)
+    monkeypatch.undo()
+    assert 'uber' in ppes_doc(ppes_copy)['energy']['min_site']
+    assert '# Fit uber' not in paths[0].read_text() and partials_left(ppes_copy) == []
+    # The entries are current, their files are not: the step is not done, and runs again.
+    assert step.entries_done(ppes_copy, SYSTEM) and not step.done(ppes_copy, SYSTEM)
+    # Back to the fit none, the files match the settings but not system.json: still not done.
+    edit_config(ppes_copy, 'fit = "uber"', 'fit = "none"')
+    assert not step.entries_done(ppes_copy, SYSTEM) and not step.done(ppes_copy, SYSTEM)
+    # The analysis run again puts the files and system.json in agreement.
+    step.analyse(ppes_copy, SYSTEM, calc_ids)
+    assert step.done(ppes_copy, SYSTEM)
+
+
+@pytest.mark.parametrize('which', [0, 1, 2], ids=['output', 'png', 'pdf'])
+def test_a_file_of_another_analysis_is_never_taken_for_the_saved_one(ppes_copy, which):
+    # One file of the fit uber beside system.json and the other files of the fit none.
+    step = ppes.PpesStep()
+    paths, _ = step.exports(ppes_copy, SYSTEM)
+    edit_config(ppes_copy, 'fit = "none"', 'fit = "uber"')
+    calc_ids = step.prepare(ppes_copy, SYSTEM)
+    step.analyse(ppes_copy, SYSTEM, calc_ids)
+    of_uber = paths[which].read_bytes()
+    edit_config(ppes_copy, 'fit = "uber"', 'fit = "none"')
+    step.analyse(ppes_copy, SYSTEM, calc_ids)
+    assert step.done(ppes_copy, SYSTEM)
+    paths[which].write_bytes(of_uber)
+    assert step.entries_done(ppes_copy, SYSTEM) and not step.done(ppes_copy, SYSTEM)
 
 
 # --- provenance and the state of the step ------------------------------------------------------
@@ -1238,6 +1332,7 @@ def test_message_of_the_analysis(adhered_copy, caplog):
     low, high = min(jm2, key=lambda row: row[1]), max(jm2, key=lambda row: row[1])
     fit = energy['uber']
     lines = [record.getMessage() for record in caplog.records if record.name == ppes.__name__]
+    figure = f'ppes_regular_min_site_{name_of(adhered_copy)}'
     assert lines == [
         f'{SYSTEM}: ppes: regular PPES at min_site, 15 shifts of the slab on top from -0.75 to 3.0 '
         'angstrom (slab_from_scratch)',
@@ -1245,6 +1340,9 @@ def test_message_of_the_analysis(adhered_copy, caplog):
         f'highest {high[1]:.6f} J/m^2 at the shift {high[0]}',
         f'{SYSTEM}: fit uber: g = {fit["g"]:.6g} +- {fit["sigma_g"]:.3g} eV per cell, '
         f'l = {fit["l"]:.6g} +- {fit["sigma_l"]:.3g} angstrom',
+        f'{SYSTEM}: table of the PPES in '
+        f'{ppes.output_path(system_dir(adhered_copy, SYSTEM), "regular", "min_site")}, figure in '
+        f'{figure}.png and {figure}.pdf',
     ]
 
 
@@ -1253,7 +1351,73 @@ def test_message_without_a_fit(adhered_copy, caplog):
     with caplog.at_level(logging.INFO, logger=ppes.__name__):
         ppes.PpesStep().analyse(adhered_copy, SYSTEM, calc_ids)
     lines = [record.getMessage() for record in caplog.records if record.name == ppes.__name__]
-    assert len(lines) == 3 and lines[-1] == f'{SYSTEM}: no fit (fit = "none")'
+    assert len(lines) == 4 and lines[2] == f'{SYSTEM}: no fit (fit = "none")'
+
+
+# --- the text file and the figure ---------------------------------------------------------------
+
+def name_of(run_dir):
+    """Name of the interface in the files of the figures."""
+    return ppes.interface_name(ppes.PpesStep().inputs(run_dir, SYSTEM).ids)
+
+
+def table_rows(path):
+    """Rows of a text file of a step that are not comments, as numbers where they are."""
+    return [[float(word) for word in line.split()] for line in path.read_text().splitlines()
+            if not line.startswith('#')]
+
+
+def test_ppes_output_and_figure(ppes_copy):
+    sdir = system_dir(ppes_copy, SYSTEM)
+    path = ppes.output_path(sdir, 'regular', 'min_site')
+    energy = ppes_doc(ppes_copy)['energy']['min_site']
+    adhesion_jm2 = document(ppes_copy)['adhesion']['regular']['min_site']['adhesion_energy_jm2']
+    at_zero = dict(map(tuple, energy['ppes_jm2']))[0.0]
+    rows = table_rows(path)
+    assert [row[0] for row in rows] == list(PPES_SHIFTS)
+    for row, (_, ev), (_, jm2) in zip(rows, energy['ppes_ev'], energy['ppes_jm2']):
+        assert row[2] == pytest.approx(ev, abs=1e-8) and row[3] == pytest.approx(jm2, abs=1e-8)
+        # Referred so that the shift 0 has the adhesion energy of the site.
+        assert row[4] == pytest.approx(jm2 - at_zero + adhesion_jm2, abs=1e-8)
+    # The distance between the slabs: the one of the interface read, plus the shift.
+    distance = rows[list(PPES_SHIFTS).index(0.0)][1]
+    assert distance > 0 and all(row[1] == pytest.approx(distance + row[0], abs=1e-6)
+                                for row in rows)
+    text = path.read_text()
+    assert text.startswith(f'# Perpendicular PES of the interface {SYSTEM}\n')
+    assert f'adhesion energy at min_site (adhesion.regular.min_site): {adhesion_jm2:.8f}' in text
+    figure = ppes.figure_path(sdir, 'regular', 'min_site', name_of(ppes_copy))
+    png, pdf = figure_paths(figure)
+    assert png.read_bytes()[:8] == b'\x89PNG\r\n\x1a\n' and pdf.read_bytes()[:5] == b'%PDF-'
+
+
+@pytest.mark.parametrize('suffix', ['.output', '.png', '.pdf'])
+def test_done_needs_the_files(ppes_copy, suffix):
+    sdir = system_dir(ppes_copy, SYSTEM)
+    assert ppes.PpesStep().done(ppes_copy, SYSTEM)
+    next((sdir / 'ppes').glob(f'*{suffix}')).unlink()
+    assert not ppes.PpesStep().done(ppes_copy, SYSTEM)
+
+
+def test_the_uber_curve_is_the_fit(ppes_copy):
+    edit_config(ppes_copy, 'fit = "none"', 'fit = "uber"')
+    ppes.PpesStep().analyse(ppes_copy, SYSTEM, finish_ppes(ppes_copy, prepare=False))
+    energy = ppes_doc(ppes_copy)['energy']['min_site']
+    g, l, s0 = ppes.uber_parameters(energy, 'uber')
+    assert (g, l) == (energy['uber']['g'], energy['uber']['l'])
+    # The energies of the test are a UBER curve: the curve drawn passes through them.
+    shifts = np.array([row[0] for row in energy['ppes_ev'] if row[0] >= 0])
+    ev = np.array([row[1] for row in energy['ppes_ev'] if row[0] >= 0])
+    assert np.allclose(ev.min() + PPESModel.uber(shifts, g, l, s0), ev, atol=2e-3)
+    text = ppes.output_path(system_dir(ppes_copy, SYSTEM), 'regular', 'min_site').read_text()
+    assert f'g = {g:.8f} eV per cell' in text and f's0 = {s0:.8f} angstrom' in text
+
+
+def test_a_fit_run_again_that_differs_is_an_error(ppes_copy):
+    energy = ppes_doc(ppes_copy)['energy']['min_site']
+    energy = dict(energy, uber={'g': 1.0, 'l': 1.0, 'sigma_g': 0.0, 'sigma_l': 0.0})
+    with pytest.raises(StoreError, match="the fit 'uber' run again gives g = "):
+        ppes.uber_parameters(energy, 'uber')
 
 
 # --- energies of different models are not combined ----------------------------------------------------
@@ -1417,7 +1581,7 @@ def test_the_orchestrator_does_not_keep_the_step_of_a_surface_not_current(tmp_pa
 
 def test_changing_only_the_fit_runs_the_analysis_alone(tmp_path, fake_slurm):
     run_dir, orch = orchestrated_chain(tmp_path, fake_slurm)
-    jobs, files = dict(orch.manager.jobs), files_of(run_dir)
+    jobs, files, exports = dict(orch.manager.jobs), files_of(run_dir), exports_of(run_dir)
     edit_config(run_dir, 'fit = "none"', 'fit = "uber"')
     assert not ppes.PpesStep().done(run_dir, SYSTEM)
     report = orch.run_pass()
@@ -1426,6 +1590,7 @@ def test_changing_only_the_fit_runs_the_analysis_alone(tmp_path, fake_slurm):
     assert orch.manager.jobs == jobs and files_of(run_dir) == files
     assert 'uber' in ppes_doc(run_dir)['energy']['min_site']
     assert ppes.PpesStep().done(run_dir, SYSTEM)
+    check_exports_of_the_new_fit(run_dir, exports, 'uber')
 
 
 def drop_the_input_of_the_adhesion(run_dir, label='interface_min'):

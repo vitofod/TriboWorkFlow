@@ -42,9 +42,10 @@ current. Nothing is recomputed in cascade: the user, or the orchestrator, runs
 the step that computes the prerequisite.
 
 One process at a time writes ``system.json`` (``SystemWriter``, with a lock
-file created with ``O_EXCL``), whichever phase it runs; readers call
-``read_system`` at any time and see the last saved version, never a partial
-one.
+file created with ``O_EXCL``), whichever phase it runs: a writer that finds
+the lock taken waits for it, up to ``LOCK_WAIT`` seconds, so that steps that
+run together save in turn; readers call ``read_system`` at any time and see
+the last saved version, never a partial one.
 """
 
 import copy
@@ -53,6 +54,7 @@ import datetime
 import json
 import os
 import socket
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -65,6 +67,11 @@ from .record import (can_reuse, check_keys, check_name, read_record, reuse_probl
 SCHEMA_VERSION = 1
 SYSTEM_FILE = 'system.json'
 LOCK_FILE = 'system.json.lock'
+# Seconds a writer waits for the lock taken by another, and between two tries.
+# A save takes well under a second; ten minutes cover a file system that is
+# slow, and still tell a lock left by a writer that stopped.
+LOCK_WAIT = 600
+LOCK_POLL = 1.0
 
 _SYSTEM_KEYS = ('schema_version', 'document', 'provenance')
 _PROVENANCE_KEYS = ('path', 'step', 'parameters', 'calculations', 'inputs', 'files',
@@ -488,17 +495,22 @@ class SystemWriter:
     ----------
     system_dir : path-like
         Directory of the system, created if missing.
+    wait : float or None, optional
+        Seconds to wait for a lock taken by another writer; ``LOCK_WAIT`` by
+        default, 0 to give up at once.
 
     Notes
     -----
     Use it as a context manager. Entering creates the lock file
-    ``system.json.lock`` with ``O_EXCL`` and loads the document into
-    ``document``; leaving removes the lock. Changes reach the disk only with
+    ``system.json.lock`` with ``O_EXCL``, trying again every ``LOCK_POLL``
+    seconds while another writer holds it, and loads the document into
+    ``document`` once the lock is taken: the writes of the other writer are
+    never lost. Leaving removes the lock. Changes reach the disk only with
     ``save``, as one atomic write: leaving without saving discards them.
 
     A lock left by a writer that stopped without leaving is never removed
-    automatically: the error names the file and its owner, and the file is
-    removed by hand once no writer is running.
+    automatically: after the wait the error names the file and its owner,
+    and the file is removed by hand once no writer is running.
 
     Examples
     --------
@@ -508,8 +520,9 @@ class SystemWriter:
     ...     writer.save()
     """
 
-    def __init__(self, system_dir):
+    def __init__(self, system_dir, wait=None):
         self.system_dir = Path(system_dir)
+        self.wait = LOCK_WAIT if wait is None else wait
         self.document = None
         self._locked = False
 
@@ -520,17 +533,7 @@ class SystemWriter:
 
     def __enter__(self):
         self.system_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            fd = os.open(self.lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
-        except FileExistsError:
-            try:
-                owner = self.lock_path.read_text(encoding='utf-8').strip() or 'unknown'
-            except OSError:
-                owner = 'unknown'
-            raise LockError(f'{self.lock_path} exists (owner: {owner}): another process is '
-                            f'writing {SYSTEM_FILE}, or a writer stopped without removing the '
-                            'lock. Remove the file only after checking that no writer is '
-                            'running.') from None
+        fd = self._take_lock()
         self._locked = True
         try:
             owner = {'pid': os.getpid(), 'host': socket.gethostname(),
@@ -542,6 +545,26 @@ class SystemWriter:
             self._release()
             raise
         return self
+
+    def _take_lock(self):
+        """Create the lock file, waiting up to ``wait`` seconds; its descriptor."""
+        start = time.monotonic()
+        while True:
+            try:
+                return os.open(self.lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            except FileExistsError:
+                waited = time.monotonic() - start
+                if waited >= self.wait:
+                    break
+                time.sleep(min(LOCK_POLL, self.wait - waited))
+        try:
+            owner = self.lock_path.read_text(encoding='utf-8').strip() or 'unknown'
+        except OSError:
+            owner = 'unknown'
+        raise LockError(f'{self.lock_path} exists (owner: {owner}), still after {waited:.0f} s: '
+                        f'another process is writing {SYSTEM_FILE}, or a writer stopped without '
+                        'removing the lock. Remove the file only after checking that no writer '
+                        'is running.')
 
     def save(self):
         """Write ``document`` to ``system.json`` atomically."""

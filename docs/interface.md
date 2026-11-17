@@ -25,6 +25,20 @@ analysed as soon as it starts. `plotpes`, `plotpes_scf` and `shear` have no
 calculation either, but are never analysed by the orchestrator: in a job of
 their own or by hand (*Where they run*, *Step `shear`*).
 
+**Files of an analysis.** Besides their entries in `system.json`, the steps
+`plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes` and `charge` write
+files in the folder of the step (figures, tables, the cube file of
+`charge`; each step lists them below). Each file carries the stamp of the
+analysis that wrote it, `triboworkflow analysis sha256:…`, a digest of the
+provenance saved with the entries: in a header line of a text file, in the
+metadata of a PNG (`Comment`) and of a PDF (`Subject`), in the comment line
+of a cube file. The files are written under temporary names, `system.json`
+is saved, and only then are they renamed. A step is done only when each of
+its files is there with the stamp of the provenance saved: after an
+interruption between the save and the renaming, or with a file left by
+another analysis (other settings, other results, a file copied by hand),
+the step is not done and is analysed again.
+
 ## Step `match`
 
 ### What the step does
@@ -35,10 +49,11 @@ their own or by hand (*Where they run*, *Step `shear`*).
    parameters are the keys of `[interface.inter_params]`, then the defaults
    (`max_area` 160.0, `interface_distance` 2.0, `max_angle_tol` 0.4, then the
    defaults of the matching code); with `set_bm = true` the strain weights are the bulk moduli of the
-   two slabs. The ids of the interface are `mid1_mid2`, `formula1_formula2`
+   two slabs. The ids of the interface are `<id1>_<id2>` (from the `id` of
+   the two slabs; the key `mid` of the document), `formula1_formula2`
    and `name1_name2`, or, without formula and name, made from the slabs
    (`Cu_Al`, `Cu111-Al111`).
-2. **Document.** The document of the system (`systems/<mid1_mid2>/system.json`,
+2. **Document.** The document of the system (`systems/<id1>_<id2>/system.json`,
    [store.md](store.md)) is created when missing, with `mid`, `formula`,
    `miller`, an empty `structure` and `name`. An existing document is kept: it
    must have the same ids, otherwise the step stops with an error naming the
@@ -77,7 +92,7 @@ content of the two slab files. Before writing, the entries already in the
 document are emptied, so that nothing of an earlier interface (e.g. points
 whose labels no longer exist) is left among the new data.
 
-In `systems/<mid1_mid2>/match/`:
+In `systems/<id1>_<id2>/match/`:
 
 | File | Content |
 |---|---|
@@ -89,12 +104,12 @@ In `systems/<mid1_mid2>/match/`:
 The step reports, in the terminal and in `cli.log`:
 
 ```text
-mp-30_mp-134: interface mp-30_mp-134: Al(111) (slab 2, mp-134) on top of Cu(111) (slab 1, mp-30)
-mp-30_mp-134: match found at attempt 1
-mp-30_mp-134: parameters used: max_area = 160 angstrom^2, max_length_tol = 0.02, max_area_ratio_tol = 0.05, max_angle_tol = 0.4 (never enlarged), interface_distance = 2.0, strain weights = 140.0, 76.0 (slab 1, slab 2)
-mp-30_mp-134: strain of the top slab: a +1.150 %, b +1.150 %, gamma -0.000 deg; of the bottom slab: a -0.614 %, b -0.614 %, gamma -0.000 deg
-mp-30_mp-134: high-symmetry points: 6 lateral shifts (inter_unique), 6 in all (inter_all)
-mp-30_mp-134: interface written in match/interface.extxyz and match/interface.json
+Cu111_Al111: interface Cu111_Al111: Al(111) (slab 2, Al111) on top of Cu(111) (slab 1, Cu111)
+Cu111_Al111: match found at attempt 1
+Cu111_Al111: parameters used: max_area = 160 angstrom^2, max_length_tol = 0.02, max_area_ratio_tol = 0.05, max_angle_tol = 0.4 (never enlarged), interface_distance = 2.0, strain weights = 140.0, 76.0 (slab 1, slab 2)
+Cu111_Al111: strain of the top slab: a +1.150 %, b +1.150 %, gamma -0.000 deg; of the bottom slab: a -0.614 %, b -0.614 %, gamma -0.000 deg
+Cu111_Al111: high-symmetry points: 6 lateral shifts (inter_unique), 6 in all (inter_all)
+Cu111_Al111: interface written in match/interface.extxyz and match/interface.json
 ```
 
 The strain is that of the lattice vectors a and b of each slab, in percent,
@@ -109,8 +124,8 @@ that the settings and the slab files give now. Changing a slab file, a key
 of `[interface.inter_params]`, a bulk modulus with `set_bm = true`, or
 `set_bm`, makes it run again at the next `analyse match` or pass of the
 orchestrator; the entries of the later steps computed from the old interface
-are then no longer current. Changing `formula`, `name` or `mid` gives
-another interface: `mid` names another system; `formula` and `name` differ
+are then no longer current. Changing `formula`, `name` or `id` gives
+another interface: `id` names another system; `formula` and `name` differ
 from the existing document, which is an error (remove `system.json` of the
 system, or restore the ids).
 
@@ -263,12 +278,13 @@ the energies of its high-symmetry points; neither runs a calculation:
 
 | Step | PES interpolated | Entries read | Figure |
 |---|---|---|---|
-| `plotpes` | `pes`, relaxed along z | `highsym` (of `match`), `pes.data` | `plotpes/pes_<name>.png` |
-| `plotpes_scf` | `pes_scf`, static | `highsym` (of `match`), `pes_scf.data` | `plotpes_scf/pes_<name>.png` |
+| `plotpes` | `pes`, relaxed along z | `highsym` (of `match`), `pes.data` | `plotpes/pes_<name>.png`, `.pdf` |
+| `plotpes_scf` | `pes_scf`, static | `highsym` (of `match`), `pes_scf.data` | `plotpes_scf/pes_<name>.png`, `.pdf` |
 
 Each runs when listed in `[interface].steps`, also both, and neither is the
 default. `<name>` is the name of the interface in the document
-(`Cu111-Al111`).
+(`Cu111-Al111`). The figure is sized for one column of an article and saved
+as a PNG of 600 dpi and as a PDF (vector, for LaTeX).
 
 ### What the steps do
 
@@ -285,11 +301,19 @@ default. `<name>` is the name of the interface in the document
    The points are replicated 6 times on each side of the cell (12 x 12
    copies) and interpolated with radial basis functions (thin-plate spline,
    smoothing 1e-3), then evaluated on a grid of 50 points per Å^2. This is
-   done twice, as in TribChem: with the energies in eV, then in J/m^2, the
-   second time drawing the figure (2 x 2 cells, 300 x 300 points, 300 dpi).
-3. **Writing.** The entries and the figure are written together, at the end:
-   when any part fails, or the entries read change during the
-   interpolation, nothing is written and the figure is not left.
+   done twice, as in TribChem: with the energies in eV, then in J/m^2.
+3. **Figure.** The interpolation in J/m^2 is evaluated on the grid of the
+   figure of TribChem (2 x 2 cells, 300 x 300 points, the minimum at zero)
+   and drawn with its levels and colours (40 levels, `RdYlBu_r`), laid out
+   for one column of a two-column article: no title, a width of 8.5 cm, the
+   map with the ratio of its axes, the colour bar as tall as the map and
+   labelled ΔE (J/m^2), the energy above the minimum (not the adhesion
+   energy), labels of 9 points and ticks of 8, cropped to what is drawn;
+   saved as a PNG of 600 dpi and as a PDF. TribChem's own figure (7 x 7
+   inches, 300 dpi, with a title, the bar labelled E_adh) is not drawn.
+4. **Writing.** The entries and the two files of the figure are written
+   together, at the end: when any part fails, or the entries read change
+   during the interpolation, nothing is written and no figure is left.
 
 ### Entries and files
 
@@ -308,6 +332,11 @@ folder of the system, not an entry: TribChem also stored it in the document
 (`image`), the same image encoded again; the two steps write in two folders,
 so their figures never overwrite each other.
 
+| File, in `systems/<system>/<step>/` | Content |
+|---|---|
+| `pes_<name>.png` | the figure of the PES in J/m^2 for one column of an article, 600 dpi |
+| `pes_<name>.pdf` | the same, vector |
+
 ### Where they run
 
 The interpolation solves a dense linear system on all the points
@@ -315,20 +344,21 @@ replicated, whose memory grows with the square of their number (*Cost*). It
 never runs in the orchestrator, which lives on the login node. It runs in
 one of two ways, with the same code and the same results:
 
-- **in a job of its own** on a compute node, with `[execution.analysis]` in
-  the settings ([configuration.md](configuration.md)): once the step is
-  ready the orchestrator writes its group of jobs, submits it with the
-  jobscript of that table (memory, walltime, partition) and follows the job;
+- **in a job of its own** on a compute node, in every run
+  ([configuration.md](configuration.md)): once the step is ready the
+  orchestrator writes its group of jobs, submits it with the jobscript of
+  `[execution.analysis]` (memory, partition), else the one of
+  `[execution]`, and the walltime of the step in `[execution.plotpes]`, and
+  follows the job;
   the job interpolates and writes the entries, and the step is completed
   once they are done. A job that ends without them (out of memory, walltime)
   makes the step **failed**, with the state of the job and its outcome, and
   is never submitted again automatically: give the jobscript more memory or
-  time, then `triboworkflow retry plotpes` ([execution.md](execution.md),
+  the step more time, then `triboworkflow retry plotpes` ([execution.md](execution.md),
   *Analyses in a job of their own*);
-- **by hand**, without that table: once ready, the step is left **manual**,
-  with the command that analyses it, and the steps that depend on it wait.
-  Run it where there is enough memory, with the orchestrator ended or
-  stopped ([cli.md](cli.md), *The interpolation of the PES*):
+- **by hand**, outside the orchestrator: where there is enough memory, with
+  the orchestrator ended or stopped and no job of the analysis that may run
+  ([cli.md](cli.md), *The interpolation of the PES*):
 
 ```bash
 triboworkflow analyse plotpes
@@ -339,7 +369,9 @@ The command holds the lock of the run for the whole interpolation; the job
 does not take it, and writes only the entries of its step and its outcome.
 An interpolation stopped before its end writes nothing, and the next one
 starts it from the beginning; an interpolation completed is recognised from
-its entries, their provenance and its figure, without interpolating again.
+its entries, their provenance and the two files of its figure with the
+stamp of that provenance (*Files of an analysis* below), without
+interpolating again.
 
 The memory of the job is about the size of the matrix (*Cost*): 8·N² bytes
 for N centres, N = 144 × the points left after the duplicates, with some
@@ -362,7 +394,9 @@ centres are the points replicated 12 x 12; the matrix is their dense matrix
 | Cu(111)/Al(111), `max_area` 20 | 6, 144 | 20 736 | 3.2 GiB (peak 3.5 GiB) | 122 s | 132 s | 115 s | 14 s |
 | Cu(111)/Al(111) of the example | 6, 756 | 108 864 | 88.3 GiB | not measured | | | |
 
-On the small interfaces the figure takes most of the time: its 90 000
+The times of the figure are those of TribChem's figure (7 x 7 inches, 300
+dpi), measured before it was replaced: the figure drawn now evaluates the
+same 90 000 points. On the small interfaces the figure takes most of the time: its 90 000
 points are evaluated on all the centres. On the large ones the construction
 does (the dense linear system), and it grows faster than the matrix. The
 second call repeats the whole interpolation of the first, then draws the
@@ -375,7 +409,7 @@ figure.
 <step>: interpolation in J/m^2 and figure: <seconds> s
 <system>: <step>: PES <pes> (<calc_type>) interpolated: <n> high-symmetry points, <m> in the cell, <k> after removing the duplicates
 <system>: interpolation in eV <seconds> s, in J/m^2 with the figure <seconds> s
-<system>: figure written in <step>/pes_<name>.png
+<system>: figure written in <step>/: pes_<name>.png and pes_<name>.pdf
 ```
 
 What the interpolation code prints goes to the log at debug level only.
@@ -383,7 +417,9 @@ What the interpolation code prints goes to the log at debug level only.
 ### When the steps run again
 
 An interpolation step is done when its four entries exist, their provenance
-is the one the entries read give now, and its figure exists. Analysing its
+is the one the entries read give now, and the PNG and the PDF of its figure
+exist (a run analysed before the PDF was written is analysed again once).
+Analysing its
 PES again (new calculations, other settings, a new `match`) removes the
 interpolation, which is then done again; a figure removed makes the step run
 again. An interpolation is done only while its PES and `match` are done and
@@ -396,9 +432,10 @@ To remove: port of TribChem's `FT_StartInterpolation` (with
 `FT_PESInterpolation` (`arrange_data`, `compute_pes`). The two steps are the
 two values of `-pt` of TribChem's command line, which interpolated one PES
 per invocation, `pes` by default (DEV-41). The golden cases `plotpes_step_*`
-compare the entries read and written and the pixels of the figure with
-those of the Firetasks, for both PES. Deviations: DEV-42 (the figure stays a
-file, `image` is not written), DEV-39 (the writes use the ids of the
+compare the entries read and written with those of the Firetasks, for both
+PES; the figure is not compared. Deviations: DEV-42 (the figure stays a
+file, `image` is not written), DEV-60 (the figure of `PES.plot` is replaced
+by one for an article), DEV-39 (the writes use the ids of the
 document of `match`); the analysis only by hand until the job of its own
 (D54). The figure is closed once saved (A84); the interpolation is computed
 twice, as there (A07). Not ported: `override`, `check_entry` (the provenance
@@ -477,7 +514,32 @@ columns. The numbers are written as the original code gives them, so that
 the entries have its keys and values; `shear_strength_GPa`, `nstep` and `tol`
 are correct. A change that writes the columns would change the numbers under
 these six names, and is not made. The shear strength itself is computed on the
-whole path.
+whole path. The profiles are in `shear.output` (below).
+
+| File, in `systems/<system>/shear/` | Content |
+|---|---|
+| `shear.output` | text: the system and the time; the parameters (`[interface.shear]`, `[interface.shear.mep]`, the method, the points and centres of the interpolation); a table with `shear_strength_GPa`, `nstep` and `tol` of each string, as in the entries; for each string its profile, one row per point of the path, with the columns below |
+| `mep_<name>.png`, `.pdf` | the map of the PES on which the paths were found (ΔE, the energy above its minimum, in J/m^2, as the figure of `plotpes`), with the three paths drawn on it in three colours (two can run on the same line): the best straight line, along x, along y; the map covers the paths, with a margin, and their legend is above it |
+| `mep_profile_<name>.png`, `.pdf` | along each path, against the length along it: above ΔE (`ve`), below the shear stress, 10 times `force`, in GPa; the largest absolute value of the shear stress is the shear strength |
+
+`<name>` is the name of the interface, as in the figure of `plotpes`. The
+figures are sized for one column of an article, as that one: 8.5 cm, serif
+text of 8 and 9 points, PNG of 600 dpi and PDF, no title.
+
+| Column of a profile | Unit | Content |
+|---|---|---|
+| `x`, `y` | Å | position of the point in the plane of the interface |
+| `lxy` | Å | length along the path from its first point |
+| `dvx`, `dvy` | J/m^2 per Å | derivatives of the PES along x and y |
+| `vz` | J/m^2 | integral of the force along the path, minimum at zero |
+| `ve` | J/m^2 | energy of the PES at the point, minimum at zero |
+| `force` | J/m^2 per Å | force along the path: minus the derivative of the PES along its tangent; the shear strength is 10 times its largest absolute value, in GPa |
+
+The profile is the table from which the shear strength is computed, not
+computed again; its first six rows, columns `lxy` to `force`, are the six
+entries of `system.json` described above. The lines that describe the
+parameters and the columns start with `#`. The file and the figures are
+written with the entries, in the same save: a step without them is not done.
 
 **A step done is not a converged string.** A string that reaches `nstepmax`
 without its displacement falling below `tol` is written like one that
@@ -507,15 +569,17 @@ and the angle gamma between them, and goes on with the algorithm as it is.
 ### Where it runs
 
 As the interpolations of the PES, never in the orchestrator: in a job of its
-own with `[execution.analysis]`, or by hand,
+own, or by hand,
 
 ```bash
 triboworkflow analyse shear
 ```
 
 with the orchestrator ended or stopped ([execution.md](execution.md),
-*Analyses in a job of their own*). The same jobscript serves all the analyses:
-give it the memory of the heaviest and the walltime of the longest. The linear
+*Analyses in a job of their own*). The same jobscript serves all the analyses
+(`[execution.analysis]`, else the one of `[execution]`): give it the memory
+of the heaviest; the walltime of each is the one of its step, here
+`[execution.shear]`. The linear
 algebra uses the threads of NumPy's BLAS (set them in the jobscript, e.g.
 `export OMP_NUM_THREADS=8`); the numbers of a run can differ in the last digits
 with the number of threads, and the provenance does not record them.
@@ -573,15 +637,18 @@ string <bs_line|x|y>: <n> steps, <seconds> s
 <system>: parameters other than the recommended ones: <key> = <value> (recommended <default>), ...
 ```
 
-The last line only when some parameter is not the recommended one (the seed
-is not listed). A cell that is not a square gives a warning of its own before
+The line `<system>: profiles along the strings in <path of shear.output>;
+figures of the paths: mep_<name>.png, ...` comes before these three. The last line only when some parameter is not the
+recommended one (the seed is not listed). A cell that is not a square gives a warning of its own before
 the calculation. What the code of the string method prints (the coordinates of
 the paths and the shear strength) goes to the log at debug level only.
 
 ### When the step runs again
 
-The step is done when its three entries exist and their provenance is the one
-that the settings and the entries read give now. Changing `delta`, `seed` or
+The step is done when its three entries exist, their provenance is the one
+that the settings and the entries read give now, and `shear.output` and the
+two figures exist (a run analysed before the files were added is analysed
+again once). Changing `delta`, `seed` or
 any parameter of `[interface.shear.mep]`, analysing `plotpes` again (new
 points of the PES) or `match` again (another cell) makes it run again. The
 step is done only while `plotpes`, `pes` and `match` are done and current.
@@ -680,8 +747,12 @@ J/m^2 divide them by the area of the cell of the final structure of
 `adhesion/interface_min`. The empty dicts of the structures (`properties:
 {}`) are not stored; the structures are read back the same.
 
-Everything is written together, at the end: when any part fails, nothing is
-written. The writes replace the same keys at every analysis, so nothing of an
+| File, in `systems/<system>/adhesion/` | Content |
+|---|---|
+| `adhesion_<type>.output` | text: the system and the time; `[interface.adhesion]` and the two sites of the surface; the total energy of the four calculations (eV) and the area of the cell (Å^2); for each site its name, the adhesion energy in eV and in J/m^2, the work of separation (minus the adhesion energy, J/m^2) and the distance between the slabs of the relaxed interface (the lowest atom of the top slab minus the highest atom of the bottom slab, Å; `nan` when the slabs of the atoms cannot be told); the corrugation |
+
+Everything is written together, at the end, the file in the same save as the
+entries: when any part fails, nothing is written. The writes replace the same keys at every analysis, so nothing of an
 earlier one is left, and the entries of the other kind (`regular` or `short`)
 are not touched. Each entry of the table (`data.<label>` and the other
 entries by label) records its provenance: the parameters of the step (the
@@ -696,6 +767,7 @@ content of the entries read.
 <system>: adhesion energy at <site>: <energy> eV, <energy> J/m^2
 <system>: adhesion energy at <site>: <energy> eV, <energy> J/m^2
 <system>: corrugation (maximum - minimum): <difference> eV, <difference> J/m^2
+<system>: table of the adhesion in <path of adhesion_<type>.output>
 ```
 
 The energies have 6 decimals. What the code that builds the structures
@@ -703,8 +775,10 @@ prints goes to the log at debug level only.
 
 ### When the step runs again
 
-The step is done when its entries exist and their provenance is the one that
-the settings, the calculations and the entries read give now. Changing
+The step is done when its entries exist, their provenance is the one that
+the settings, the calculations and the entries read give now, and
+`adhesion_<type>.output` exists (a run analysed before the file was added is
+analysed again once, from the calculations already done). Changing
 `[interface.adhesion]`, `kdens`, a parameter of the calculations (e.g.
 `ecutwfc`), or analysing the PES or `match` again (new calculations, other
 settings) makes it run again: the structures of the calculations differ, so
@@ -857,22 +931,40 @@ positive, so:
   error; list more shifts or use `fit = "none"`;
 - with four or more the deviations are finite.
 
+| File, in `systems/<system>/ppes/` | Content |
+|---|---|
+| `ppes_<type>_<site>.output` | text: the system and the time; `[interface.ppes]` and `[interface.adhesion]`; the distance between the slabs of the interface relaxed by the adhesion (the lowest atom of the top slab minus the highest atom of the bottom slab, Å) and the adhesion energy of the site; one row per shift: `shift`, `distance` (that distance plus the shift, Å), `energy_eV` and `energy_Jm2` (as in the entries), `adhesion_Jm2` (`energy_Jm2` minus its value at the shift 0 plus the adhesion energy of the site); with the fit, `g` (also in J/m^2), `l`, `s0` (the shift of the minimum of the curve) and the deviations |
+| `ppes_<type>_<site>_<name>.png`, `.pdf` | the PPES: `adhesion_Jm2` of each shift against the distance between the slabs, with the UBER curve when fitted; the figure of the article as that of `plotpes` (8.5 cm, serif, 600 dpi and PDF) |
+
+The adhesion energy at a distance is the energy of the shift referred so that
+the shift 0, the interface relaxed by the adhesion, has the adhesion energy of
+the site (`adhesion.<type>.<site>`): the curve goes from that value towards
+zero as the slabs part. Without the shift 0 among the shifts the column is
+`nan` and the figure gives ΔE, the energy above the lowest one; when the slabs
+of the atoms cannot be told, the distance is `nan` and the figure is against
+the shift. `s0` comes from the same fit run again on the same energies, whose
+`g` and `l` must be those written. The file and the figure are written with the
+entries, in the same save.
+
 ### Message
 
 ```text
 <system>: ppes: <type> PPES at <site>, <n> shifts of the slab on top from <min> to <max> angstrom (slab_from_scratch)
 <system>: total energy per area: lowest <energy> J/m^2 at the shift <shift>, highest <energy> J/m^2 at the shift <shift>
 <system>: fit uber: g = <g> +- <sigma_g> eV per cell, l = <l> +- <sigma_l> angstrom
+<system>: table of the PPES in <path of the .output>, figure in ppes_<type>_<site>_<name>.png and ppes_<type>_<site>_<name>.pdf
 ```
 
-The last line is `no fit (fit = "none")` without the fit. The energies have
+The third line is `no fit (fit = "none")` without the fit. The energies have
 6 decimals. What the code that builds the structures prints goes to the log at
 debug level only.
 
 ### When the step runs again
 
-The step is done when its two entries exist and their provenance is the one
-that the settings, the calculations and the interface read give now. It is not
+The step is done when its two entries exist, their provenance is the one
+that the settings, the calculations and the interface read give now, and its
+text file and figure exist (a run analysed before they were added is analysed
+again once, from the calculations already done). It is not
 done, and its analysis stops with the steps to run first, when `adhesion`, the
 PES it reads or `match` is not done and current: the provenance holds the
 content that each step read, not whether that content is still current.
@@ -1047,16 +1139,28 @@ fingerprints and the results used, the content of the interface read, and the
 digests of the three files of the densities, which the results of the records do
 not cover.
 
+| File, in `systems/<system>/charge/` | Content |
+|---|---|
+| `charge_<type>_<site>.output` | text: the system and the time; `[interface.charge]` and `[interface.adhesion]`; the region between the slabs along z (contact plane at 0); the integrals and widths of the entries; one row per point of the grid along z: `z`, the planar averages of the densities of the interface and of the two slabs and the planar average of the charge displacement (e/Å^3) |
+| `charge_<type>_<site>_<name>.png`, `.pdf` | the planar average of the charge displacement against z, the contact plane at 0, the region between the slabs (the range of the integral) shaded; the figure of the article as that of `plotpes` |
+| `charge_<type>_<site>_<name>.cube` | the charge displacement in three dimensions, in e/bohr^3, on the grid of the densities and with the atoms of the interface, in the cell of the calculations (the contact plane at half the cell): a Gaussian cube file, which VESTA and OVITO read (OVITO, free version: the modifier *Create isosurface* on the voxel grid, one positive and one negative level; VESTA: the isosurfaces of the volumetric data) |
+
+The file of the cube holds the whole grid, about 13 bytes per point (34 MB
+for 72 x 72 x 500 points; writing the figure and the cube took about 15 s). The three files are written with the entries, in the
+same save.
+
 The analysis reads three text files and works on arrays of their size: on a
 grid of 4 million points (100 x 100 x 400) it takes about 4 seconds and about
 0.5 GiB over what the process already held, measured on synthetic files; it runs
-in the orchestrator like the other steps with calculations, not by hand.
+in the orchestrator like the other steps with calculations, not by hand. The
+figure and the cube file add the time of writing them.
 
 ### Message
 
 ```text
 <system>: charge: <type> charge displacement at <site>: interface <op> bottom slab <op> top slab (slab_from_scratch)
 <system>: integral of the planar average of the difference, over the region of the interface (<width> angstrom): <integral> e/angstrom^3; over the cell: <integral> e/angstrom^3
+<system>: table in charge_<type>_<site>.output; figure and cube file in <folder of the step>/
 ```
 
 What the code that builds the structures prints goes to the log at debug level
@@ -1064,9 +1168,11 @@ only.
 
 ### When the step runs again
 
-The step is done when its three entries exist and their provenance is the one
+The step is done when its three entries exist, their provenance is the one
 that the settings, the calculations, the interface read and the files of the
-densities give now. It is not done, and its analysis stops with the steps to run
+densities give now, and its text file, figure and cube file exist (a run
+analysed before they were added is analysed again once, from the calculations
+already done). It is not done, and its analysis stops with the steps to run
 first, when `adhesion`, the PES it reads or `match` is not done and current. It
 is not done either when a file of a density is gone or has changed.
 

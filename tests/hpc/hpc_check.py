@@ -282,7 +282,8 @@ def main(argv=None):
                    '"mpirun -np 4"; empty: the fake engine runs directly')
     p.add_argument('--calcs', type=int, default=40)
     p.add_argument('--groups', type=int, default=8, help='number of jobs')
-    p.add_argument('--walltime', type=int, default=1800, help='seconds, as in the jobscript')
+    p.add_argument('--walltime', type=int, default=1800,
+                   help='seconds, given to the submission of each job (sbatch --time)')
     p.add_argument('--margin', type=int, default=600, help='max_seconds_margin, seconds')
     p.add_argument('--sleep', type=float, default=5.0, help='seconds of each fake run')
     p.add_argument('--submit', action='store_true', help='submit; otherwise a dry run')

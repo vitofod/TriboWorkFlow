@@ -12,9 +12,10 @@ Firetasks of the PES with the steps pes and pes_scf
 match_step golden calls build, and the plotpes_step cases the Firetasks of
 the interpolation with the steps plotpes and plotpes_scf
 (triboworkflow.workflows.interface.plotpes), starting from the document that
-the match_step and pes_step golden calls build; the key image that TribChem
-writes (the PNG of the figure encoded again) is compared by its pixels with
-the figure of the port, which writes no image (DEV-42), the shear_step cases
+the match_step and pes_step golden calls build; the figure is not compared:
+the key image that TribChem writes (the PNG of the figure encoded again) is
+dropped, the port writes no image (DEV-42) and draws another figure (DEV-60),
+the shear_step cases
 the Firetasks of the shear strength with the step shear
 (triboworkflow.workflows.interface.shear), starting from the document that the
 match_step, pes_step and plotpes_step golden calls build, and the adhesion_step
@@ -720,7 +721,7 @@ def match_step_port(names, inter_params, set_bm):
     slabs = []
     for i, name in enumerate(names, 1):
         Path(f'slab_{i}.json').write_text(json.dumps(dicts[name]))
-        slab = {'file': f'slab_{i}.json', 'mid': MATCH_MIDS[name], 'miller': [1, 1, 1]}
+        slab = {'file': f'slab_{i}.json', 'id': MATCH_MIDS[name], 'miller': [1, 1, 1]}
         if set_bm:
             slab['bulk_modulus'] = MATCH_MODULI[name]
         slabs.append(slab)
@@ -939,7 +940,7 @@ def port_settings(pair, mids, steps, short, adhesion=None, ppes=None, charge=Non
     slabs = []
     for i, (name, mid) in enumerate(zip(MATCH_STEPS[pair][:2], mids), 1):
         Path(f'slab_{i}.json').write_text(json.dumps(dicts[name]))
-        slabs.append({'file': f'slab_{i}.json', 'mid': mid, 'miller': [1, 1, 1]})
+        slabs.append({'file': f'slab_{i}.json', 'id': mid, 'miller': [1, 1, 1]})
     pes_scf = {'short': short is not None}
     if isinstance(short, list):
         pes_scf['layers'] = list(short)
@@ -1042,21 +1043,11 @@ def plotpes_document(name):
     return document
 
 
-def png_pixels(data):
-    """Mode, size and SHA-256 of the pixels of a PNG given as bytes: the same
-    for the same image, whatever its encoding."""
-    from PIL import Image
-    with Image.open(io.BytesIO(data)) as image:
-        image.load()
-        return {'mode': image.mode, 'size': list(image.size),
-                'sha256': vendoring.sha256(image.tobytes())}
-
-
 def plotpes_step_historic(tc, name):
     """FT_StartInterpolation as TribChem's command line builds it, then the
     FT_PESInterpolation of its detour (arrange_data and compute_pes, as its
     run_task) on the document emulated as for the PES. The key image written,
-    the PNG of the figure encoded again with PIL, is replaced by its pixels."""
+    the PNG of the figure encoded again with PIL, is dropped (DEV-42, DEV-60)."""
     run_ft = tc['highput.firetasks.run']
     core = tc['highput.firetasks.core']
     dbtools = tc['highput.database.dbtools']
@@ -1100,16 +1091,14 @@ def plotpes_step_historic(tc, name):
     finally:
         core.FireTaskTribChem.query_db, core.FireTaskTribChem.update_db = saved
     (call,) = calls
-    image = call['data'][params['pes_type']].pop('image')
-    return {'inputs': {'inter_all': hs_all, 'values': values, 'cell': cell},
-            'figure': sorted(p.name for p in Path('.').glob('*.png')),
-            'image': png_pixels(image), 'calls': calls}
+    call['data'][params['pes_type']].pop('image')
+    return {'inputs': {'inter_all': hs_all, 'values': values, 'cell': cell}, 'calls': calls}
 
 
 def plotpes_step_port(tc, name):
     """plotpes_inputs of the step from settings and a run with the document
-    after the PES, then interpolate and write_interpolation on a store that
-    records the database calls; the pixels of the figure written."""
+    after the PES, then interpolate, without its figure, and write_interpolation
+    on a store that records the database calls."""
     from triboworkflow.core.store import SystemWriter
     from triboworkflow.core.store.legacy import LegacyStore
     from triboworkflow.execution.layout import system_dir
@@ -1134,19 +1123,16 @@ def plotpes_step_port(tc, name):
     with SystemWriter(sdir) as writer:
         writer.document.create(document)
         inputs = plotpes.plotpes_inputs(sdir, writer.document, settings, PLOTPES_OF[step])
-        figure = plotpes.figure_path(sdir, inputs.name, inputs.title)
-        figure.parent.mkdir(parents=True)
-        interpolation = plotpes.interpolate(inputs, figure)
+        interpolation = plotpes.interpolate(inputs)
         store = Recording(sdir, writer.document, plotpes.COLLECTION)
         plotpes.write_interpolation(store, inputs, interpolation)
     return {'inputs': {'inter_all': inputs.all_shifts, 'values': inputs.values,
                        'cell': inputs.cell},
-            'figure': [figure.name], 'image': png_pixels(figure.read_bytes()),
             'calls': store.calls}
 
 
 def case_plotpes_step(tc, name):
-    """Inputs, database writes and figure of the steps plotpes and plotpes_scf."""
+    """Inputs and database writes of the steps plotpes and plotpes_scf."""
     if tc.root == HISTORIC:
         return plotpes_step_historic(tc, name)
     return plotpes_step_port(tc, name)

@@ -38,7 +38,7 @@ classifiers = [
 triboworkflow = 'triboworkflow.cli.main:main'
 
 [project.optional-dependencies]
-# Filled in phase 5 (MLIP) and phase 6 (CP2K).
+# Filled in when the MLIP and CP2K engines are added.
 mlip = []
 cp2k = []
 dev = ['pytest']

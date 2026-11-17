@@ -24,6 +24,8 @@ import pytest
 from cli_helpers import fake_scheduler_bin  # noqa: F401
 from run_helpers import Slurm
 from triboworkflow.cli import run as cli_run
+from triboworkflow.core.settings import load_settings
+from triboworkflow.core.settings.schema import WALLTIME_STEPS
 from triboworkflow.core.store import read_record
 from triboworkflow.execution import layout
 from triboworkflow.workflows.interface import registry
@@ -177,7 +179,9 @@ def test_write_every_case(machine, tmp_path, capsys, case, count, system):
         assert '[generation]' in config and (run / 'jobscript.sh').read_text().endswith(
             'pw -in input.pwi >> output.pwo\n')
     else:
-        assert f'walltime = {walltime}' in config
+        steps = [step for step in plan['steps'] if step in WALLTIME_STEPS]
+        assert steps and load_settings(run / 'config.toml').execution.missing_walltimes(steps) == []
+        assert f'[execution.{steps[0]}]\nwalltime = "{qe_check.hms(walltime)}"' in config
     assert ((run / 'qe_check' / 'inject' / 'sitecustomize.py').is_file()) == (case == 'claim')
 
 

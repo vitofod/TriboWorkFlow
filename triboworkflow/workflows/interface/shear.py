@@ -43,6 +43,13 @@ and the content of the entries read. A string that reaches ``nstepmax`` without 
 displacement falling below ``tol`` is written like one that converged: compare ``tol`` of
 the entry with the one of the settings.
 
+The profiles along the paths are in the text file ``shear/shear.output`` of the folder of
+the system (``shear_output``): the parameters, the shear strength, ``nstep`` and ``tol`` of
+each string, and for each string the whole table, one row for each point of the path,
+with its position ``x``, ``y`` in angstrom and the six columns above: ``lxy`` in angstrom,
+``dvx``, ``dvy`` and ``force`` in J/m^2 per angstrom, ``vz`` and ``ve`` in J/m^2. The
+table is the one the shear strength is computed from, not computed again.
+
 The noise of ``bs_line`` is drawn with the global generator of NumPy, which is seeded
 with ``[interface.shear] seed`` before each string and restored at the end, so that
 the analysis can be repeated and does not change the numbers that the program draws
@@ -55,18 +62,26 @@ the recommended parameters a string takes many thousands of steps; ``tests/shear
 measures it.
 
 Where it runs: never in the orchestrator, on the login node
-(``Step.manual_analysis``). With ``[execution.analysis]`` the orchestrator submits it in
-a job of its own on a compute node and follows the job, which runs ``analyse`` of this
-step (``cli/analysis_job.py``) without taking the lock of the run. Without that table
-the orchestrator leaves the step ``manual`` once it is ready: the user runs
-``triboworkflow analyse shear`` on a machine with enough memory; that command takes the
-lock of the run, so it runs with the orchestrator stopped or ended.
+(``Step.manual_analysis``). The orchestrator submits it in a job of its own on a compute
+node, with the jobscript of ``[execution.analysis]`` or else of ``[execution]``, and
+follows the job, which runs ``analyse`` of this step (``cli/analysis_job.py``) without
+taking the lock of the run. The user may also run ``triboworkflow analyse shear`` on a
+machine with enough memory; that command takes the lock of the run, so it runs with the
+orchestrator stopped or ended.
+
+Two figures go next to ``shear.output`` (``draw_paths``): ``mep_<name>.png`` and ``.pdf``,
+the map of the PES of the interpolation with the three paths drawn on it, and
+``mep_profile_<name>.png`` and ``.pdf``, Delta E and the shear stress along each path.
 
 All or nothing: the entries are read, the three strings are computed without locking the
-document; then, with the document locked, the prerequisites and the entries read are
-checked again, the entries written and the document saved once. An interruption leaves the
-document as it was: the step is never done with a string missing. A step done is
-recognised from its entries and their provenance, without computing again.
+document and ``shear.output`` and the figures written to temporary files; then, with the
+document locked, the prerequisites and the entries read are checked again, the entries
+written, the document saved once and the files renamed. An interruption before the save
+leaves the document as it was: the step is never done with a string missing. Each file
+carries the stamp of the provenance saved (``outputs.analysis_stamp``), so files left by
+an interruption after the save do not make the step done. A step done is recognised from
+its entries, their provenance, ``shear.output`` and the figures with that stamp, without
+computing again.
 
 Notes
 -----
@@ -96,6 +111,7 @@ import math
 import time
 from dataclasses import dataclass
 
+import matplotlib
 import numpy as np
 from monty.json import jsanitize
 
@@ -109,10 +125,12 @@ from triboworkflow.vendored.highput.database.dbtools import read_one_entry
 from triboworkflow.vendored.physics.tribology.mep import MEP
 from triboworkflow.vendored.physics.tribology.pes import PES
 
-from .chain import check_upstream, upstream_done
+from .chain import check_upstream, upstream_done, upstream_entries_done
+from .figures import figure_paths, pes_figure, profile_figure
 from .match import COLLECTION, FILTER_KEYS, match_parameters, match_provenance, set_filter
+from .outputs import analysis_stamp, header, place, staged, written_by
 from .pes import ID_KEYS
-from .plotpes import RelaxedPlotPesStep
+from .plotpes import RelaxedPlotPesStep, interface_name
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +151,11 @@ CELL = INTERFACE + ('lattice', 'matrix')
 # A cell is a square with its sides along x and y if its sides differ and its off-diagonal
 # elements are at most this fraction of its largest side.
 SQUARE_TOL = 1e-3
+# Text file of the step, in the folder of the system.
+OUTPUT = ('shear', 'shear.output')
+# Columns of a profile: the position of the point, then those of the table from which the
+# vendored code computes the shear strength, in its order.
+PROFILE_COLUMNS = ('x', 'y', 'lxy', 'dvx', 'dvy', 'vz', 've', 'force')
 
 
 @dataclass
@@ -173,12 +196,19 @@ class ShearResult:
         Centres of the radial basis functions.
     seconds : dict
         ``interpolation`` and the time of each string, in seconds.
+    profiles : dict
+        ``{string: array of shape (npts, 8)}``: the columns ``PROFILE_COLUMNS`` for each
+        point of the path.
+    solver : triboworkflow.vendored.physics.tribology.pes.PES or None
+        The interpolation on which the strings were found, for the figure of the paths.
     """
 
     data: dict
     points: int
     centres: int
     seconds: dict
+    profiles: dict
+    solver: object = None
 
 
 # --- inputs ---------------------------------------------------------------------------
@@ -359,7 +389,7 @@ def compute_shear(inputs, params):
     """
     cell = np.array(inputs.cell)
     mep_params = mep_arguments(params)
-    data, seconds = {}, {}
+    data, seconds, profiles = {}, {}, {}
     printed = io.StringIO()
     state = np.random.get_state()
     try:
@@ -376,9 +406,11 @@ def compute_shear(inputs, params):
                 np.random.seed(params.seed)
                 string = MEP(rbf=rbf, cell=cell)
                 string.get_mep(method=METHOD, optimization=opt, **mep_params)
-                string.get_shear_strenght(delta=params.delta, npts=mep_params['npts'],
-                                          optimization=opt)
+                _, table = string.get_shear_strenght(delta=params.delta, npts=mep_params['npts'],
+                                                     optimization=opt)
                 data[opt] = jsanitize(string.mep_data)
+                # The path after the call, at which the table was evaluated (A97).
+                profiles[opt] = np.column_stack((string.mep, table))
                 seconds[opt] = time.perf_counter() - start
                 logger.info('string %s: %d steps, %.1f s', opt,
                             data[opt][f'along_{opt}']['nstep'] + 1, seconds[opt])
@@ -387,7 +419,7 @@ def compute_shear(inputs, params):
         if printed.getvalue():
             logger.debug('output of the vendored code:\n%s', printed.getvalue())
     return ShearResult(data=data, points=len(inputs.pes_jm2), centres=len(rbf.y),
-                       seconds=seconds)
+                       seconds=seconds, profiles=profiles, solver=solver)
 
 
 def write_shear(store, inputs, result):
@@ -409,6 +441,99 @@ def write_shear(store, inputs, result):
     fltr = set_filter({'mid': inputs.ids['mid'], 'miller': inputs.ids['miller']})
     for opt in OPTIMIZATIONS:
         store.update_db(result.data[opt], COLLECTION, entry=ENTRY, fltr=fltr)
+
+
+def output_path(sdir):
+    """Text file of the step: ``shear/shear.output`` in the folder of the system."""
+    return sdir.joinpath(*OUTPUT)
+
+
+def figure_files(sdir, name):
+    """The two figures of the step, PNG and PDF of each, in ``shear/`` of the folder of the system.
+
+    ``mep_<name>``: the map of the PES with the three paths; ``mep_profile_<name>``: Delta E
+    and the shear stress along them.
+    """
+    folder = sdir.joinpath(*OUTPUT[:-1])
+    return [*figure_paths(folder / f'mep_{name}.png'),
+            *figure_paths(folder / f'mep_profile_{name}.png')]
+
+
+def draw_paths(result, files, stamp=None):
+    """Draw the two figures of the paths into ``files`` (``figure_files``, or their partials).
+
+    ``stamp``, the ``outputs.analysis_stamp`` of the analysis, goes in the metadata of the
+    files.
+
+    Notes
+    -----
+    To remove: TribChem's ``PES.plot(mep=...)`` (``physics/tribology/pes.py:326-327``) drew one
+    path on the map; the step drew none.
+    """
+    matplotlib.use('Agg')
+    paths = {opt: result.profiles[opt][:, :2] for opt in OPTIMIZATIONS}
+    pes_figure(result.solver, files[0], files[1], paths=paths, stamp=stamp)
+    profile_figure({opt: result.profiles[opt] for opt in OPTIMIZATIONS}, files[2], files[3],
+                   stamp)
+
+
+def shear_output(system, params, result, now=None, stamp=None):
+    """Text of ``shear.output``: parameters, shear strengths and the profiles along the paths.
+
+    Parameters
+    ----------
+    system : str
+        Name of the system.
+    params : ShearParams
+        ``[interface.shear]``.
+    result : ShearResult
+    now : datetime.datetime or None, optional
+        Time written in the header; the current local time by default.
+    stamp : str or None, optional
+        ``outputs.analysis_stamp`` of the analysis, on a line of the header.
+
+    Returns
+    -------
+    str
+        Lines starting with ``#`` describe the parameters, the units and the columns; the
+        others are the table of the shear strengths and, for each string, its profile, one
+        row per point of the path, readable with ``numpy.loadtxt`` once split.
+    """
+    mep = mep_arguments(params)
+    lines = [*header('Shear strength of the interface', system, 'shear', now, stamp),
+             '#',
+             '# Parameters',
+             f'#   [interface.shear]      delta = {params.delta!r}, seed = {params.seed!r}',
+             '#   [interface.shear.mep]  ' + ', '.join(f'{k} = {v!r}' for k, v in mep.items()),
+             f'#   string method {METHOD}; PES pes.energy.pes_jm2 of {result.points} points, '
+             f'interpolated with radial basis functions on {result.centres} centres (the points '
+             f'replicated {REPLICATE_OF[0]} x {REPLICATE_OF[1]})',
+             '#',
+             '# Shear strength along each string, as in shearstr.along_<string> of system.json',
+             f'# {"string":<8} {"shear_strength_GPa":>20} {"nstep":>8} {"tol":>12}']
+    for opt in OPTIMIZATIONS:
+        entry = result.data[opt][f'along_{opt}']
+        lines.append(f'  {opt:<8} {entry["shear_strength_GPa"]:>20.10f} {entry["nstep"]:>8d} '
+                     f'{entry["tol"]:>12.4e}')
+    lines += ['#',
+              '# Profile along the minimum energy path of each string, one row per point:',
+              '#   x, y       position of the point in the plane of the interface, angstrom',
+              '#   lxy        length along the path from its first point, angstrom',
+              '#   dvx, dvy   derivatives of the PES along x and y, J/m^2 per angstrom',
+              '#   vz         integral of the force along the path, J/m^2, minimum at zero',
+              '#   ve         energy of the PES at the point, J/m^2, minimum at zero',
+              '#   force      force along the path (minus the derivative of the PES along its',
+              '#              tangent), J/m^2 per angstrom; the shear strength is 10 times its',
+              '#              largest absolute value, in GPa',
+              '# The keys lxy, dvx, dvy, vz, ve and force of shearstr.along_<string> in',
+              '# system.json are the first six rows of the profile, columns lxy to force: lxy',
+              '# holds the six values of the first point, dvx those of the second, and so on.']
+    for opt in OPTIMIZATIONS:
+        profile = result.profiles[opt]
+        lines += ['#', f'# Profile along {opt}: {len(profile)} points',
+                  '#' + ' '.join(f'{name:>17}' for name in PROFILE_COLUMNS)]
+        lines += [' ' + ' '.join(f'{value: .10e}' for value in row) for row in profile]
+    return '\n'.join(lines) + '\n'
 
 
 def describe(inputs, params, result):
@@ -462,27 +587,58 @@ class ShearStep(Step):
     manual_analysis = True
 
     def done(self, run_dir, system):
+        """Whether the entries are done (``entries_done``) and ``shear.output`` and the
+        figures of the paths were written by the analysis saved (``outputs.written_by``)."""
+        current = self._current(run_dir, system, upstream_done)
+        return current is not None and written_by(*self._exports(run_dir, system, *current))
+
+    def entries_done(self, run_dir, system):
         """Whether the three entries are written and current.
 
         Nothing is computed: the entries read are compared with those recorded in the
         provenance. ``plotpes`` and the steps it reads from have to be done too: the
         provenance holds the content of the entries read, not whether they are still
-        current.
+        current. Their entries only, not their files (``upstream_entries_done``).
+        """
+        return self._current(run_dir, system, upstream_entries_done) is not None
+
+    def exports(self, run_dir, system):
+        """Files of the analysis saved and the stamp each carries: ``(paths, stamp)``.
+
+        Only for entries done (``entries_done``): the figures are named after the interface
+        that the inputs read.
+        """
+        return self._exports(run_dir, system,
+                             *self._current(run_dir, system, upstream_entries_done))
+
+    def _current(self, run_dir, system, upstream):
+        """The document and the inputs when the entries are written and current, else None.
+
+        ``upstream`` tells whether the steps upstream are done: ``upstream_done`` or
+        ``upstream_entries_done``.
         """
         sdir = system_dir(run_dir, system)
         document = read_system(sdir)
         # Before any analysis the inputs are not read: plotpes may not have run.
         if not all(document.get(leaf) for leaf in shear_leaves()):
-            return False
-        if not upstream_done(self, run_dir, system):
-            return False
+            return None
+        if not upstream(self, run_dir, system):
+            return None
         settings = _load_run(run_dir)
         try:
             inputs = shear_inputs(sdir, document, settings)
         except PrerequisiteError:
-            return False
+            return None
         expected = shear_provenance(inputs, settings.interface.shear)
-        return all(is_done(document, leaf, expected, sdir) for leaf in shear_leaves())
+        if not all(is_done(document, leaf, expected, sdir) for leaf in shear_leaves()):
+            return None
+        return document, inputs
+
+    @staticmethod
+    def _exports(run_dir, system, document, inputs):
+        sdir = system_dir(run_dir, system)
+        paths = [output_path(sdir), *figure_files(sdir, interface_name(inputs.ids))]
+        return paths, analysis_stamp(document.provenance(shear_leaves()[0]))
 
     def expected(self, run_dir, system):
         """The interpolated PES with the provenance of ``plotpes``, the interface with that of ``match``.
@@ -510,7 +666,7 @@ class ShearStep(Step):
                                 settings.interface.shear)
 
     def analyse(self, run_dir, system, calculations):
-        """Compute the shear strength and write the entries with their provenance.
+        """Compute the shear strength, write the entries with their provenance and ``shear.output``.
 
         Raises
         ------
@@ -529,15 +685,25 @@ class ShearStep(Step):
         if warning:
             logger.warning('%s: %s', system, warning)
         result = compute_shear(inputs, params)
-        with SystemWriter(sdir) as writer:
-            check_prerequisites(writer.document, self.expected(run_dir, system), sdir)
-            again = shear_inputs(sdir, writer.document, settings)
-            if shear_provenance(again, params) != provenance:
-                raise StoreError(f'{system}/{self.name}: the entries read changed during the '
-                                 'analysis; nothing written')
-            write_shear(LegacyStore(sdir, writer.document, COLLECTION), inputs, result)
-            for leaf in shear_leaves():
-                writer.document.set_provenance(leaf, provenance)
-            writer.save()
+        output = output_path(sdir)
+        figures = figure_files(sdir, interface_name(inputs.ids))
+        stamp = analysis_stamp(provenance)
+        with staged([output, *figures]) as partials:
+            partials[output].write_text(shear_output(system, params, result, stamp=stamp),
+                                        encoding='utf-8')
+            draw_paths(result, [partials[path] for path in figures], stamp)
+            with SystemWriter(sdir) as writer:
+                check_prerequisites(writer.document, self.expected(run_dir, system), sdir)
+                again = shear_inputs(sdir, writer.document, settings)
+                if shear_provenance(again, params) != provenance:
+                    raise StoreError(f'{system}/{self.name}: the entries read changed during '
+                                     'the analysis; nothing written')
+                write_shear(LegacyStore(sdir, writer.document, COLLECTION), inputs, result)
+                for leaf in shear_leaves():
+                    writer.document.set_provenance(leaf, provenance)
+                writer.save()
+                place(partials)
+        logger.info('%s: profiles along the strings in %s; figures of the paths: %s', system,
+                    output, ', '.join(path.name for path in figures))
         for line in describe(inputs, params, result):
             logger.info('%s: %s', system, line)
