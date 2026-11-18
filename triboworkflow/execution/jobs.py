@@ -68,7 +68,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from triboworkflow.core.guard import NotOnHPCError, hpc_only
-from triboworkflow.core.settings.schema import DEFAULT_WALLTIME
+from triboworkflow.core.settings.schema import DEFAULT_WALLTIME, slurm_time_min_option
 from triboworkflow.core.store.atomic import check_json_value, read_json, write_json
 from triboworkflow.core.store.fingerprint import bytes_digest, check_fingerprint
 from triboworkflow.core.store.record import check_keys, check_name, read_record, split_calc_id
@@ -444,12 +444,7 @@ def jobscript_time(path):
         If a ``--time`` is not a time limit of Slurm (``slurm_seconds``).
     """
     found = None
-    for line in Path(path).read_text(encoding='utf-8').splitlines():
-        if line.strip() and not line.lstrip().startswith('#'):
-            break
-        if not line.startswith('#SBATCH'):
-            continue
-        words = shlex.split(line[len('#SBATCH'):], comments=True)
+    for words in _sbatch_lines(path):
         for i, word in enumerate(words):
             if word.startswith('--time='):
                 found = word[len('--time='):]
@@ -458,6 +453,33 @@ def jobscript_time(path):
             elif word.startswith('-t') and not word.startswith('--') and len(word) > 2:
                 found = word[2:]
     return None if found is None else slurm_seconds(found)
+
+
+def jobscript_time_min(path):
+    """Whether the ``#SBATCH`` lines of a jobscript of Slurm give a ``--time-min``.
+
+    With it Slurm may give a job less than the time limit that the submission
+    asks for, and the worker counts on the walltime of its step. The lines are
+    read as ``jobscript_time`` reads them.
+
+    Raises
+    ------
+    OSError
+        If the jobscript cannot be read.
+    """
+    return any(slurm_time_min_option(word) for words in _sbatch_lines(path) for word in words)
+
+
+def _sbatch_lines(path):
+    """Words of each ``#SBATCH`` line of a jobscript, up to the first line that is neither blank
+    nor a comment, where ``sbatch`` stops reading them."""
+    lines = []
+    for line in Path(path).read_text(encoding='utf-8').splitlines():
+        if line.strip() and not line.lstrip().startswith('#'):
+            break
+        if line.startswith('#SBATCH'):
+            lines.append(shlex.split(line[len('#SBATCH'):], comments=True))
+    return lines
 
 
 def jobscript_name(path):
@@ -478,12 +500,7 @@ def jobscript_name(path):
         If the jobscript cannot be read.
     """
     found = None
-    for line in Path(path).read_text(encoding='utf-8').splitlines():
-        if line.strip() and not line.lstrip().startswith('#'):
-            break
-        if not line.startswith('#SBATCH'):
-            continue
-        words = shlex.split(line[len('#SBATCH'):], comments=True)
+    for words in _sbatch_lines(path):
         for i, word in enumerate(words):
             if word.startswith('--job-name='):
                 found = word[len('--job-name='):]
@@ -580,8 +597,9 @@ def walltime_notes(execution, steps, jobscripts):
     list of str
         The steps without a walltime, which get ``DEFAULT_WALLTIME``; with
         Slurm, the jobscripts with a ``--time``, which the walltime of the
-        step overrides. A jobscript that cannot be read is left to the
-        writing of the jobs, which reports it.
+        step overrides, and those with a ``--time-min``, which does not let
+        the jobs count on the walltime. A jobscript that cannot be read is
+        left to the writing of the jobs, which reports it.
     """
     notes = []
     missing = execution.missing_walltimes(list(steps))
@@ -592,11 +610,21 @@ def walltime_notes(execution, steps, jobscripts):
         for path in jobscripts:
             try:
                 found = jobscript_time(path)
-            except (OSError, ValueError):
+            except OSError:
                 continue
+            except ValueError:
+                found = None
             if found is not None:
                 notes.append(f'{path} has an #SBATCH --time: the walltime of each step in '
                              '[execution.<step>] replaces it')
+            try:
+                time_min = jobscript_time_min(path)
+            except (OSError, ValueError):
+                continue
+            if time_min:
+                notes.append(f'{path} has an #SBATCH --time-min: Slurm may give the jobs less '
+                             'than the walltime of the step, which the workers count on; remove '
+                             'it')
     return notes
 
 

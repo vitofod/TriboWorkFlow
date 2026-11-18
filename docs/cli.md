@@ -490,8 +490,9 @@ one or more of its calculations, as `status --calcs` lists them (the id of a
 calculation is `<step>/<label>`: `ppes/min_site_1.5` is `--step ppes --calc
 min_site_1.5`). With `--step` alone every calculation of the step that can be
 relaunched is, in one new group, and the others are listed with the reason
-(completed, or its worker may still run). With `--calc` those calculations
-only: all of them must be relaunchable, or nothing is written.
+(completed, or its worker may still run). With `--calc`, all the selected
+calculations must be relaunchable before any attempt is archived or any job
+is submitted. The checks may refresh existing job and attempt states.
 
 `relaunch` checks that the worker of the last attempt of each calculation is
 surely over (no claim, or the run of the job of its claim over); otherwise it
@@ -514,6 +515,11 @@ triboworkflow relaunch --step adhesion --calc interface_max --level 2 --from-scr
 When the launch of the last attempt of a calculation is not recorded and the
 groups that list it give different launches, it lists them: choose one with
 `--from-group` (for a single calculation, given with `--calc`).
+
+A **completed** calculation cannot be run again with a command yet. Do not
+remove its folder to force it: the record, the output and the history of the
+attempts are lost, and when the group that ran it held no other calculation the
+reconciliation finds `manual: no progress` and nothing is submitted.
 
 ### Rare cases
 

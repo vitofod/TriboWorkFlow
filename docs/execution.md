@@ -292,7 +292,9 @@ after a change of the options `stop` and `start` it again). With `max_jobs` in
 `[execution]` the manager submits no job while that many jobs of the run are
 waiting or running in the scheduler, and the others at later checks, the
 groups in the order they were written; a group submitted in part is not
-complete until all its jobs are. In
+complete until all its jobs are. A submission whose answer was lost (outcome
+not known) keeps its place, as its job may exist, until `resolve-submission`
+settles it. In
 `input.pwi`, `max_seconds`, `nstep` and `restart_mode` must be alone on
 their line of `&CONTROL`, `mixing_beta` on its line of `&ELECTRONS`, when
 given.

@@ -476,6 +476,54 @@ def test_a_timelimit_that_is_not_the_walltime_of_its_group_is_a_problem(run, tmp
     assert found['accounting'][0] == 'PROBLEM' and 'Timelimit UNLIMITED' in found['accounting'][1]
 
 
+@pytest.mark.parametrize('walltime, limit', [(1800, 1800), (3600, 3600), (3601, 3660), (3659, 3660),
+                                             (3660, 3660), (1, 60)])
+def test_slurm_rounds_the_seconds_of_the_walltime_up_to_the_minute(walltime, limit):
+    assert ic.slurm_limit(walltime) == limit
+
+
+def test_a_walltime_with_seconds_is_the_limit_slurm_rounds_it_to(run, tmp_path):
+    (job,) = job_ids(run, 'shear')
+    group = run / 'jobs' / f'{CUCU}.shear.1'
+    edit_json(group / 'analysis.json', lambda data: data.update(walltime=3601))
+    jobs = {job: ('COMPLETED', '1024K')}
+    found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', jobs, limit='01:01:00'))
+    assert found['accounting'][0] == 'note'  # the other jobs are not in the file
+    assert 'Timelimit equal to the walltime of the group for 1 of 1 jobs' in found['accounting'][1]
+    # Slurm never gives 01:00:01, nor leaves the minute out.
+    for limit in ('01:00:01', '01:00:00'):
+        found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', jobs, limit=limit))
+        assert found['accounting'][0] == 'PROBLEM'
+        assert f'Timelimit {limit}, walltime of the group 3601 s' in found['accounting'][1]
+
+
+@pytest.mark.parametrize('damage', ['truncated', 'missing', 'later-version'])
+def test_a_group_of_the_current_version_that_cannot_be_read_is_a_problem(run, tmp_path, damage):
+    (job,) = job_ids(run, 'shear')
+    path = run / 'jobs' / f'{CUCU}.shear.1' / 'analysis.json'
+    if damage == 'truncated':
+        path.write_text(path.read_text()[:40])
+    elif damage == 'missing':
+        path.unlink()
+    else:
+        edit_json(path, lambda data: data.update(schema_version=99))
+    found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', {job: ('COMPLETED', '1024K')}))
+    verdict, text = found['accounting']
+    assert verdict == 'PROBLEM'
+    assert f'file of the group not read, its walltime not compared: {CUCU}.shear.1:' in text
+    assert 'Timelimit equal to the walltime of the group for 0 of 0 jobs' in text
+    assert 'earlier version' not in text
+
+
+def test_a_group_of_an_earlier_version_is_counted_and_not_compared(run, tmp_path):
+    (job,) = job_ids(run, 'shear')
+    path = run / 'jobs' / f'{CUCU}.shear.1' / 'analysis.json'
+    edit_json(path, lambda data: (data.pop('walltime'), data.update(schema_version=1)))
+    found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', {job: ('COMPLETED', '1024K')}))
+    verdict, text = found['accounting']
+    assert verdict == 'note' and '(1 groups of an earlier version, without it, not compared)' in text
+
+
 def test_an_analysis_job_that_ran_out_of_memory(run, tmp_path):
     (job,) = job_ids(run, 'shear')
     found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', {job: ('OUT_OF_MEMORY', '8388608K')},

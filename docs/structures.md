@@ -170,8 +170,9 @@ Both paths rebuild the lattice with `Lattice.from_parameters`, already in the
   and the same side of the interface, with the cell right-handed. It is
   recorded (`swapped`, `provenance()`) and `analyse match` warns about it. The
   axes x and y of the shear paths and the columns a and b of the interface
-  follow the exchanged vectors (no difference for a cell with a = b). A JSON
-  slab with a left-handed cell is refused: it would be mirrored;
+  follow the exchanged vectors. Equal in-plane lattice lengths alone do not
+  guarantee that the two shear directions are equivalent. A JSON slab with
+  a left-handed cell is refused because it would be mirrored;
 - the rotation from the frame of the file, with a and b exchanged if they
   were, to that of the slab is recorded (`rotation`, `rotated`,
   `provenance()`), with the data dropped (e.g. `selective_dynamics`,

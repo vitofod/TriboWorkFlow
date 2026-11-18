@@ -218,6 +218,47 @@ def test_most_jobs_in_the_scheduler_at_the_same_time(run_dir, slurm, clock):
     assert slurm.count('sbatch') == 6
 
 
+class RefusesTheSecond(SimulatedSlurm):
+    """The second ``sbatch`` is refused: a group submitted in part."""
+
+    def _run_command(self, cmd, input_data=None, cwd=None):
+        if cmd[0] == 'sbatch' and self.count('sbatch') == 1:
+            self.refuse = 1
+        return super()._run_command(cmd, input_data, cwd)
+
+
+def test_most_jobs_counts_the_jobs_of_a_group_submitted_in_part(run_dir, clock):
+    slurm = RefusesTheSecond()
+    jobs = JobManager(run_dir, slurm, WAIT, now=clock, max_jobs=2)
+    jobs.add_group('batch1', 3)
+    jobs.add_group('batch2', 3)
+    jobs.cycle()
+    # batch1 got one job and was refused the second: one place is left for batch2, not two.
+    assert jobs.group_jobs('batch1') == ['1000'] and jobs.groups['batch1']['refused']
+    assert len(jobs.group_jobs('batch2')) == 1
+    assert jobs.jobs_in_queue() == 2 and sum(s == 'PENDING' for s in slurm.states.values()) == 2
+
+
+def test_most_jobs_counts_a_submission_of_outcome_not_known(run_dir, slurm, clock):
+    jobs = JobManager(run_dir, slurm, WAIT, now=clock, max_jobs=1)
+    jobs.add_group('batch1', 3)
+    jobs.add_group('batch2', 3)
+    slurm.lose = 1  # the job is created, the answer is lost
+    jobs.cycle()
+    assert jobs.groups['batch1']['unknown'] and jobs.jobs_in_queue() == 1
+    assert slurm.count('sbatch') == 1 and jobs.group_jobs('batch2') == []
+    jobs.cycle()
+    assert slurm.count('sbatch') == 1                       # the place is kept
+    jobs.resolve_submission('batch1', job_id='1000')        # the job is found: it is counted
+    jobs.cycle()
+    assert slurm.count('sbatch') == 1 and jobs.jobs_in_queue() == 1
+    slurm.states['1000'] = 'COMPLETED'
+    jobs.cycle()
+    # The place is free: the first group, which still misses jobs, takes it.
+    assert slurm.count('sbatch') == 2 and jobs.group_jobs('batch1') == ['1000', '1001']
+    assert jobs.group_jobs('batch2') == []
+
+
 def test_most_jobs_is_a_positive_integer(run_dir, slurm):
     for value in (0, -1, 2.0, True):
         with pytest.raises(JobManagerError, match='max_jobs'):

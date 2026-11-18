@@ -371,7 +371,7 @@ Needed only to run on HPC. No value is tied to a specific machine.
 | `groups` | int | none | > 0, jobs (workers) over which the calculations of a group are spread, for the steps without `groups` in their section (below): 1 runs them one after the other, one per calculation runs them all at once; never more jobs than calculations are submitted. When a step that runs calculations has no value, give it on the command line (`--groups`); in a terminal the command asks for it, elsewhere it stops with an error |
 | `max_seconds_margin` | int | `600` | > 0 s and below the walltime of every step of `[interface].steps` that runs calculations (the walltime of a step not run is not compared), time kept free at the end of the walltime |
 | `job_report_wait` | int | `3600` | > 0 s, time after its submission during which a job that the scheduler does not report is still waited for; after that it needs attention, and it is never submitted again automatically |
-| `max_jobs` | int | none | > 0, most jobs of the run in the scheduler at the same time, waiting or running (those of the run only, not those of other runs of the user): the others are submitted at the next checks, as those in the scheduler end, the groups in the order they were written. For the queues that limit the jobs of a user (e.g. a debug QoS with 4 jobs). Without it every job is submitted at once |
+| `max_jobs` | int | none | > 0, most jobs of the run in the scheduler at the same time, waiting or running (those of the run only, not those of other runs of the user): the others are submitted at the next checks, as those in the scheduler end, the groups in the order they were written. A submission whose answer was lost keeps its place until `resolve-submission` settles it. For the queues that limit the jobs of a user (e.g. a debug QoS with 4 jobs). Without it every job is submitted at once |
 | `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`, `plotpes`, `plotpes_scf`, `shear` | table | see below | `[execution.<step>]`: walltime, jobs per group and options of the submission of the jobs of the step |
 
 Before each run the worker writes `max_seconds` in the input it runs: the
@@ -419,8 +419,11 @@ walltime = "00:30:00"
   (`--gres=gpu:1` replaces `#SBATCH --gres=gpu:4`); it cannot remove a line
   that has no option to replace it (e.g. `#SBATCH --exclusive`). The package
   does not know the options: write them as the scheduler wants them. With
-  Slurm, `--time` and `-t` are an error here: the time limit of the jobs of a
-  step is its `walltime`, which also gives `max_seconds`.
+  Slurm, `--time`, `-t` (also `-t01:00:00`) and `--time-min` are an error
+  here: the time limit of the jobs of a step is its `walltime`, which also
+  gives `max_seconds`, and `--time-min` would let Slurm give a job less than
+  the workers count on. The same `--time-min` in an `#SBATCH` line of the
+  jobscript is not refused, but `check` and `start` warn of it.
 - The walltime goes to the command that submits each job of the step:
   `sbatch --time=HH:MM:SS` (Slurm), `qsub -l walltime=HH:MM:SS` (PBS,
   Torque), `qsub -l h_rt=HH:MM:SS` (SGE), `bsub -W HH:MM` (LSF, minutes
@@ -520,7 +523,7 @@ one ([execution.md](execution.md), *Analyses in a job of their own*).
 |---|---|---|---|
 | `file` | str | R | slab structure, relative to the folder of the settings file; `""` is a placeholder. A pymatgen JSON slab is used as stored, any other file is turned into a slab ([structures.md](structures.md)) |
 | `id` | str | R | name of the slab chosen by the user, e.g. `"Fe110"` or `"Cu111"`: letters, digits, `-` and `.`, starting with a letter or a digit; no `_`, which joins the two ids. The system is `<id1>_<id2>` (e.g. `Fe110_Fe110`), its folder `systems/<id1>_<id2>` |
-| `miller` | 3 int | R | |
+| `miller` | 3 int | R | Miller indices of the surface. They enter the default interface name, the order of the slabs in matching and the layer count of the reduced slabs in `pes_scf`. For a pymatgen JSON slab they must match its stored `miller_index` |
 | `formula` | str | — | given for both slabs together with `name`, or for neither |
 | `name` | str | — | tells apart homonyms (e.g. C diamond, C graphene); given for both slabs together with `formula`, or for neither |
 | `bulk_modulus` | float | R with `set_bm = true` | bulk modulus of the material in GPa; read only with `set_bm = true` |

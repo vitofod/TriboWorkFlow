@@ -27,8 +27,8 @@ from triboworkflow.execution.jobs import (ANALYSIS_FILE, JOBSCRIPT_FILE, MANIFES
                                           Manifest, analysis_jobscript_path, analysis_line,
                                           group_step, group_walltime, is_analysis, job_name,
                                           jobscript_name, jobscript_path,
-                                          jobscript_placeholders, jobscript_time, most_jobs,
-                                          read_analysis,
+                                          jobscript_placeholders, jobscript_time,
+                                          jobscript_time_min, most_jobs, read_analysis,
                                           read_manifest, slurm_seconds, submit_jobs,
                                           surely_not_created, walltime_notes, worker_line,
                                           write_analysis, write_job)
@@ -203,6 +203,36 @@ def jobscripts(tmp_path, *lines):
         path.write_text(f'#!/bin/bash\n{text}\nmodule load qe\n')
         paths.append(path)
     return paths
+
+
+@pytest.mark.parametrize('lines, found', [
+    ('#SBATCH --time-min=01:00:00', True),
+    ('#SBATCH --nodes=1 --time-min 00:30:00', True),
+    ('#SBATCH --time=01:00:00', False),
+    ('#SBATCH --time-m=01:00:00', True),
+    ('#SBATCH --time-minute=01:00:00', False),
+    ('# SBATCH --time-min=01:00:00', False),
+    ('module load qe\n#SBATCH --time-min=01:00:00', False)])
+def test_jobscript_time_min(tmp_path, lines, found):
+    path = tmp_path / 'job.sh'
+    path.write_text(f'#!/bin/bash\n{lines}\nsrun hostname\n')
+    assert jobscript_time_min(path) is found
+
+
+def test_walltime_notes_warn_of_a_time_min_in_a_jobscript(tmp_path):
+    paths = jobscripts(tmp_path, '#SBATCH --time-min=00:10:00', '#SBATCH --time=UNLIMITED\n'
+                       '#SBATCH --time-min=00:10:00')
+    execution = example_settings().execution
+    note = (' has an #SBATCH --time-min: Slurm may give the jobs less than the walltime of the '
+            'step, which the workers count on; remove it')
+    # A --time that is not a time does not hide the --time-min.
+    assert walltime_notes(execution, ['pes'], paths) == [f'{paths[0]}{note}', f'{paths[1]}{note}']
+    assert walltime_notes(example_settings(scheduler='pbs').execution, ['pes'], paths) == []
+
+
+def test_unparseable_slurm_directives_do_not_crash_the_walltime_notes(tmp_path):
+    paths = jobscripts(tmp_path, '#SBATCH --comment="unterminated')
+    assert walltime_notes(example_settings().execution, ['pes'], paths) == []
 
 
 def test_walltime_notes_name_the_missing_walltimes_and_the_time_of_the_jobscripts(tmp_path):

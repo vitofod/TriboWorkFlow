@@ -13,8 +13,9 @@ class CLICommand(CLICommandBase):
 relaunched are, in one new group of jobs that is submitted, and the others are
 listed with the reason. --calc, with the labels of one or more calculations of
 the step, relaunches those only (the labels are in "status --calcs", e.g.
-min_site_1.5 of ppes); all of them must be relaunchable, or nothing is
-written.
+min_site_1.5 of ppes); all of them must be relaunchable before any attempt
+is archived or any job is submitted. Existing job and attempt states may
+be refreshed during the checks.
 
 Allowed only once the worker of the last attempt of a calculation is surely
 over: no claim, or the run of the job of its claim is over; otherwise the

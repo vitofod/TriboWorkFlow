@@ -526,19 +526,53 @@ def test_relaunch_of_a_step_relaunches_what_can_be_and_lists_the_rest(
     assert fake_slurm.submitted == 3
 
 
+@pytest.mark.parametrize('max_jobs, submitted', [(None, 2), (1, 1)])
 def test_relaunch_of_calculations_asked_for_all_or_nothing(tmp_path, fake_steps, fake_slurm,
-                                                           fake_scheduler_bin, capsys):
+                                                         fake_scheduler_bin, capsys, max_jobs,
+                                                         submitted):
     run_dir = write_run(tmp_path)
+    if max_jobs is not None:
+        config = run_dir / 'config.toml'
+        config.write_text(config.read_text().replace('\n[execution]\n',
+                                                     f'\n[execution]\nmax_jobs = {max_jobs}\n'))
     submitted_pes(run_dir)
     complete(run_dir, 'pes/c0', status=store_status('ended'), stop_reason='user_request')
     fake_slurm.states['900'] = 'COMPLETED'
     capsys.readouterr()
-    # c1 may still run: the relaunch of c0 with it is refused, and nothing is written.
+    # c1 can still run. In the capped case, polling makes room for the queued submission,
+    # but a refused relaunch must leave it to the next orchestrator pass.
+    assert fake_slurm.submitted == submitted
     assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'c0', 'c1') == 1
     err = capsys.readouterr().err
     assert 'pes/c1' in err and 'may still run' in err
     assert not layout.job_dir(run_dir, f'{SYSTEM}.pes.2').exists()
+    assert fake_slurm.submitted == submitted
+
+
+def test_relaunch_rejects_a_repeated_label_before_archiving(
+        tmp_path, fake_steps, fake_slurm, fake_scheduler_bin, capsys):
+    run_dir = write_run(tmp_path)
+    submitted_pes(run_dir)
+    complete(run_dir, 'pes/c0', status=store_status('ended'), stop_reason='user_request')
+    fake_slurm.states['900'] = 'COMPLETED'
+    path = layout.calc_dir(run_dir, SYSTEM, 'pes/c0')
+    before = files(path)
+    capsys.readouterr()
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'c0', 'c0') == 1
+    assert 'give each --calc label only once' in capsys.readouterr().err
+    assert files(path) == before
     assert fake_slurm.submitted == 2
+
+
+def test_relaunch_of_an_unprepared_step_explains_what_is_missing(
+        tmp_path, fake_steps, fake_slurm, fake_scheduler_bin, capsys):
+    run_dir = write_run(tmp_path)
+    assert cli(run_dir, 'analyse', 'match') == 0
+    capsys.readouterr()
+    assert cli(run_dir, 'relaunch', '--step', 'pes') == 1
+    assert f'{SYSTEM}/pes: no calculation prepared yet' in capsys.readouterr().err
+    assert fake_slurm.submitted == 0
+    assert not layout.job_dir(run_dir, GROUP).exists()
 
 
 def test_relaunch_names_the_labels_of_the_step_when_one_is_wrong(tmp_path, fake_steps, fake_slurm,

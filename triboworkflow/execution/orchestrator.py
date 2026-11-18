@@ -1459,9 +1459,10 @@ class Orchestrator:
         """Relaunch by hand calculations of a step (``policy.manual_launch``) in one new group.
 
         The step is followed again at the next pass. With ``labels`` the
-        calculations asked for must all be relaunchable, or nothing is
-        written; without, every calculation of the step that can be
-        relaunched is, and the others are left, with the reason.
+        calculations asked for must all be relaunchable before archiving
+        attempts or submitting jobs. Without labels, every calculation of
+        the step that can be relaunched is, and the others are left, with
+        the reason.
 
         Parameters
         ----------
@@ -1500,8 +1501,8 @@ class Orchestrator:
         OrchestratorError
             If the system has no such step or calculation, no calculation can
             be relaunched, ``group`` is given for more than one calculation,
-            or the settings changed since the step was prepared; nothing is
-            written.
+            a label is repeated, or the settings changed since the step was
+            prepared.
         """
         self._check_replacements()
         if step not in self.order:
@@ -1509,6 +1510,9 @@ class Orchestrator:
                                     f'{", ".join(self.order)}')
         entry = self.entry(system, step)
         prepared = list(entry['calculations'] or ())
+        if not prepared:
+            raise OrchestratorError(f'{system}/{step}: no calculation prepared yet (the workflow '
+                                    'prepares them when the step runs); nothing relaunched')
         if labels is None:
             asked = prepared
         else:
@@ -1520,6 +1524,8 @@ class Orchestrator:
                     f'{system}/{", ".join(unknown) if unknown else step}: not a calculation of '
                     f'{step} (a calculation is given with --step {step} --calc <label>); '
                     f'labels of {step}: {have}')
+            if len(set(asked)) != len(asked):
+                raise OrchestratorError(f'{system}/{step}: give each --calc label only once')
         if group is not None and len(asked) != 1:
             raise OrchestratorError('the group whose launch is taken is for one calculation: '
                                     'give its label with --calc')
@@ -1528,7 +1534,10 @@ class Orchestrator:
             raise OrchestratorError(f'{system}/{step}: settings changed since the preparation: '
                                     f'{"; ".join(found)}; nothing relaunched')
         held = self._held_back()
-        self.manager.cycle(held)
+        # Jobs are only registered and asked for their state here: none is submitted before the
+        # calculations asked for are all accepted.
+        self.manager.recover()
+        self.manager.poll()
         reconciler = Reconciler(self.run_dir, self.manager, self.execution.polling_interval)
         launches, left = [], {}
         for calc_id in asked:

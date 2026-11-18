@@ -715,6 +715,25 @@ def _check_submit_options(path, options):
             raise SettingsError(f'{path}[{i}]', 'an option must not be empty')
 
 
+def _sets_slurm_time(option):
+    """Whether an option of ``sbatch`` sets the time limit of the job.
+
+    ``--time`` and ``-t`` (``-t T`` or ``-tT``) would replace the walltime that
+    the submission gives before the options; ``--time-min`` lets Slurm give the
+    job less than it. Long options may be cut short, as ``getopt`` allows
+    (``--time-m``), down to ``--time``.
+    """
+    option = option.strip()
+    name = re.split(r'[=\s]', option, maxsplit=1)[0]
+    return name == '--time' or option.startswith('-t') or slurm_time_min_option(name)
+
+
+def slurm_time_min_option(option):
+    """Whether a token names ``--time-min``, including its unambiguous abbreviations."""
+    name = option.split('=', 1)[0]
+    return name.startswith('--time-') and '--time-min'.startswith(name)
+
+
 def walltime_seconds(value):
     """Seconds of a walltime ``"HH:MM:SS"`` (``WALLTIME_FORMAT``)."""
     hours, minutes, seconds = (int(part) for part in WALLTIME_FORMAT.fullmatch(value).groups())
@@ -863,10 +882,11 @@ class ExecutionParams:
             sections += [(f'{path}.{step}', getattr(self, step)) for step in WALLTIME_STEPS]
             for where, section in sections:
                 for i, option in enumerate(section.submit_options):
-                    if option.split('=')[0].strip() in ('--time', '-t'):
+                    if _sets_slurm_time(option):
                         raise SettingsError(f'{where}.submit_options[{i}]',
                                             f'{option!r}: the time limit of the jobs of a step is '
-                                            'its walltime, [execution.<step>] walltime')
+                                            'its walltime, [execution.<step>] walltime; the '
+                                            'options --time, -t and --time-min are not allowed')
 
     def check_margin(self, steps, path):
         """Check ``max_seconds_margin`` against the walltime of each step of ``steps`` that runs

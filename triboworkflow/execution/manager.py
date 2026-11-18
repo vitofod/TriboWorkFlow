@@ -187,7 +187,8 @@ class JobManager:
     max_jobs : int or None, optional
         Most jobs of the run in the scheduler at the same time, waiting or
         running (``max_jobs`` of ``[execution]``): ``submit`` leaves the others
-        for a later call. None: no limit.
+        for a later call. A submission of outcome not known takes a place
+        until it is resolved. None: no limit.
 
     Attributes
     ----------
@@ -621,12 +622,16 @@ class JobManager:
             If the submission command of the scheduler is not found.
         """
         submitted = []
-        room = None if self.max_jobs is None else max(self.max_jobs - self.jobs_in_queue(), 0)
+        dry = 0  # jobs of a dry run, which the registry does not hold
         for name, group in self.groups.items():
             missing = self.missing_jobs(name)
             if (name in skip or group['refused'] is not None or group['unknown'] or missing == 0
                     or is_withdrawn(job_dir(self.run_dir, name))):
                 continue
+            # Counted again for each group: a submission that failed after some jobs were
+            # accepted (recovered below) or whose outcome is not known took places too.
+            room = None if self.max_jobs is None else max(
+                self.max_jobs - self.jobs_in_queue() - dry, 0)
             if room is not None:
                 if room == 0:
                     logger.info('Group %s: %d jobs wait to be submitted, %d jobs of the run '
@@ -650,17 +655,23 @@ class JobManager:
                 self.recover()  # jobs submitted before the failure
                 continue
             for job_id in job_ids:
-                if job_id is not None:  # None in a dry run
+                if job_id is None:  # a dry run
+                    dry += 1
+                else:
                     self._add_job(job_id, name)
                     submitted.append(job_id)
-            if room is not None:
-                room -= len(job_ids)
             self._save()
         return submitted
 
     def jobs_in_queue(self):
-        """Jobs of the run in the scheduler: those waiting or running, or not yet reported."""
-        return sum(1 for job in self.jobs.values() if job['active'] is not False)
+        """Places taken in the scheduler by the run, for ``max_jobs``.
+
+        The jobs waiting or running or not yet reported, and the submissions
+        of outcome not known, whose job may exist, until
+        ``resolve_submission`` settles them.
+        """
+        return (sum(1 for job in self.jobs.values() if job['active'] is not False)
+                + sum(len(group['unknown']) for group in self.groups.values()))
 
     # --- status ----------------------------------------------------------------
 

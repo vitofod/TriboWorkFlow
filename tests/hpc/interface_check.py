@@ -1001,7 +1001,8 @@ def walltime_differences(rep):
 
     The walltime of a group (``manifest.json`` or ``analysis.json``) is what the
     worker takes ``max_seconds`` from and what the submission gave the scheduler
-    as the time limit: the two must be equal.
+    as the time limit: the two must be equal, but for the seconds, which Slurm
+    rounds up to the next minute (a walltime of 3601 s is a limit of 01:01:00).
 
     Returns
     -------
@@ -1009,18 +1010,34 @@ def walltime_differences(rep):
         One sentence for each job whose limit differs or is not a time.
     compared : int
         Number of jobs compared.
+    older : list of str
+        Groups written by an earlier version of the package, whose file has
+        no walltime of each step (``schema_version`` below the current one),
+        not compared.
     unreadable : list of str
-        Groups whose file of walltime cannot be read (a run of a version before
-        the walltime of each step), not compared.
+        ``'<group>: <reason>'`` for each group of the current version whose
+        file cannot be read, not compared.
     """
-    from triboworkflow.execution.jobs import SUBMITTED_FILE, JobError, group_walltime
+    from triboworkflow.execution.jobs import (ANALYSIS_FILE, ANALYSIS_VERSION, MANIFEST_FILE,
+                                              MANIFEST_VERSION, SUBMITTED_FILE, JobError,
+                                              group_walltime, is_analysis)
 
-    differences, unreadable, compared = [], [], 0
+    differences, older, unreadable, compared = [], [], [], 0
     for path in sorted((rep.run_dir / 'jobs').glob(f'*/{SUBMITTED_FILE}')):
+        group = path.parent
         try:
-            walltime = group_walltime(path.parent)
-        except (JobError, OSError, ValueError, KeyError):
-            unreadable.append(path.parent.name)
+            walltime = group_walltime(group)
+        except (JobError, OSError, ValueError, KeyError) as error:
+            name, current = (ANALYSIS_FILE, ANALYSIS_VERSION) if is_analysis(group) \
+                else (MANIFEST_FILE, MANIFEST_VERSION)
+            try:
+                version = json.loads((group / name).read_text()).get('schema_version')
+            except (OSError, ValueError, AttributeError):
+                version = None
+            if type(version) is int and version < current:
+                older.append(group.name)
+            else:
+                unreadable.append(f'{group.name}: {error}')
             continue
         for job_id in json.loads(path.read_text()).get('job_ids', []):
             job = rep.sacct.get(job_id)
@@ -1028,10 +1045,18 @@ def walltime_differences(rep):
                 continue
             compared += 1
             limit = duration(job['Timelimit'])
-            if limit != walltime:
-                differences.append(f'job {job_id} of {path.parent.name}: Timelimit '
+            if limit != slurm_limit(walltime):
+                differences.append(f'job {job_id} of {group.name}: Timelimit '
                                    f'{job["Timelimit"]}, walltime of the group {walltime} s')
-    return differences, compared, unreadable
+    return differences, compared, older, unreadable
+
+
+def slurm_limit(walltime):
+    """Time limit, in seconds, that Slurm gives to a job asked a walltime in seconds.
+
+    Slurm keeps the limit in minutes and rounds the seconds up to the next one.
+    """
+    return -(-walltime // 60) * 60
 
 
 def check_accounting(rep):
@@ -1051,15 +1076,17 @@ def check_accounting(rep):
     bad = {s: j for s, j in states.items() if s.startswith(('OUT_OF_ME', 'TIMEOUT'))}
     longest = max((duration(rep.sacct[j]['Elapsed']) or 0 for j in known), default=0)
     peak = max((rep.sacct[j]['MaxRSS'] for j in known), default=0)
-    differences, compared, unreadable = walltime_differences(rep)
+    differences, compared, older, unreadable = walltime_differences(rep)
     text = (f'{len(known)} of {len(ids)} jobs in the file: '
             + ', '.join(f'{len(j)} {s}' for s, j in states.items())
             + f'; longest {longest} s, largest MaxRSS {_gib(peak)}; Timelimit equal to the '
             f'walltime of the group for {compared - len(differences)} of {compared} jobs'
-            + (f' ({len(unreadable)} groups of a version without it not compared)'
-               if unreadable else ''))
+            + (f' ({len(older)} groups of an earlier version, without it, not compared)'
+               if older else ''))
     problems = [str(bad)] if bad else []
     problems += differences[:5]
+    problems += [f'file of the group not read, its walltime not compared: {item}'
+                 for item in unreadable]
     rep.findings.add('PROBLEM' if problems else 'ok' if len(known) == len(ids) else 'note',
                      'accounting', text + ''.join(f'; {problem}' for problem in problems))
 
