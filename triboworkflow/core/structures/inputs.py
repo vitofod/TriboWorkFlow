@@ -12,7 +12,9 @@ file.
 - ``load_workflow_slabs``: the two slabs of ``[interface]``, as the workflow
   uses them (``slab.workflow_slab``). Their constraints are only provenance:
   the workflow applies those of each ``calc_type``
-  (``constraints.calc_type_if_pos``).
+  (``constraints.calc_type_if_pos``);
+- ``resolve_species``: the mass and the pseudopotential of the species written
+  ``"auto"`` in the settings, read from the structure files.
 """
 
 from dataclasses import dataclass
@@ -21,7 +23,7 @@ from pathlib import Path
 from pymatgen.core.structure import Structure
 
 from .constraints import AppliedConstraints, resolve_if_pos
-from .model import StructureError
+from .model import QE_SPECIES, StructureError
 from .readers import read_structure
 from .slab import read_workflow_slab
 
@@ -103,6 +105,79 @@ def load_structure(settings):
     structure = read_structure(path, params.format, params.frame, cell=cell)
     return StructureInput(structure, resolve_if_pos(structure, params.constraints),
                           path, params.format, params.frame)
+
+
+def resolve_species(settings):
+    """Replace the ``"auto"`` mass and pseudopotential of the species by those of the files.
+
+    For each species of ``[[atomic_species]]`` with ``mass`` or
+    ``pseudopotential`` equal to ``"auto"``, the value is read from the
+    ``ATOMIC_SPECIES`` of the structure files of the settings (the slabs of
+    ``[interface]``, or ``[structure]``), which must be inputs or outputs of
+    pw.x, for the species of the same label. The order and the labels of the
+    species, ``starting_magnetization`` and the other values stay as written.
+    Nothing is read when no species asks for it.
+
+    Parameters
+    ----------
+    settings : triboworkflow.core.settings.Settings
+        Changed in place.
+
+    Returns
+    -------
+    list of str
+        One sentence for each value read, with the file it comes from;
+        empty when nothing was read.
+
+    Raises
+    ------
+    StructureError
+        If a file is not an input or an output of pw.x, a label is in no
+        file, or the files give different values for the same label.
+    """
+    from triboworkflow.core.settings.schema import AUTO
+
+    wanted = [(i, s) for i, s in enumerate(settings.atomic_species)
+              if AUTO in (s.mass, s.pseudopotential)]
+    if not wanted:
+        return []
+    if settings.interface is not None:
+        files = [structure_path(settings, slab.file, f'interface.slabs[{i}].file')
+                 for i, slab in enumerate(settings.interface.slabs)]
+        structures = [read_structure(path) for path in files]
+    else:
+        params = settings.structure
+        files = [structure_path(settings, params.file, 'structure.file')]
+        structures = [read_structure(files[0], params.format, params.frame)]
+    found = {}
+    for path, structure in zip(files, structures):
+        entries = structure.properties.get(QE_SPECIES)
+        if entries is None:
+            raise StructureError(f'{path}: "{AUTO}" in atomic_species needs structure files that '
+                                 'are inputs or outputs of pw.x, which give the mass and the '
+                                 'pseudopotential of each species; this one is not')
+        for entry in entries:
+            found.setdefault(entry['label'], []).append((path, entry))
+    sentences = []
+    for i, species in wanted:
+        entries = found.get(species.label)
+        if not entries:
+            raise StructureError(f'atomic_species[{i}]: no species {species.label!r} in '
+                                 f'{", ".join(str(p) for p in files)}')
+        for name in ('mass', 'pseudopotential'):
+            if getattr(species, name) != AUTO:
+                continue
+            values = {entry[name] for _, entry in entries}
+            if len(values) > 1:
+                raise StructureError(
+                    f'atomic_species[{i}].{name}: the files give different values for the species '
+                    f'{species.label!r}: ' + ', '.join(f'{entry[name]} in {path}'
+                                                       for path, entry in entries))
+            (value,) = values
+            setattr(species, name, value)
+            sentences.append(f'atomic_species[{i}].{name} = {value} for {species.label}, read '
+                             f'from {entries[0][0]}')
+    return sentences
 
 
 def load_workflow_slabs(settings):

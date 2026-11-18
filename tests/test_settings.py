@@ -105,8 +105,8 @@ def test_placeholders_in_namelists():
 ], ids=['grid', 'override'])
 def test_invalid_toml_of_the_original_template(tmp_path, line):
     path = tmp_path / 'settings.toml'
-    path.write_text(f'schema_version = 1\n[table]\n{line}\n')
-    with pytest.raises(SettingsError, match=r'settings.toml: invalid TOML: .*line 3'):
+    path.write_text(f'[table]\n{line}\n')
+    with pytest.raises(SettingsError, match=r'settings.toml: invalid TOML: .*line 2'):
         load_settings(path)
 
 
@@ -220,10 +220,9 @@ ACCEPTED = [
     ('miller-zero', W, {'interface.slabs[1].miller': [0, 0, 0]}),
     ('formula-and-name', W, {'interface.slabs[0].formula': 'Cu', 'interface.slabs[0].name': 'a',
                              'interface.slabs[1].formula': 'Al', 'interface.slabs[1].name': 'b'}),
-    ('qe-without-manifest', W, {'qe.upf_md5': DELETE}),
     ('match-only-without-qe', W, {'qe': DELETE, 'interface.steps': ['match', 'shear']}),
     ('single-without-qe', S, {'qe': DELETE}),
-    ('single-manifest-only', S, {'qe.version': DELETE, 'qe.upf_md5': 'pseudo.md5'}),
+    ('single-without-version', S, {'qe.version': DELETE}),
     # [mlip]: the model file is not looked at, and the keys that depend on the backend
     # (default_dtype with ASE) are checked when a step chooses it.
     ('mlip', W, {'mlip': MLIP}),
@@ -500,12 +499,31 @@ def test_adhesion_combinations_allowed(edits, expected):
     assert settings_from_dict(edited(WORKFLOW, edits)).interface.adhesion == expected
 
 
+def test_options_of_the_submission_and_most_jobs():
+    execution = settings_from_dict(edited(WORKFLOW, {
+        'execution.max_jobs': 4,
+        'execution.pes': {'walltime': '12:00:00', 'submit_options': ['--qos=dbg']},
+        'execution.analysis': {'submit_options': ['--gres=gpu:1', '--mem=0']},
+        'execution.shear': {'submit_options': ['--qos=dbg']}})).execution
+    assert execution.max_jobs == 4 and execution.analysis.jobscript is None
+    assert execution.options_of('pes') == ['--qos=dbg']
+    assert execution.options_of('adhesion') == []
+    # An analysis: the options of all the analyses, then those of its step.
+    assert execution.options_of('plotpes') == ['--gres=gpu:1', '--mem=0']
+    assert execution.options_of('shear') == ['--gres=gpu:1', '--mem=0', '--qos=dbg']
+    assert execution.options_of('match') == []
+    # Not given: no option, no limit.
+    default = settings_from_dict(WORKFLOW).execution
+    assert default.max_jobs is None and default.options_of('pes') == []
+
+
 def test_ppes_defaults_are_the_command_line_of_the_original_workflow():
-    # The minimum site, the 15 shifts of the command line (they skip 2.5) and no fit.
+    # The minimum site, the 15 shifts of the command line with the 2.5 they skip (DEV-48)
+    # and no fit.
     default = PpesParams(site='min_site', shifts=list(PPES_SHIFTS), fit='none')
     assert PPES_SHIFTS == (-0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0,
-                           2.25, 2.75, 3.0)
-    assert 2.5 not in PPES_SHIFTS
+                           2.25, 2.5, 2.75, 3.0)
+    assert len(PPES_SHIFTS) == 16
     assert settings_from_dict(WORKFLOW).interface.ppes == default
     settings = settings_from_dict(edited(WORKFLOW, {'interface.ppes': DELETE}))
     assert settings.interface.ppes == default
@@ -692,11 +710,10 @@ def test_inter_params_of_the_example():
 CONTROL, SYSTEM = 'namelists.CONTROL', 'namelists.SYSTEM'
 
 ERRORS = [
-    # loader: schema version, unknown keys, types
-    ('version-missing', W, {'schema_version': DELETE}, 'schema_version', 'missing; supported: 1'),
-    ('version-2', W, {'schema_version': 2}, 'schema_version', 'unsupported value 2'),
-    ('version-bool', W, {'schema_version': True}, 'schema_version', 'unsupported value True'),
-    ('unknown-top', W, {'cluster': {}}, 'cluster', 'unknown key (allowed keys: schema_version, '),
+    # loader: the removed version number, unknown keys, types
+    ('version-removed', W, {'schema_version': 1}, 'schema_version',
+     'unknown key (the settings have no version number: remove this line)'),
+    ('unknown-top', W, {'cluster': {}}, 'cluster', 'unknown key (allowed keys: atomic_species, '),
     ('unknown-in-list', W, {'atomic_species[1].colour': 'red'}, 'atomic_species[1].colour',
      'allowed keys: label, mass, pseudopotential, starting_magnetization'),
     ('unknown-nested', S, {'structure.cell.size': 3}, 'structure.cell.size', 'allowed keys: source, '),
@@ -706,8 +723,8 @@ ERRORS = [
      'write "london_c6(i)" in [namelists.SYSTEM]'),
     ('rvdw-in-species', W, {'atomic_species[0].london_rvdw': 1.0}, 'atomic_species[0].london_rvdw',
      'write "london_rvdw(i)" in [namelists.SYSTEM]'),
-    ('str-for-float', W, {'atomic_species[0].mass': '63.5'}, 'atomic_species.mass',
-     "expected float, got '63.5'"),
+    ('str-for-float', W, {'atomic_species[0].mass': '63.5'}, 'atomic_species[0].mass',
+     "'63.5' is not a mass: give a number in amu or \"auto\""),
     ('bool-for-int', W, {'execution.groups': True}, 'execution.groups', 'expected int, got True'),
     ('bool-for-float', W, {'k_points.kdens': True}, 'k_points.kdens', 'expected float, got True'),
     ('bool-in-list', S, {'structure.constraints.default_if_pos': [True, True, False]},
@@ -799,7 +816,7 @@ ERRORS = [
     ('step-section', W, {'execution.match': {'walltime': '01:00:00'}}, 'execution.match',
      'unknown key (allowed keys: scheduler, jobscript'),
     ('step-key', W, {'execution.pes.time': '01:00:00'}, 'execution.pes.time',
-     'unknown key (allowed keys: walltime, groups)'),
+     'unknown key (allowed keys: walltime, groups, submit_options)'),
     ('walltime-number', W, {'execution.pes.walltime': 3600}, 'execution.pes.walltime',
      'expected str, got 3600'),
     ('walltime-format', W, {'execution.pes.walltime': '1-00:00:00'}, 'execution.pes.walltime',
@@ -834,12 +851,10 @@ ERRORS = [
     ('pp-command-type', W, {'execution.pp_command': 1}, 'execution.pp_command',
      'expected str, got 1'),
     # [execution.analysis]: the job of the analyses that need a compute node.
-    ('analysis-jobscript-missing', W, {'execution.analysis': {}}, 'execution.analysis.jobscript',
-     'required key missing'),
     ('analysis-jobscript-type', W, {'execution.analysis.jobscript': 1},
      'execution.analysis.jobscript', 'expected str, got 1'),
     ('analysis-key', W, {'execution.analysis': {'jobscript': 'analysis.sh', 'memory': '200G'}},
-     'execution.analysis.memory', 'unknown key (allowed keys: jobscript)'),
+     'execution.analysis.memory', 'unknown key (allowed keys: jobscript, submit_options)'),
     ('analysis-scalar', W, {'execution.analysis': 'analysis.sh'}, 'execution.analysis',
      'expected a table'),
     # [interface]
@@ -1043,7 +1058,22 @@ ERRORS = [
     ('qe-version-missing', W, {'qe.version': DELETE}, 'qe.version',
      'required by the steps that run pw.x'),
     ('qe-missing', W, {'qe': DELETE}, 'qe.version', 'required by the steps that run pw.x'),
-    ('qe-key', W, {'qe.md5': 'pseudo.md5'}, 'qe.md5', 'allowed keys: version, upf_md5'),
+    ('qe-key', W, {'qe.md5': 'pseudo.md5'}, 'qe.md5', 'allowed keys: version'),
+    # [execution]: options of the submission and most jobs
+    ('submit-options-empty', W, {'execution.pes': {'submit_options': ['--qos=dbg', ' ']}},
+     'execution.pes.submit_options[1]', 'an option must not be empty'),
+    ('submit-options-string', W, {'execution.pes': {'submit_options': '--qos=dbg'}},
+     'execution.pes.submit_options', 'expected a list of str'),
+    ('submit-options-time', W, {'execution.ppes': {'submit_options': ['--time=01:00:00']}},
+     'execution.ppes.submit_options[0]', 'the time limit of the jobs of a step is its walltime'),
+    ('submit-options-time-short', W, {'execution.shear': {'submit_options': ['-t']}},
+     'execution.shear.submit_options[0]', 'its walltime'),
+    ('submit-options-time-analysis', W, {'execution.analysis': {'submit_options': ['--time=1']}},
+     'execution.analysis.submit_options[0]', 'its walltime'),
+    ('max-jobs-0', W, {'execution.max_jobs': 0}, 'execution.max_jobs', 'must be > 0'),
+    ('qe-upf-md5', W, {'qe.upf_md5': 'pseudo.md5'}, 'qe.upf_md5',
+     'unknown key (the name of the UPF file identifies the pseudopotential and its content is '
+     'not checked: remove this line (and the manifest of the checksums))'),
     # [mlip]
     ('mlip-type-missing', W, {'mlip': {'path': MLIP_PATH}}, 'mlip.type', 'required key missing'),
     ('mlip-path-missing', W, {'mlip': {'type': 'DP'}}, 'mlip.path', 'required key missing'),

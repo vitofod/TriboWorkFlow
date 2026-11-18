@@ -1,7 +1,6 @@
 # Settings file (TOML)
 
-Reference of the settings read by `triboworkflow.core.settings`
-(schema version 1). Examples: `examples/single_input.toml` (one `pw.x`
+Reference of the settings read by `triboworkflow.core.settings`. Examples: `examples/single_input.toml` (one `pw.x`
 input, template with placeholders) and `examples/interface.toml` (interface
 workflow, complete).
 
@@ -46,11 +45,8 @@ settings.require_complete()                 # SettingsError if placeholders are 
 
 `R` = required, `—` = optional.
 
-## `schema_version`
-
-| Key | Type | | Notes |
-|---|---|---|---|
-| `schema_version` | int | R | `1` |
+The settings have no version number. A file that still has the key
+`schema_version` is refused with an error that says to remove it.
 
 ## `[structure]` (one calculation)
 
@@ -184,9 +180,23 @@ the order of `ATOMIC_SPECIES` and of the per-species `pw.x` indices
 | Key | Type | | Notes |
 |---|---|---|---|
 | `label` | str | R | label as in `ATOMIC_POSITIONS`; unique; `""` is a placeholder |
-| `mass` | float | R | amu |
-| `pseudopotential` | str | R | UPF file name; `""` is a placeholder |
-| `starting_magnetization` | float | — | written as `starting_magnetization(i)`; never set automatically |
+| `mass` | float or `"auto"` | R | amu; `"auto"`: read from the structure files (below) |
+| `pseudopotential` | str | R | UPF file name; `""` is a placeholder; `"auto"`: read from the structure files (below) |
+| `starting_magnetization` | float | — | written as `starting_magnetization(i)`; never set automatically and never read from the structure files |
+
+**`"auto"`.** When the structure files are inputs or outputs of `pw.x`
+(`.pwi`, `.pwo`), the mass and the UPF file of a species can be read from
+their `ATOMIC_SPECIES` instead of being repeated in every settings file: write
+`mass = "auto"` or `pseudopotential = "auto"` (each independently) in the entry
+of the species. The files read are the slabs of `[[interface.slabs]]`, or
+`[structure]`; the species is found by its `label`. It is read when the
+settings are loaded; `triboworkflow check` lists what was read, and the log
+too. The list of the entries and their order stay yours (the indices of
+`starting_magnetization(i)`, `london_c6(i)` and `london_rvdw(i)` do not depend
+on the files), and so do `starting_magnetization` and the per-species keys of
+`[namelists.SYSTEM]`. It is an error if a file is not an input or an output of
+`pw.x`, if a label is in no file, or if the files give different values for
+the same label. Nothing is read when no entry asks for it.
 
 ## `[k_points]`
 
@@ -223,14 +233,13 @@ The `pw.x` expected on the machine that runs the calculations.
 | Key | Type | | Notes |
 |---|---|---|---|
 | `version` | str | R with `[interface]` | as `pw.x` prints it: `major.minor` (e.g. `7.2`, every `7.2.x`) or `major.minor.patch` (e.g. `7.3.1`, that one only); required when a step that runs calculations uses `qe` |
-| `upf_md5` | str | — | manifest of the expected MD5 checksums of the UPF files, relative to the folder of this file |
 
-- The manifest has the format of `md5sum`: one line `<checksum>  <file>`
-  per file, the checksum in 32 lower-case hex digits. Make it on the HPC,
-  in `pseudo_dir`, with `md5sum *.UPF > pseudo.md5`; `pw.x` computes the
-  same checksum of each UPF file and prints it in the output. Every UPF file
-  of `[[atomic_species]]` must be in it, once; other files may be listed.
-  It is read when an input is generated.
+- A pseudopotential is identified by the name of its UPF file, as written in
+  `[[atomic_species]]`: the content of the file is not checked, so a file
+  replaced by another with the same name goes unnoticed. `pw.x` prints the
+  MD5 checksum of every UPF file it reads; it is kept in the record of the
+  calculation (`observed`) and never compared. The key `upf_md5` of the
+  earlier versions is refused: remove it, and the manifest with it.
 - The workflow is built to work with QE 7.1.x, 7.2.x and 7.3.x. Another
   version (e.g. `8.0`) is accepted with a warning: the results are not
   guaranteed and may hold errors, so check them. The outputs of any version
@@ -240,15 +249,13 @@ The `pw.x` expected on the machine that runs the calculations.
   `pw.x` writes no charge density; without a version, or with another
   release, the values of every release are refused
   ([qe_charge.md](qe_charge.md)).
-- Version and checksums enter the energy model of every calculation (see
-  [Fingerprint and energy model](#fingerprint-and-energy-model)); the path
-  of the manifest does not. Each output is compared with them: the version
-  printed by `pw.x`, on the components given (`7.3` matches `7.3.1`, `7.3.1`
-  does not match `7.3.2`), and the label, UPF file and checksum of every
-  species. An output that differs keeps its results, but they are never
-  reused nor combined.
-- **Without `version` or without `upf_md5`** the energy model is not fully
-  known. The inputs are generated and the calculations can run, but their
+- The version enters the energy model of every calculation (see
+  [Fingerprint and energy model](#fingerprint-and-energy-model)). Each output
+  is compared with it: the version printed by `pw.x`, on the components given
+  (`7.3` matches `7.3.1`, `7.3.1` does not match `7.3.2`), and the label and
+  UPF file of every species. An output that differs keeps its results, but
+  they are never reused nor combined.
+- **Without `version`** the energy model is not fully known. The inputs are generated and the calculations can run, but their
   results are never reused and their energies are never combined
   automatically: an analysis that needs them (e.g. an adhesion energy)
   stops with an error that names the calculations and the missing parts.
@@ -318,8 +325,8 @@ Each calculation has a fingerprint, which tells whether an existing result
 can stand for it, and an energy model, which tells whether its energy can be
 combined with others.
 
-- **Energy model:** `[qe] version`; for every species, in order, label, UPF
-  file, expected checksum and `starting_magnetization`; the `[k_points]`
+- **Energy model:** `[qe] version`; for every species, in order, label, name
+  of the UPF file and `starting_magnetization`; the `[k_points]`
   settings (not the grid: with the same `kdens` a bulk and a slab have
   different grids); the namelist keys that change the energy (cutoffs,
   occupations and smearing, spin and magnetization, including `angle1` and
@@ -357,14 +364,15 @@ Needed only to run on HPC. No value is tied to a specific machine.
 | Key | Type | | Notes |
 |---|---|---|---|
 | `scheduler` | str | R | `slurm`, `pbs`, `torque`, `lsf`, `sge`, `htcondor`, `condor` (the names of Xsorb) |
-| `jobscript` | str | R | user jobscript, relative to the folder of the settings file: resources and environment of every job of the run (the calculations and, without `[execution.analysis]`, the analyses); copied for every group of jobs with the launch line added, never changed. Walltime and name of the jobs come from the settings (below) |
+| `jobscript` | str | R | user jobscript, relative to the folder of the settings file: resources and environment of every job of the run (the calculations and, without `[execution.analysis]`, the analyses); copied for every group of jobs with the launch line added, never changed: write no line that runs `pw.x` or the worker (the package adds it), only the resources, the modules and the environment. Walltime and name of the jobs come from the settings (below) |
 | `run_command` | str | R | command up to the input file, e.g. `mpirun -np 32 pw.x -nk 4` |
 | `pp_command` | str | none | command of pp.x up to the input file, e.g. `mpirun -np 32 pp.x`: run after pw.x, in the same job, in the calculations that also give the charge density (the charge analysis, [qe_charge.md](qe_charge.md)); required only when such calculations are prepared or submitted, not empty |
 | `polling_interval` | int | R | > 0 s, time between two checks of the jobs |
 | `groups` | int | none | > 0, jobs (workers) over which the calculations of a group are spread, for the steps without `groups` in their section (below): 1 runs them one after the other, one per calculation runs them all at once; never more jobs than calculations are submitted. When a step that runs calculations has no value, give it on the command line (`--groups`); in a terminal the command asks for it, elsewhere it stops with an error |
 | `max_seconds_margin` | int | `600` | > 0 s and below the walltime of every step of `[interface].steps` that runs calculations (the walltime of a step not run is not compared), time kept free at the end of the walltime |
 | `job_report_wait` | int | `3600` | > 0 s, time after its submission during which a job that the scheduler does not report is still waited for; after that it needs attention, and it is never submitted again automatically |
-| `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`, `plotpes`, `plotpes_scf`, `shear` | table | see below | `[execution.<step>]`: walltime and jobs per group of the jobs of the step |
+| `max_jobs` | int | none | > 0, most jobs of the run in the scheduler at the same time, waiting or running (those of the run only, not those of other runs of the user): the others are submitted at the next checks, as those in the scheduler end, the groups in the order they were written. For the queues that limit the jobs of a user (e.g. a debug QoS with 4 jobs). Without it every job is submitted at once |
+| `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`, `plotpes`, `plotpes_scf`, `shear` | table | see below | `[execution.<step>]`: walltime, jobs per group and options of the submission of the jobs of the step |
 
 Before each run the worker writes `max_seconds` in the input it runs: the
 walltime of its step minus the time since the worker started minus
@@ -401,7 +409,18 @@ walltime = "00:30:00"
 |---|---|---|---|
 | `walltime` | str | `"24:00:00"` | walltime of each job of the step, `"HH:MM:SS"` as `--time` of Slurm; hours may pass 24 (`"48:00:00"`); minutes and seconds are below 60 |
 | `groups` | int | `[execution].groups` | > 0, jobs (workers) per group of the step; only in the sections of the steps that run calculations: `plotpes`, `plotpes_scf` and `shear` run in one job, and `groups` there is an error |
+| `submit_options` | list of str | none | options given as they are to the command that submits each job of the step, in the syntax of the scheduler, e.g. `["--qos=boost_qos_dbg"]` with Slurm: the queue of the step, without another jobscript |
 
+- `submit_options` come after the options of the walltime and of the name of
+  the job, and for an analysis after those of `[execution.analysis]`:
+  `sbatch --time=… --job-name=… --qos=boost_qos_dbg jobscript.sh`. The command
+  line of the scheduler wins over the lines of the jobscript that set the same
+  thing (Slurm: over `#SBATCH`), so an option replaces a line of the jobscript
+  (`--gres=gpu:1` replaces `#SBATCH --gres=gpu:4`); it cannot remove a line
+  that has no option to replace it (e.g. `#SBATCH --exclusive`). The package
+  does not know the options: write them as the scheduler wants them. With
+  Slurm, `--time` and `-t` are an error here: the time limit of the jobs of a
+  step is its `walltime`, which also gives `max_seconds`.
 - The walltime goes to the command that submits each job of the step:
   `sbatch --time=HH:MM:SS` (Slurm), `qsub -l walltime=HH:MM:SS` (PBS,
   Torque), `qsub -l h_rt=HH:MM:SS` (SGE), `bsub -W HH:MM` (LSF, minutes
@@ -439,8 +458,8 @@ walltime = "00:30:00"
 
 ### `[execution.analysis]`
 
-Optional: a jobscript of its own for the jobs of the analyses that need a
-compute node, i.e. the interpolations of the PES (`plotpes`, `plotpes_scf`),
+Optional: a jobscript or options of the submission of their own for the jobs
+of the analyses that need a compute node, i.e. the interpolations of the PES (`plotpes`, `plotpes_scf`),
 whose memory grows with the square of the points
 ([interface.md](interface.md#cost)), and the shear strength (`shear`), which
 interpolates the PES again and then runs the string method for a long time.
@@ -454,7 +473,13 @@ analysed by hand (`triboworkflow analyse plotpes`).
 
 | Key | Type | | Notes |
 |---|---|---|---|
-| `jobscript` | str | R | jobscript of these jobs, relative to the folder of the settings file; copied for each job with the line that runs the analysis added, never changed. Its lines give memory and partition (e.g. `#SBATCH --mem=200G`, `#SBATCH --qos=...`) and the threads of the linear algebra (`export OMP_NUM_THREADS=...`); the scheduler is the one of `[execution]` |
+| `jobscript` | str | `[execution].jobscript` | jobscript of these jobs, relative to the folder of the settings file; copied for each job with the line that runs the analysis added, never changed. Its lines give memory and partition (e.g. `#SBATCH --mem=200G`, `#SBATCH --qos=...`) and the threads of the linear algebra (`export OMP_NUM_THREADS=...`); the scheduler is the one of `[execution]` |
+| `submit_options` | list of str | none | options given as they are to the command that submits each of these jobs, for all the analyses, before those of the section of the step (`[execution.<step>]`): the lighter resources of the analyses without a second jobscript, e.g. `["--gres=gpu:1", "--mem=0"]` with Slurm, over `#SBATCH --gres=gpu:4` of the jobscript of `[execution]`. Same rules as `submit_options` of the steps (above) |
+
+```toml
+[execution.analysis]
+submit_options = ["--gres=gpu:1", "--mem=0"]   # over the lines of the jobscript of [execution]
+```
 
 ```bash
 #!/bin/bash
@@ -605,13 +630,13 @@ the interface that `adhesion` of that kind relaxed.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `site` | str | `"min_site"` | `"min_site"` or `"max_site"`: the interface relaxed at the site of lowest or of highest energy of the surface chosen in `[interface.adhesion]`. To compute the other site, change `site` and run again: the results of the two sites stay side by side |
-| `shifts` | list of float | the 15 values below | shifts of the slab on top from the relaxed interface, in angstrom, a negative one bringing the slabs closer; at least one, finite, without repetitions; one pw.x calculation (`scf`, no movement of the atoms) for each |
+| `shifts` | list of float | the 16 values below | shifts of the slab on top from the relaxed interface, in angstrom, a negative one bringing the slabs closer; at least one, finite, without repetitions; one pw.x calculation (`scf`, no movement of the atoms) for each |
 | `fit` | str | `"none"` | `"none"`: only the energies are written; `"uber"`: also the fit of the universal binding energy relation. Any other name, `"uber0"` included, is an error |
 
 The default shifts are -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1, 1.25, 1.5,
-1.75, 2, 2.25, 2.75 and 3 Å: **there is no 2.5**, the list jumps from 2.25 to
-2.75 and each site needs 15 calculations. To cover the whole range, or to get
-more points at large distance, list the shifts in the table.
+1.75, 2, 2.25, 2.5, 2.75 and 3 Å, a step of 0.25 Å, and each site needs 16
+calculations. To cover another range, or to get more points at large
+distance, list the shifts in the table.
 
 The fit uses only the shifts that are zero or positive, and needs at least
 three of them: with fewer the fit fails and the analysis stops without
@@ -624,8 +649,9 @@ Changing only `fit` computes nothing again: the calculations are the same, and
 the step only analyses them anew.
 
 To remove: TribChem's command line passed a list of shifts, `-sh`, whose
-default is this one (the jump over 2.5 is in the list, and the documentation
-that says a step of 0.25 Å from -0.75 to 3 Å does not match it, A90), and never
+default is this one without the 2.5 (the jump over 2.5 is in the list, and the
+documentation that says a step of 0.25 Å from -0.75 to 3 Å does not match it,
+A90; the 2.5 is added here, DEV-48), and never
 passed `fit`, so `FT_StartPPES` ran no fit (A88): here too `"none"` is the
 default, and `"uber"` has to be asked for. In `fit_ppes` only `"uber"` works:
 `"uber0"` raises an error (A06) and any other name too (A89), so they are

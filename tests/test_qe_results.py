@@ -481,8 +481,7 @@ def test_structure_text_is_the_extxyz_of_the_final_structure():
 # --- Identity --------------------------------------------------------------------------------
 
 MODEL = {'version': '7.2',
-         'species': [{'label': label, 'pseudopotential': upf, 'md5': md5}
-                     for label, _, upf, md5 in SPECIES],
+         'species': [{'label': label, 'pseudopotential': upf} for label, _, upf, _ in SPECIES],
          'k_points': {'mode': 'gamma'}, 'namelists': {'SYSTEM': [['ecutwfc', 30.0]]}}
 
 
@@ -536,17 +535,20 @@ def test_output_with_other_pseudopotentials_keeps_its_results_and_is_not_reused(
     record = record_of(p)
     assert record.is_complete
     assert store.identity_differences(record) == [
-        f"species[0].pseudopotential: expected '{SPECIES[0][2]}', observed 'Fe.pbe-spn-kjpaw.UPF'",
-        f"species[0].md5: expected '{MD5_FE}', observed '{'c' * 32}'"]
+        f"species[0].pseudopotential: expected '{SPECIES[0][2]}', observed 'Fe.pbe-spn-kjpaw.UPF'"]
     assert not store.can_reuse(record, record.fingerprint)
 
 
-def test_checksum_not_printed_is_a_difference():
+def test_checksum_is_provenance_and_is_not_compared():
     s = structure()
+    other = ('Fe1', 'Fe', SPECIES[0][2], 'c' * 32)
+    p = parse_output(pw_output(s, species=(other, SPECIES[1])), 'scf', structure_in(s), MODEL)
+    assert p.observed['species'][0]['md5'] == 'c' * 32
+    assert store.identity_differences(record_of(p)) == []
     p = parse_output(pw_output(s, md5_lines=['', f'     MD5 check sum: {MD5_H}']), 'scf',
                      structure_in(s), MODEL)
-    assert store.identity_differences(record_of(p)) == [
-        f"species[0].md5: expected '{MD5_FE}', observed None"]
+    assert p.observed['species'][0]['md5'] is None
+    assert store.identity_differences(record_of(p)) == []
 
 
 def test_observed_when_the_values_are_read_only():

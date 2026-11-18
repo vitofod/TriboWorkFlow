@@ -161,6 +161,17 @@ def test_daemon_factory_takes_the_groups_of_start(tmp_path, fake_steps):
     assert daemon_factory(write_run(tmp_path, name='given')).execution.groups_of('pes') == 6
 
 
+def test_daemon_log_does_not_say_from_groups_when_the_settings_give_them(tmp_path, fake_steps,
+                                                                         caplog):
+    # The jobs of each step are in the settings and start passes nothing: the log of the
+    # orchestrator in the background tells where each value comes from, not "from --groups".
+    run_dir = write_run(tmp_path, steps=('match', 'pes', 'ppes'), groups=10)
+    with caplog.at_level('INFO'):
+        daemon_factory(run_dir)
+    assert 'from --groups' not in caplog.text
+    assert 'groups: pes 6 (from [execution.pes]), ppes 10 (from [execution])' in caplog.text
+
+
 def test_orchestrator_of_the_run(tmp_path, fake_steps):
     run_dir = write_run(tmp_path, steps=('pes', 'match'), groups=None)
     orch = build_orchestrator(run_dir, groups=3)

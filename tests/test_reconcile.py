@@ -543,7 +543,7 @@ def test_launch_for_different_launches_needs_a_group(run):
     run.group('g1', unchanged)
     run.group('g2', manual)
     with pytest.raises(LaunchError, match=r'different launches: g1 \(unchanged, level 1\), '
-                                          r'g2 \(manual, level 1\); choose one with --group'):
+                                          r'g2 \(manual, level 1\); choose one with --from-group'):
         launch_for(run.dir, SYSTEM, calc_id, 2)
     assert launch_for(run.dir, SYSTEM, calc_id, 2, group='g2') == manual
     with pytest.raises(LaunchError, match='group g3 does not list attempt 2 .*: g1, g2'):

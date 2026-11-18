@@ -15,12 +15,12 @@ stays uncertain. Once you have checked that its job no longer runs, this
 command records the attempt with the launch of the group that listed it and
 an unknown end, and removes the claim; then relaunch the calculation. When
 the groups that list the attempt give different launches, choose one with
---group. No command of the scheduler runs. A release interrupted ("empty
+--from-group. No command of the scheduler runs. A release interrupted ("empty
 claim released in part" in status) is completed by the same command again.
 
 Example:
  $ triboworkflow release-claim pes/c0 --worker-over
- $ triboworkflow release-claim pes/c0 --worker-over --group mp-30_mp-134.pes.2
+ $ triboworkflow release-claim pes/c0 --worker-over --from-group mp-30_mp-134.pes.2
     """
 
     locks_run = True
@@ -29,7 +29,7 @@ Example:
         parser.add_argument('calc_id', help='calculation, as <step>/<label>')
         parser.add_argument('--worker-over', action='store_true', required=True,
                             help='confirm that the worker of the claim no longer runs')
-        parser.add_argument('--group', metavar='G',
+        parser.add_argument('--from-group', dest='group', metavar='G',
                             help='group whose launch of the attempt is taken')
 
     def run(self, args, run_dir, settings):
@@ -37,5 +37,6 @@ Example:
 
         system = system_name(settings)
         n = run_orchestrator(run_dir, settings).release_claim(system, args.calc_id, args.group)
+        step, label = args.calc_id.split('/', 1)
         print(f'{system}/{args.calc_id}: empty claim released as attempt {n}, with its end not '
-              f'known; relaunch it with "triboworkflow relaunch {args.calc_id}"')
+              f'known; relaunch it with "triboworkflow relaunch --step {step} --calc {label}"')

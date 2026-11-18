@@ -43,11 +43,10 @@ R=<folder of the runs, on the parallel filesystem>
    ```
 
 2. Load the module of QE and check `which pw.x pp.x`.
-3. Put the UPF files of Al and Si in a `pseudo_dir` and write their
-   checksums there: `md5sum *.UPF > pseudo.md5`.
+3. Put the UPF files of Al and Si in a `pseudo_dir`.
 4. Copy `tests/hpc/machine_example.toml` and `tests/hpc/jobscript_example.sh`
    to a folder of your own and fill them in: account, venv, partition, QoS,
-   module, `pseudo_dir`, `upf_md5`, the UPF file of each species; values of
+   module, `pseudo_dir`, the UPF file of each species; values of
    the namelists other than the defaults of the script if needed. The
    jobscript keeps `{time}` in its `--time` line: each case writes its own
    walltime there, for the case `single` submitted by hand; the other cases
@@ -181,7 +180,7 @@ The claim of a calculation names the job that runs it
 - `to_cancel`: `scancel <its job>` while pw.x runs. A job `CANCELLED` is
   left to the user (`execution.md`, the states of the jobs): the calculation
   needs the user, and is relaunched by hand from scratch: `cli stop`, `$QC
-  cli relaunch adhesion/to_cancel -r $R/manual`, `cli start`.
+  cli relaunch --step adhesion --calc to_cancel -r $R/manual`, `cli start`.
 - `to_exit`: while pw.x runs, `touch
   systems/<system>/adhesion/to_exit/adhesion_to_exit.EXIT`; pw.x stops and
   the calculation waits for the user. The relaunch is refused until the job
@@ -211,7 +210,7 @@ Once the job of `victim` is over (its worker killed, the claim empty):
 ```bash
 $QC cli submit adhesion -r $R/claim                                 # victim: uncertain
 $QC cli release-claim adhesion/victim --worker-over -r $R/claim
-$QC cli relaunch adhesion/victim -r $R/claim
+$QC cli relaunch --step adhesion --calc victim -r $R/claim
 $QC cli submit adhesion -r $R/claim                                 # once its job is over
 $QC cli analyse adhesion -r $R/claim
 $QC snapshot $R/claim && $QC report $R/claim

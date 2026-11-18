@@ -161,12 +161,21 @@ workflow (`slab`) and the transformation between them:
 Both paths rebuild the lattice with `Lattice.from_parameters`, already in the
 `Slab` constructor (`reorient_lattice=True`): c along z, a along x. Hence:
 
-- the cell must be right-handed with c perpendicular to a and b (|cos| at
-  most 1e-6); otherwise the slab would be mirrored or its surface tilted, and
-  the file is refused;
-- the rotation from the frame of the file to that of the slab is recorded
-  (`rotation`, `rotated`, `provenance()`), with the data dropped (e.g.
-  `selective_dynamics`, structure properties) and added (`magmom`);
+- c must be perpendicular to a and b (|cos| at most 1e-6); otherwise the
+  surface of the slab would be tilted, and the file is refused;
+- the cell must be right-handed (a × b along c). A slab read from a file
+  other than a JSON slab whose cell is left-handed, e.g. a = (1, 0.7, 0) and
+  b = (1, -0.7, 0), has its vectors a and b exchanged: the same lattice, the
+  atoms in the same Cartesian positions and the same c, so the same crystal
+  and the same side of the interface, with the cell right-handed. It is
+  recorded (`swapped`, `provenance()`) and `analyse match` warns about it. The
+  axes x and y of the shear paths and the columns a and b of the interface
+  follow the exchanged vectors (no difference for a cell with a = b). A JSON
+  slab with a left-handed cell is refused: it would be mirrored;
+- the rotation from the frame of the file, with a and b exchanged if they
+  were, to that of the slab is recorded (`rotation`, `rotated`,
+  `provenance()`), with the data dropped (e.g. `selective_dynamics`,
+  structure properties) and added (`magmom`);
 - QE labels other than the element are refused: the workflow code does not
   carry them, so the workflows cannot guarantee them along the chain. This
   also excludes, for now, magnetic cases with several QE species of the same
@@ -177,5 +186,8 @@ To remove: the two paths reproduce how TribChem's interface workflow reads
 its slabs from the database (`FT_StartInterfaceMatch`) and how
 `FT_StoreCustomSlab` stores a custom slab, whose MAGMOM of the INCAR is
 replaced by the moments of the file; golden tests compare `custom_slab` with
-that Firetask. TribChem transforms the left-handed and tilted cells that are
-refused here.
+that Firetask. TribChem mirrors a left-handed cell and tilts the surface when
+c is not perpendicular to a and b; here the tilted cell is refused and the
+left-handed one of a file has a and b exchanged instead of being mirrored
+(DEV-49; the result is the same for a slab that is symmetric under the mirror
+image, and differs for a chiral one).

@@ -29,7 +29,6 @@ the same inputs, and ``position_decomposition`` shows where it was not (A92).
 import contextlib
 import copy
 import dataclasses
-import hashlib
 import io
 import json
 import os
@@ -1181,18 +1180,13 @@ def run_with_the_fake_engines(tmp_path):
 
     pw.x and pp.x are the programs of ``qe_check_fake.py``: nothing is computed. pw.x prints the
     output of a converged run of its input, with the checksums of the UPF files of
-    ``pseudo_dir``; pp.x writes a uniform density in the cell of the final structure. The UPF
-    files and their checksums are made before any calculation is prepared, since the checksums
-    are part of what a calculation is.
+    ``pseudo_dir``; pp.x writes a uniform density in the cell of the final structure.
     """
     run_dir = pes_run(tmp_path, steps=('charge', 'adhesion', 'pes_scf', 'match'))
     pseudo = tmp_path / 'pseudo'
     pseudo.mkdir()
-    lines = []
     for name in ('Cu.UPF', 'Al.UPF'):
         (pseudo / name).write_text(f'fake {name}\n')
-        lines.append(f'{hashlib.md5((pseudo / name).read_bytes()).hexdigest()}  {name}')
-    (run_dir / 'pseudo.md5').write_text('\n'.join(lines) + '\n')
     edit_config(run_dir, 'pseudo_dir = "/path/to/pseudo"', f'pseudo_dir = "{pseudo}"')
     edit_config(run_dir, 'run_command = "mpirun -np 32 pw.x -nk 4"',
                 f'run_command = "{sys.executable} {FAKE} pw"')

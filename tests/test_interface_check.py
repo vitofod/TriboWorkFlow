@@ -23,6 +23,7 @@ from chain_helpers import CUCU, posix_only
 from test_outputs import restamp
 from test_pes import edit_config
 from triboworkflow.core.structures import read_structure
+from triboworkflow.execution.jobs import group_walltime
 
 HPC = Path(__file__).resolve().parent / 'hpc'
 sys.path.insert(0, str(HPC))
@@ -74,11 +75,25 @@ def job_ids(run_dir, step):
     return json.loads((group / 'submitted.json').read_text())['job_ids']
 
 
-def sacct_file(path, jobs):
-    """File of ``sacct -P``: ``jobs`` is ``{job id: (state, MaxRSS of its step)}``."""
+def walltime_text(run_dir, job_id):
+    """``HH:MM:SS`` of the walltime of the group that submitted a job."""
+    for path in (run_dir / 'jobs').glob('*/submitted.json'):
+        if job_id in json.loads(path.read_text())['job_ids']:
+            seconds = group_walltime(path.parent)
+            return f'{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}'
+    raise KeyError(job_id)
+
+
+def sacct_file(path, jobs, run_dir=None, limit='01:00:00'):
+    """File of ``sacct -P``: ``jobs`` is ``{job id: (state, MaxRSS of its step)}``.
+
+    The ``Timelimit`` of each job is the walltime of its group in ``run_dir`` if given, else
+    ``limit``.
+    """
     lines = [JOB_HEADER]
     for job_id, (state, rss) in jobs.items():
-        lines.append(f'{job_id}|job|{state}|0:0|00:01:30|01:00:00|8G||node01')
+        time_limit = limit if run_dir is None else walltime_text(run_dir, job_id)
+        lines.append(f'{job_id}|job|{state}|0:0|00:01:30|{time_limit}|8G||node01')
         lines.append(f'{job_id}.batch|batch|{state}|0:0|00:01:30||8G|{rss}|node01')
     path.write_text('\n'.join(lines) + '\n')
     return path
@@ -437,23 +452,40 @@ def test_the_memory_and_the_walltime_of_the_jobs_when_sacct_is_given(run, tmp_pa
     ids = {j: ('COMPLETED', '2097152K') for step in ('pes', 'pes_scf', 'plotpes', 'plotpes_scf',
                                                      'shear', 'adhesion', 'ppes', 'charge')
            for j in job_ids(run, step)}
-    found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', ids))
+    found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', ids, run))
     assert found['accounting'][0] == 'ok' and 'largest MaxRSS 2.00 GiB' in found['accounting'][1]
+    assert f'Timelimit equal to the walltime of the group for {len(ids)} of {len(ids)} jobs' \
+        in found['accounting'][1]
     for subject in ('plotpes job', 'shear job'):
         assert found[subject][0] == 'ok'
         assert 'MaxRSS 2.00 GiB of 8G' in found[subject][1]
-        assert 'elapsed 00:01:30 of 01:00:00' in found[subject][1]
+        assert 'elapsed 00:01:30 of 00:30:00' in found[subject][1]   # the walltime of the step
+
+
+def test_a_timelimit_that_is_not_the_walltime_of_its_group_is_a_problem(run, tmp_path):
+    (job,) = job_ids(run, 'shear')
+    found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', {job: ('COMPLETED', '1024K')},
+                                     limit='12:00:00'))
+    verdict, text = found['accounting']
+    assert verdict == 'PROBLEM'
+    assert f'job {job} of {CUCU}.shear.1: Timelimit 12:00:00, walltime of the group 1800 s' in text
+    assert 'Timelimit equal to the walltime of the group for 0 of 1 jobs' in text
+    # A limit that is not a time is a difference too.
+    found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', {job: ('COMPLETED', '1024K')},
+                                     limit='UNLIMITED'))
+    assert found['accounting'][0] == 'PROBLEM' and 'Timelimit UNLIMITED' in found['accounting'][1]
 
 
 def test_an_analysis_job_that_ran_out_of_memory(run, tmp_path):
     (job,) = job_ids(run, 'shear')
-    found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', {job: ('OUT_OF_MEMORY', '8388608K')}))
+    found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', {job: ('OUT_OF_MEMORY', '8388608K')},
+                                     run))
     assert found['accounting'][0] == 'PROBLEM' and 'OUT_OF_MEMORY' in found['accounting'][1]
 
 
 def test_jobs_missing_from_sacct_are_a_note(run, tmp_path):
     (job,) = job_ids(run, 'shear')
-    found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', {job: ('COMPLETED', '1024K')}))
+    found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', {job: ('COMPLETED', '1024K')}, run))
     assert found['accounting'][0] == 'note' and '1 of ' in found['accounting'][1]
 
 

@@ -162,6 +162,20 @@ def test_submit_gives_the_name_of_the_job_after_the_walltime(fake_run, jobscript
     assert run.calls[0][0][:len(submit) + len(options)] == submit + options
 
 
+@pytest.mark.parametrize('name, output, options', [
+    ('slurm', 'Submitted batch job 7', ['--time=00:30:00', '--job-name=ppes_x', '--qos=dbg',
+                                       '--mem=0']),
+    ('pbs', '7.server', ['-l', 'walltime=00:30:00', '-N', 'ppes_x', '--qos=dbg', '--mem=0']),
+])
+def test_submit_gives_the_options_of_the_user_last(fake_run, jobscript, name, output, options):
+    """The options of the user come after the walltime and the name, as they are written."""
+    run = fake_run(output)
+    submit = JobScheduler(name).config['submit']
+    JobScheduler(name).submit_job(str(jobscript), walltime=1800, job_name='ppes_x',
+                                  extra_options=['--qos=dbg', '--mem=0'])
+    assert run.calls[0][0] == submit + options + [str(jobscript)]
+
+
 def test_submit_without_a_walltime_adds_no_option(fake_run, jobscript):
     run = fake_run('Submitted batch job 7')
     JobScheduler('slurm').submit_job(str(jobscript))

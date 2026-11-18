@@ -20,8 +20,8 @@ for pw.x 7.2 (``PW/Doc/INPUT_PW.def``, 194 keys) is in one class:
   (steps, mixing, diagonalization); the relaunches may change it. Out of the
   fingerprint: the values of each run are in its input file;
 - ``'resource'`` (``RESOURCE``): time limit, paths and names. Out of the
-  fingerprint; the pseudopotentials are identified by their checksums, not by
-  ``pseudo_dir``;
+  fingerprint; the pseudopotentials are identified by the name of their UPF
+  file, not by ``pseudo_dir``;
 - ``'generated'`` (``GENERATED``): written from the structure and the species
   (``ibrav = 0``, ``nat``, ``ntyp``, ``starting_magnetization(i)``) or not
   allowed by the settings (``celldm``, ``a``, ...).

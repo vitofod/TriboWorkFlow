@@ -37,8 +37,8 @@ from pathlib import Path
 from dacite import (Config, DaciteError, MissingValueError, WrongTypeError,
                     from_dict)
 
-from .schema import (KEY_HINTS, SCHEMA_VERSION, TYPE_HINTS, GenerationParams, Settings,
-                     SettingsError, join, walk)
+from .schema import (KEY_HINTS, TYPE_HINTS, GenerationParams, Settings, SettingsError, join,
+                     walk)
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +54,22 @@ def load_settings(path):
     Returns
     -------
     Settings
-        With ``source`` set to ``path``.
+        With ``source`` set to ``path``. The mass and the pseudopotential of
+        the species written ``"auto"`` are those of the structure files
+        (``triboworkflow.core.structures.resolve_species``), and
+        ``species_read`` tells where each one was read.
 
     Raises
     ------
     SettingsError
         If the file cannot be read, is not valid TOML or does not follow the
-        schema.
+        schema, or if a species written ``"auto"`` cannot be read from the
+        structure files.
     """
+    # Imported here: the structures do not depend on the settings, and the settings
+    # need them only for this.
+    from triboworkflow.core.structures import StructureError, resolve_species
+
     path = Path(path)
     try:
         with open(path, 'rb') as f:
@@ -75,6 +83,12 @@ def load_settings(path):
     except SettingsError as error:
         raise SettingsError(error.path, error.message, path) from None
     settings.source = path
+    try:
+        settings.species_read = resolve_species(settings)
+    except (StructureError, OSError) as error:
+        raise SettingsError('atomic_species', str(error), path) from None
+    for sentence in settings.species_read:
+        logger.info('%s', sentence)
     return settings
 
 
@@ -96,10 +110,6 @@ def settings_from_dict(data):
     SettingsError
         If ``data`` does not follow the schema.
     """
-    version = data.get('schema_version')
-    if isinstance(version, bool) or version != SCHEMA_VERSION:
-        found = 'missing' if version is None else f'unsupported value {version!r}'
-        raise SettingsError('schema_version', f'{found}; supported: {SCHEMA_VERSION}')
     _check_unknown_keys(Settings, data, '')
     config = Config(strict=True, type_hooks={float: _real, int: _integer})
     try:

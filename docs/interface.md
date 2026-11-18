@@ -619,6 +619,14 @@ fewer points `npts` of the string. The time per step also changes with the load
 and the threads of the machine: the same Cu/Cu took 2.8 ms per step in
 another session of the laptop.
 
+On a compute node of a GPU partition, with an interface of 48 atoms (6 points
+in the cell, 189 with the replicas, 178 unique, 17 800 centres), the analysis
+took 5 minutes and 2.8 GiB: 35 s of interpolation and strings of 259, 275 and
+508 steps, 55 to 101 s each, i.e. about 0.2 to 0.3 s per step. The steps
+needed are far below the ones of the table (`tol = 1e-8` reached early on this
+surface) and the time per step above it: the estimate of the table gives the
+order of magnitude, not the time of a run, which depends on the surface.
+
 **The seed.** Six seeds of the noise of `bs_line` changed its shear strength
 by 2e-7 of its value on the Cu/Cu (2.479835 GPa on average, spread of 5.5e-7
 GPa, 13 091 to 13 107 steps) and by 3e-9 on the Pt/Ag (2.039640 GPa, 1 419
@@ -852,8 +860,8 @@ with the slab on top moved by the shift along z, a negative shift bringing the
 slabs closer: shift 0 is the interface as `adhesion` left it. No atom is
 fixed, whatever the relaxation of `adhesion` fixed. The k-point grid comes from
 its density (`[k_points] mode = "kdens"` is required) and the pw.x input is
-written as for every calculation of the workflow. With the 15 default shifts
-([configuration.md](configuration.md)) a site needs 15 calculations.
+written as for every calculation of the workflow. With the 16 default shifts
+([configuration.md](configuration.md)) a site needs 16 calculations.
 
 The atoms to move are those of the slab on top, told by the slab each atom
 belongs to and not by its position in the cell: the site property
@@ -999,7 +1007,7 @@ TribChem merged the new keys into the old ones). TribChem's command line never
 passed the fit, so no fit was run (A88): `fit = "none"` is the default here
 too. The fit function works only with `"uber"` (A06, A89), and the other names
 are refused when the settings are read. The shifts of its command line are the
-default ones, with the jump over 2.5 (A90). The type of the PPES was an option
+default ones, with the jump over 2.5 (A90) filled in here (DEV-48). The type of the PPES was an option
 independent of the adhesion in TribChem; here it is the one of
 `[interface.adhesion]`, and the PPES of a site was skipped there once the other
 site was done (A59), where here "done" is the entries of the site with their

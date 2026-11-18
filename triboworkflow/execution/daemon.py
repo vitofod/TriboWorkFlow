@@ -324,7 +324,8 @@ def stop(run_dir, timeout=None, poll=0.2):
     if found.running is not True:
         raise DaemonError(f'nothing to stop: {found.message}')
     os.kill(found.pid, signal.SIGTERM)
-    logger.info('SIGTERM sent to the orchestrator of %s (pid %d)', run_dir, found.pid)
+    logger.info('SIGTERM sent to the orchestrator of %s (pid %d)', Path(run_dir).resolve(),
+                found.pid)
     if timeout is None:
         return False
     deadline = time.monotonic() + timeout
@@ -392,6 +393,21 @@ def load_factory(factory):
     return getattr(importlib.import_module(module), name)
 
 
+def _cpu_limit():
+    """Limit of the CPU time of this process, ``(soft, hard)`` in seconds, or ``'unknown'``.
+
+    Notes
+    -----
+    To remove: temporary diagnostics (Q51), with its use in ``serve`` and
+    ``orchestrator.cpu_note``; remove before the release.
+    """
+    try:
+        import resource
+    except ImportError:
+        return 'unknown'
+    return resource.getrlimit(resource.RLIMIT_CPU)
+
+
 def serve(run_dir, factory, token, factory_args=()):
     """Body of the background process: run the orchestrator until it is done or stopped.
 
@@ -426,6 +442,7 @@ def serve(run_dir, factory, token, factory_args=()):
                               'run')
         write_json(path, {**data, 'pid': os.getpid()})
         logger.info('Orchestrator of %s running: pid %d', run_dir, os.getpid())
+        logger.info('CPU time limit of the process (soft, hard): %s', _cpu_limit())  # To remove
         report = orchestrator.run(sleep=request.wait, stop=request.asked)
         logger.info('Orchestrator %s', 'stopped by a signal' if request.asked() else 'done')
         return report

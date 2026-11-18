@@ -40,16 +40,13 @@ from triboworkflow.workflows.interface import pes
 from triboworkflow.workflows.interface.match import MatchStep, match_provenance
 
 SLABS = {'Cu111': 'cu111', 'Al111': 'al111'}
-# Expected checksums of the UPF files of the example (the files are not read).
-MD5 = {'Cu.UPF': '0' * 32, 'Al.UPF': '1' * 32}
 READ = [('structure', 'init', 'interface'), ('structure', 'init', 'bot_slab'),
         ('structure', 'init', 'top_slab'), ('highsym',)]
 
 
 def pes_run(tmp_path, name='run', steps=('match', 'pes', 'pes_scf')):
-    """A run of the example with the two PES steps, its slabs as JSON files and the checksums."""
+    """A run of the example with the two PES steps and its slabs as JSON files."""
     run_dir = write_run(tmp_path, steps=steps, name=name)
-    (run_dir / 'pseudo.md5').write_text(''.join(f'{md5}  {upf}\n' for upf, md5 in MD5.items()))
     config = run_dir / 'config.toml'
     text = config.read_text(encoding='utf-8')
     (run_dir / 'slabs').mkdir()

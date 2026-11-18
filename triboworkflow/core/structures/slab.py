@@ -21,10 +21,14 @@ constructor already does (``reorient_lattice=True``, pymatgen
 labels. ``workflow_slab`` makes these transformations explicit and keeps the
 structure as read:
 
-- the cell must be right-handed with c perpendicular to a and b; any other
-  cell would be mirrored or tilted by ``from_parameters``, and is an error;
-- the rotation from the frame of the file to that of the slab is returned,
-  with the data dropped and added;
+- c must be perpendicular to a and b; a cell where it is not would be tilted
+  by ``from_parameters``, and is an error;
+- the cell must be right-handed: the left-handed cell of a file that is not a
+  pymatgen ``Slab`` would be mirrored by ``from_parameters``, so its vectors a
+  and b are exchanged instead (the same lattice, the atoms in the same
+  Cartesian positions, the same c), and the exchange is returned;
+- the rotation from the frame of the file, with a and b exchanged if they
+  were, to that of the slab is returned, with the data dropped and added;
 - QE labels other than the element (e.g. ``Fe1``, ``Fe2``) are an error: the
   workflow code does not carry them along the chain. This also excludes, for
   now, magnetic cases with several QE species of the same element.
@@ -35,13 +39,15 @@ To remove: the two paths reproduce how TribChem's interface workflow reads
 its slabs from the database (``highput/firetasks/run.py:1028``, ``1036``)
 and how ``FT_StoreCustomSlab`` stores a custom slab
 (``highput/firetasks/custom_slab.py:118-270``). Golden tests compare
-``custom_slab`` with that Firetask. The error for left-handed and tilted
-cells is a deviation: TribChem transforms them.
+``custom_slab`` with that Firetask. The error for tilted cells and the
+exchange of a and b for left-handed ones are deviations (DEV-04, DEV-49):
+TribChem tilts the one and mirrors the other.
 """
 
 from dataclasses import dataclass, field
 
 import numpy as np
+from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Structure
 from pymatgen.core.surface import Slab
 
@@ -53,6 +59,8 @@ ORTHOGONALITY_TOL = 1e-6
 # Largest deviation of R R^T from the identity, and of R from the identity
 # for a slab that is not rotated.
 ROTATION_TOL = 1e-9
+# Exchange of the vectors a and b of a cell given as rows.
+EXCHANGE_AB = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
 
 
 @dataclass
@@ -68,7 +76,9 @@ class WorkflowSlab:
     path : {'database', 'custom_slab'}
         How ``slab`` was obtained (see the module docstring).
     rotation : numpy.ndarray, shape (3, 3)
-        Proper rotation with ``slab.lattice.matrix = original.lattice.matrix @ rotation``.
+        Proper rotation with ``slab.lattice.matrix = cell @ rotation``, where
+        ``cell`` is ``original.lattice.matrix``, with the rows a and b
+        exchanged if ``swapped``.
     rotated : bool
         Whether ``rotation`` differs from the identity.
     dropped : list of str
@@ -76,15 +86,19 @@ class WorkflowSlab:
         ``properties.<key>``, ``reconstruction``).
     added : list of str
         Site properties of ``slab`` missing from ``original`` (e.g. ``magmom``).
+    swapped : bool
+        Whether the vectors a and b of ``original`` were exchanged because its
+        cell is left-handed.
     """
 
     original: Structure
     slab: Slab
     path: str                    # 'database' or 'custom_slab'
-    rotation: np.ndarray         # slab.lattice.matrix = original.lattice.matrix @ rotation
+    rotation: np.ndarray         # slab.lattice.matrix = cell @ rotation (see above)
     rotated: bool
     dropped: list[str] = field(default_factory=list)
     added: list[str] = field(default_factory=list)
+    swapped: bool = False
 
     def provenance(self):
         """JSON data of the transformation, for the records.
@@ -92,11 +106,13 @@ class WorkflowSlab:
         Returns
         -------
         dict
-            Path, rotation, lattice matrices before and after, data dropped
-            and added.
+            Path, exchange of a and b (``swapped`` and its matrix ``swap``, the
+            identity when nothing was exchanged), rotation, lattice matrices
+            before and after, data dropped and added.
         """
-        return {'path': self.path, 'rotated': self.rotated,
-                'rotation': self.rotation.tolist(),
+        return {'path': self.path, 'swapped': self.swapped,
+                'swap': (EXCHANGE_AB if self.swapped else np.eye(3, dtype=int)).tolist(),
+                'rotated': self.rotated, 'rotation': self.rotation.tolist(),
                 'original_matrix': self.original.lattice.matrix.tolist(),
                 'slab_matrix': self.slab.lattice.matrix.tolist(),
                 'dropped': list(self.dropped), 'added': list(self.added)}
@@ -150,9 +166,10 @@ def workflow_slab(structure, miller):
     Raises
     ------
     StructureError
-        For QE labels other than the element, a left-handed cell, c not
-        perpendicular to a and b, or Miller indices that differ from those of
-        the slab.
+        For QE labels other than the element, a left-handed cell of a
+        ``Slab`` (the cell of any other structure has a and b exchanged), c
+        not perpendicular to a and b, or Miller indices that differ from
+        those of the slab.
     """
     miller = [int(m) for m in miller]
     custom = [i + 1 for i, site in enumerate(structure) if site.label != site.species_string]
@@ -160,7 +177,11 @@ def workflow_slab(structure, miller):
         labels = sorted({structure[i - 1].label for i in custom})
         raise StructureError(f'QE labels other than the element ({", ".join(labels)}) are not '
                              'supported in the workflows: the workflow code does not carry them')
-    check_slab_cell(structure.lattice.matrix)
+    # The left-handed cell of a file is made right-handed by exchanging a and b: from_parameters
+    # would mirror it.
+    swapped = bool(not isinstance(structure, Slab) and np.linalg.det(structure.lattice.matrix) < 0)
+    cell = exchange_ab(structure) if swapped else structure
+    check_slab_cell(cell.lattice.matrix)
     if isinstance(structure, Slab):
         if [int(m) for m in structure.miller_index] != miller:
             raise StructureError(f'miller = {miller} in the settings, but the slab has '
@@ -169,12 +190,12 @@ def workflow_slab(structure, miller):
     else:
         # The moments of the file are passed apart from the rest of the
         # structure, which then carries no moments in oriented_unit_cell.
-        poscar = structure.copy()
+        poscar = cell.copy()
         if MAGMOM in poscar.site_properties:
             poscar.remove_site_property(MAGMOM)
-        magmom = structure.site_properties.get(MAGMOM)
+        magmom = cell.site_properties.get(MAGMOM)
         path, slab = 'custom_slab', custom_slab(poscar, miller, magmom)
-    rotation = np.linalg.solve(structure.lattice.matrix, slab.lattice.matrix)
+    rotation = np.linalg.solve(cell.lattice.matrix, slab.lattice.matrix)
     if (np.abs(rotation @ rotation.T - np.eye(3)).max() > ROTATION_TOL
             or np.linalg.det(rotation) <= 0):
         raise StructureError('the slab lattice is not a rotation of the cell of the file')
@@ -185,11 +206,34 @@ def workflow_slab(structure, miller):
         dropped.append('reconstruction')
     return WorkflowSlab(structure, slab, path, rotation,
                         rotated=bool(np.abs(rotation - np.eye(3)).max() > ROTATION_TOL),
-                        dropped=dropped, added=sorted(slab_props - original_props))
+                        dropped=dropped, added=sorted(slab_props - original_props),
+                        swapped=swapped)
+
+
+def exchange_ab(structure):
+    """The structure with the vectors a and b of its cell exchanged.
+
+    Parameters
+    ----------
+    structure : pymatgen.core.structure.Structure
+
+    Returns
+    -------
+    pymatgen.core.structure.Structure
+        The same lattice and the same atoms in the same Cartesian positions,
+        in the same order and with the same labels, site properties and
+        properties; the cell is right-handed if the given one was left-handed.
+    """
+    return Structure(Lattice(EXCHANGE_AB @ structure.lattice.matrix),
+                     [site.species for site in structure], structure.frac_coords[:, [1, 0, 2]],
+                     labels=structure.labels, site_properties=structure.site_properties,
+                     properties=structure.properties)
 
 
 def check_slab_cell(matrix):
     """Check that a slab cell keeps its shape in the workflow.
+
+    ``workflow_slab`` exchanges a and b of a left-handed cell before this check.
 
     Parameters
     ----------
@@ -205,7 +249,8 @@ def check_slab_cell(matrix):
     a, b, c = np.asarray(matrix, float)
     if np.linalg.det(matrix) <= 0:
         raise StructureError('left-handed cell (a x b points away from c): the slab of the '
-                             'workflows (Lattice.from_parameters) would be its mirror image')
+                             'workflows (Lattice.from_parameters) would be its mirror image; '
+                             'exchange the vectors a and b')
     for name, v in (('a', a), ('b', b)):
         cos = np.dot(v, c) / (np.linalg.norm(v) * np.linalg.norm(c))
         if abs(cos) > ORTHOGONALITY_TOL:

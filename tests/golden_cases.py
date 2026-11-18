@@ -536,7 +536,8 @@ def case_uber0(tc):
 # the development one its port, triboworkflow.core.structures.custom_slab, on
 # the same POSCAR read by read_structure. Cells: hexagonal with a along x,
 # the same rotated by 30 degrees about z, rectangular with opposite moments,
-# c tilted, left-handed; the last two are rejected by workflow_slab.
+# c tilted, left-handed; workflow_slab rejects the tilted one and exchanges a and
+# b of the left-handed one (DEV-49).
 CUSTOM_SLAB_MILLER = [1, 1, 1]
 _HEX = np.array([[2.556, 0.0, 0.0], [-1.278, 2.556 * math.sqrt(3) / 2, 0.0], [0.0, 0.0, 25.0]])
 _HEX_FRAC = [[0.0, 0.0, 0.1], [1 / 3, 2 / 3, 0.18], [2 / 3, 1 / 3, 0.26]]

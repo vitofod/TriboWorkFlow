@@ -51,6 +51,12 @@ of each calculation is its own; the `prefix` is `<step>_<label>`
 
 ## Groups of jobs
 
+A **group** is what the orchestrator writes when it submits calculations: a
+folder `jobs/<system>.<step>.<k>` (e.g. `jobs/Cu111_Al111.pes.1`) that lists
+the calculations to run. It is not the number in `groups` of `[execution]`:
+that is how many **jobs** (workers) each group is submitted as, over which its
+calculations are spread. A calculation run again goes in a new group.
+
 The calculations of a group are spread over several jobs, submitted from one
 jobscript (`execution/jobs.py`):
 
@@ -277,7 +283,16 @@ submitted with (`sbatch --time=HH:MM:SS` and the like, `configuration.md`,
 `[execution.<step>]`): the scheduler and the worker use the same value, and
 a time limit in the jobscript is overridden by the command line. The jobs
 are named `<step>_<name>` by the same command (`jobs.job_name`: `<name>` is
-the `--job-name` of the jobscript with Slurm, else the system). In
+the `--job-name` of the jobscript with Slurm, else the system). The
+`submit_options` of the settings (`[execution.analysis]` and
+`[execution.<step>]`, `configuration.md`) are added to the same command after
+these two; they are those of the settings read by the process that submits
+the jobs (an orchestrator in the background reads them when it starts, so
+after a change of the options `stop` and `start` it again). With `max_jobs` in
+`[execution]` the manager submits no job while that many jobs of the run are
+waiting or running in the scheduler, and the others at later checks, the
+groups in the order they were written; a group submitted in part is not
+complete until all its jobs are. In
 `input.pwi`, `max_seconds`, `nstep` and `restart_mode` must be alone on
 their line of `&CONTROL`, `mixing_beta` on its line of `&ELECTRONS`, when
 given.
@@ -310,7 +325,7 @@ the attempt not yet in the record or already there: the reconciliation
 reports it as an empty claim released in part, and releasing the claim
 again completes it. With the attempt already recorded, that attempt is
 archived and no other one is added; its launch is the one recorded, and a
-`--group` giving another launch is refused.
+`--from-group` giving another launch is refused.
 
 ## Reconciliation
 
@@ -460,7 +475,7 @@ attempt from scratch and never shared with another calculation.
 code (an empty claim released, or a claim whose worker stopped before writing
 the attempt) takes its launch from the groups that list it
 (`reconcile.launch_for`): the launch they all give, or, when they give
-different ones, the one of the group the user chooses (`--group`); when no
+different ones, the one of the group the user chooses (`--from-group`); when no
 group lists it the launch is not known and nothing is relaunched. The level
 is never assigned by default.
 

@@ -87,7 +87,7 @@ def test_step_and_constants():
         'interface_region', 'top_slab', 'bot_slab')
     assert not hasattr(ppes, 'INTER_TYPE')
     assert ppes.INTERFACE_OF == {'min_site': 'interface_min', 'max_site': 'interface_max'}
-    assert len(SHIFT_LABELS) == 15 and len(set(SHIFT_LABELS)) == 15
+    assert len(SHIFT_LABELS) == 16 and len(set(SHIFT_LABELS)) == 16
 
 
 @pytest.mark.parametrize('kind', ['regular', 'short'])
@@ -220,7 +220,7 @@ def test_k_points_from_their_density_only(surfaces):
 def test_fingerprints_follow_the_structures_and_not_the_fit(analysed_copy):
     run_dir, _, _, _ = analysed_copy
     plan = ppes.PpesStep().plan(run_dir, SYSTEM)
-    assert len(plan) == 15 and len(set(plan.values())) == 15
+    assert len(plan) == 16 and len(set(plan.values())) == 16
     # The fit is not part of a calculation (P4): the same plan with the other fit.
     edit_config(run_dir, 'fit = "none"', 'fit = "uber"')
     assert ppes.PpesStep().plan(run_dir, SYSTEM) == plan
@@ -481,7 +481,7 @@ def test_the_flags_of_a_relaxation_do_not_fix_a_static_calculation(surfaces_copy
     put_interface(run_dir, final, site='max_site', given=structure_in)
     edit_config(run_dir, 'site = "min_site"', 'site = "max_site"')
     inputs = inputs_of(run_dir)
-    assert len(inputs.points) == 15
+    assert len(inputs.points) == 16
     for calc in ppes.ppes_calculations(SYSTEM, inputs):
         assert re.search(r"calculation\s*=\s*'scf'", calc.input_text), calc.calc_id
         # pw.x gets no flag: the static calculation moves nothing, and a flag would only
@@ -791,7 +791,7 @@ def adhered_copy(adhered, tmp_path):
 
 @pytest.fixture(scope='module')
 def ppes_run(adhered, tmp_path_factory):
-    """The run of ``adhered`` with the step run (minimum site, 15 shifts, no fit)."""
+    """The run of ``adhered`` with the step run (minimum site, 16 shifts, no fit)."""
     run_dir = tmp_path_factory.mktemp('ppes_run') / 'run'
     shutil.copytree(adhered, run_dir)
     ppes.PpesStep().analyse(run_dir, SYSTEM, finish_ppes(run_dir))
@@ -1334,7 +1334,7 @@ def test_message_of_the_analysis(adhered_copy, caplog):
     lines = [record.getMessage() for record in caplog.records if record.name == ppes.__name__]
     figure = f'ppes_regular_min_site_{name_of(adhered_copy)}'
     assert lines == [
-        f'{SYSTEM}: ppes: regular PPES at min_site, 15 shifts of the slab on top from -0.75 to 3.0 '
+        f'{SYSTEM}: ppes: regular PPES at min_site, 16 shifts of the slab on top from -0.75 to 3.0 '
         'angstrom (slab_from_scratch)',
         f'{SYSTEM}: total energy per area: lowest {low[1]:.6f} J/m^2 at the shift {low[0]}, '
         f'highest {high[1]:.6f} J/m^2 at the shift {high[0]}',
@@ -1486,7 +1486,7 @@ def test_failure_after_the_writes_saves_nothing(adhered_copy, monkeypatch):
     with pytest.raises(RuntimeError, match='arrange_data failed'):
         ppes.PpesStep().analyse(adhered_copy, SYSTEM, calc_ids)
     # The results of the shifts were in the document being written; none reached the disk.
-    assert seen and len(seen[0]) == 15
+    assert seen and len(seen[0]) == 16
     assert system_bytes(adhered_copy) == before
 
 
@@ -1688,7 +1688,7 @@ def test_the_step_from_the_command_line(tmp_path, capsys):
     assert cli(run_dir, 'analyse', 'adhesion') == 0
     capsys.readouterr()
     assert cli(run_dir, 'prepare', 'ppes') == 0
-    assert '15 calculations prepared' in capsys.readouterr().out
+    assert '16 calculations prepared' in capsys.readouterr().out
     for shift in PPES_SHIFTS:
         complete(run_dir, f'ppes/min_site_{shift}', status=status_of('pes_scf'))
     finish_ppes(run_dir, prepare=False)

@@ -37,6 +37,7 @@ import golden_cases
 from triboworkflow.core import structures as st
 from triboworkflow.core.settings import settings_from_dict
 from triboworkflow.core.settings.schema import ConstraintsParams, Override
+from triboworkflow.core.structures import slab as slab_module
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -667,15 +668,71 @@ def test_slab_constructor_already_reorients():
     np.testing.assert_allclose(slab.lattice.matrix, HEX, atol=1e-9)
 
 
-@pytest.mark.parametrize('name, message', [
-    ('tilted', 'c is not perpendicular to a'), ('lefthanded', 'left-handed cell')])
-def test_workflow_slab_unverified_cells(tmp_path, name, message):
-    """The custom-slab path mirrors or tilts these cells (golden
-    custom_slab_tilted and custom_slab_lefthanded); workflow_slab refuses them."""
-    with pytest.raises(st.StructureError, match=message):
-        st.workflow_slab(st.read_structure(poscar(tmp_path, name)), [1, 1, 1])
-    golden = golden_cases.read_golden(f'custom_slab_{name}')['slab']['lattice']['matrix']
-    assert not np.allclose(golden, golden_cases.CUSTOM_SLABS[name]['lattice'], atol=1e-6)
+def test_workflow_slab_refuses_a_tilted_cell(tmp_path):
+    """The custom-slab path tilts this cell (golden custom_slab_tilted); workflow_slab refuses it."""
+    with pytest.raises(st.StructureError, match='c is not perpendicular to a'):
+        st.workflow_slab(st.read_structure(poscar(tmp_path, 'tilted')), [1, 1, 1])
+    golden = golden_cases.read_golden('custom_slab_tilted')['slab']['lattice']['matrix']
+    assert not np.allclose(golden, golden_cases.CUSTOM_SLABS['tilted']['lattice'], atol=1e-6)
+
+
+def test_workflow_slab_exchanges_a_and_b_of_a_left_handed_cell(tmp_path):
+    """The custom-slab path mirrors this cell (golden custom_slab_lefthanded); workflow_slab
+    exchanges its vectors a and b instead, and the atoms stay where they are."""
+    original = st.read_structure(poscar(tmp_path, 'lefthanded'))
+    assert np.linalg.det(original.lattice.matrix) < 0
+    ws = st.workflow_slab(original, [1, 1, 1])
+    assert ws.swapped and ws.path == 'custom_slab' and ws.rotated
+    assert np.linalg.det(ws.slab.lattice.matrix) > 0
+    np.testing.assert_allclose(ws.slab.cart_coords, original.cart_coords @ ws.rotation, atol=1e-9)
+    np.testing.assert_allclose(np.linalg.det(ws.rotation), 1.0, atol=1e-9)
+    # a and b of the slab are b and a of the file (the lengths and the angle are those of the lattice).
+    assert ws.slab.lattice.a == pytest.approx(original.lattice.b)
+    assert ws.slab.lattice.b == pytest.approx(original.lattice.a)
+    provenance = ws.provenance()
+    assert provenance['swapped'] is True and provenance['swap'] == [[0, 1, 0], [1, 0, 0], [0, 0, 1]]
+    assert provenance['original_matrix'] == original.lattice.matrix.tolist()
+    json.dumps(provenance)
+    golden = golden_cases.read_golden('custom_slab_lefthanded')['slab']['lattice']['matrix']
+    assert not np.allclose(golden, golden_cases.CUSTOM_SLABS['lefthanded']['lattice'], atol=1e-6)
+
+
+def test_left_handed_cell_gives_the_slab_of_its_right_handed_equivalent(tmp_path):
+    """The same crystal written with a and b exchanged by hand gives the same slab."""
+    data = golden_cases.CUSTOM_SLABS['lefthanded']
+    by_hand = poscar(tmp_path, 'lefthanded', file='POSCAR2', lattice=data['lattice'][[1, 0, 2]],
+                     frac=[[f[1], f[0], f[2]] for f in data['frac']])
+    left = st.workflow_slab(st.read_structure(poscar(tmp_path, 'lefthanded')), [1, 1, 1])
+    right = st.workflow_slab(st.read_structure(by_hand), [1, 1, 1])
+    assert left.swapped and not right.swapped
+    assert json.dumps(left.slab.as_dict(), default=str) == json.dumps(right.slab.as_dict(),
+                                                                       default=str)
+    assert right.provenance()['swapped'] is False and right.provenance()['swap'] == np.eye(3, dtype=int).tolist()
+
+
+def test_left_handed_json_slab_is_refused(tmp_path):
+    """A pymatgen slab is used as stored: its left-handed cell would be mirrored, not exchanged."""
+    dct = copy.deepcopy(golden_cases.slab_dicts()['pt111'])
+    dct['lattice']['matrix'] = np.array(dct['lattice']['matrix'])[[1, 0, 2]].tolist()
+    path = write(tmp_path, 'left.json', json.dumps(dct))
+    with pytest.raises(st.StructureError, match='left.json: left-handed cell'):
+        st.read_workflow_slab(path, [1, 1, 1])
+
+
+def test_exchange_of_a_and_b_keeps_the_data_of_the_atoms():
+    s = fe_structure()
+    s.properties['source'] = 'x'
+    swapped = slab_module.exchange_ab(s)
+    np.testing.assert_allclose(swapped.cart_coords, s.cart_coords, atol=1e-12)
+    np.testing.assert_allclose(swapped.lattice.matrix[[1, 0, 2]], s.lattice.matrix)
+    assert swapped.labels == s.labels and swapped.species == s.species
+    assert swapped.site_properties == s.site_properties and swapped.properties == s.properties
+    assert slab_module.exchange_ab(swapped).lattice == s.lattice
+
+
+def test_right_handed_cell_is_not_exchanged(tmp_path):
+    ws = st.workflow_slab(st.read_structure(poscar(tmp_path)), [1, 1, 1])
+    assert not ws.swapped and ws.provenance()['swap'] == np.eye(3, dtype=int).tolist()
 
 
 def test_workflow_slab_rejects_custom_labels(tmp_path):

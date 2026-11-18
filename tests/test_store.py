@@ -323,7 +323,7 @@ def test_record_round_trip(system_dir):
     assert list(data) == ['schema_version', 'calc_id', 'system', 'step', 'label', 'calc_type',
                           'density', 'engine', 'energy_model', 'fingerprint', 'status',
                           'attempts', 'results', 'observed', 'files']
-    assert data['calc_id'] == 'pes_scf/aa' and data['schema_version'] == 5
+    assert data['calc_id'] == 'pes_scf/aa' and data['schema_version'] == 6
     assert data['density'] is False
     assert data['observed'] == {'ecutwfc': 40.0}
     assert list(data['attempts'][0]) == ['n', 'job_id', 'host', 'started', 'ended',
@@ -525,7 +525,8 @@ INVALID_RECORDS = [
     ('schema version 2', lambda d: d.update(schema_version=2)),
     ('schema version 3', lambda d: d.update(schema_version=3)),
     ('schema version 4', lambda d: d.update(schema_version=4)),
-    ('schema version 6', lambda d: d.update(schema_version=6)),
+    ('schema version 5', lambda d: d.update(schema_version=5)),
+    ('schema version 7', lambda d: d.update(schema_version=7)),
     ('density null', lambda d: d.update(density=None)),
     ('schema version bool', lambda d: d.update(schema_version=True)),
     ('calc_id', lambda d: d.update(calc_id='pes_scf/ab')),

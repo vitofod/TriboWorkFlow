@@ -46,8 +46,6 @@ from triboworkflow.execution.replacement import retired_launches, unfinished
 from triboworkflow.workflows.interface import registry
 
 DATA = Path(__file__).resolve().parent / 'data' / 'qe'
-UPF = 'C.pbe-n-kjpaw_psl.1.0.0.UPF'
-MD5 = '0123456789abcdef0123456789abcdef'
 EXECUTION = ExecutionParams(scheduler='slurm', jobscript='job.sh', run_command='pw.x', groups=2,
                             polling_interval=300, max_seconds_margin=60,
                             **{step: StepJobsParams(walltime='01:00:00') for step in WALLTIME_STEPS})
@@ -60,16 +58,14 @@ GROUP = f'{SYSTEM}.pes.1'
 
 
 def example_settings(tmp_path):
-    """Settings of the example with the expected version and checksum, as in a workflow.
+    """Settings of the example with the expected version, as in a workflow.
 
     The keys that the workflows set for each calculation are left out.
     """
     settings = load_settings(DATA / 'example_relax.toml')
     for key in ('calculation', 'title', 'prefix', 'restart_mode', 'outdir'):
         del settings.namelists.CONTROL[key]
-    manifest = tmp_path / 'pseudo.md5'
-    manifest.write_text(f'{MD5}  {UPF}\n')
-    settings.qe = QEParams('7.2', str(manifest))
+    settings.qe = QEParams('7.2')
     return settings
 
 

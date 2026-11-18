@@ -11,7 +11,10 @@ triboworkflow [-v] [-T] <command> [-r RUN] ...
 `-v` prints the version, `-T` the traceback of an error. Exit codes: 0 done,
 1 error (`Error: <message>` on the standard error), 2 error of use. Without
 a command the help is printed and the code is 2. `triboworkflow <command>
---help` gives the help of a command, with examples.
+--help` gives the help of a command, with examples. The options of a command
+(`-r`, `--calcs`, …) are shown by its own `--help`, not by the general one,
+and are never abbreviated: `status --calc` is an error, `status --calcs` is
+the option.
 
 The steps themselves (`match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`,
 `shear`, `adhesion`, `ppes`, `charge`) come from a registry that each step
@@ -78,7 +81,7 @@ CuAl/                       the run
 | `retry <step>` | a step failed for an error of its own (while it was prepared or analysed, because the settings changed after its preparation, or because the job of its analysis ended without completing it) starts again; for a job of an analysis, the next `submit` or pass submits a new one |
 | `clear-refusal <group>` | a group whose submission the scheduler refused is submitted again by the next `submit` or pass, once its copy of the jobscript (`jobs/<group>/jobscript.sh`) or the walltime of its step in `[execution.<step>]` is fixed; a group none of whose jobs was submitted takes that walltime as it is now |
 | `resolve-submission <group> --job-id ID` or `--no-job` | a submission whose answer was lost (e.g. `sbatch` timed out) created that job, or none |
-| `release-claim <calc_id> --worker-over [--group G]` | releases an empty claim once the user has checked that its worker no longer runs |
+| `release-claim <calc_id> --worker-over [--from-group G]` | releases an empty claim once the user has checked that its worker no longer runs |
 
 **On the HPC machine only** (the submission command of the scheduler must be
 found; elsewhere the command stops before writing anything):
@@ -87,7 +90,7 @@ found; elsewhere the command stops before writing anything):
 |---|---|
 | `submit <step> [--groups M]` | phase 2: asks the scheduler for the jobs, reconciles the calculations of the step, writes a group with what has to run and submits it, then exits. **Running it again is how a step is followed by hand, and it may start relaunches** (a crash, `max_seconds`), never the same attempt twice. For `plotpes`, `plotpes_scf` and `shear` it submits the job of the analysis (one job, no `--groups`) and, run again, follows it |
 | `start [--groups M] [--dry-run]` | starts the orchestrator of the steps of `[interface].steps` in the background, on the login node, and returns |
-| `relaunch <calc_id> [--groups M] [--group G] [--level L] [--from-scratch]` | relaunches a calculation by hand, at the level of its last attempt or at level `L` (1–3), once its worker is surely over; it continues the last attempt from `OUT/` when the workflow would, or after a stop by request of the user, unless `--from-scratch` |
+| `relaunch --step STEP [--calc LABEL ...] [--groups M] [--from-group G] [--level L] [--from-scratch]` | relaunches by hand, in one new group, the calculations of a step that can be (all of them), or those given with `--calc` (all must be relaunchable), at the level of their last attempt or at level `L` (1–3), once their workers are surely over; a completed calculation is not run again; it continues the last attempt from `OUT/` when the workflow would, or after a stop by request of the user, unless `--from-scratch` |
 
 **Where the orchestrator runs:**
 
@@ -448,6 +451,18 @@ login node, holds `run.lock` while it lives and, every `polling_interval`:
    `steps` deciding only the order of their groups in the pass;
 6. it ends when no step waits or runs.
 
+A job that ends is registered at the next check, so up to `polling_interval`
+after it ended (a step is `completed` a pass later than its last job). A run
+that is already complete ends in the first pass, in seconds. The first pass of
+a run takes minutes before any job is in the queue: the matching and the
+preparation of the calculations come first.
+
+If the orchestrator disappears (`status` says `pid … no longer runs`, with no
+`stop` in `orchestrator.log`), nothing is lost: the state is in the files, the
+jobs go on and the next `start` replaces the pid file and the lock it left,
+recovers the jobs and goes on without duplicates. Look at the end of
+`orchestrator.log` for the cause.
+
 Meanwhile:
 
 ```bash
@@ -459,34 +474,46 @@ triboworkflow start             # goes on: recovers jobs and attempts, then deci
 ```
 
 When a calculation needs the user (an error of pw.x, `CANCELLED`,
-`OUT_OF_MEMORY`, too many unchanged relaunches, a remedy past level 3):
+`OUT_OF_MEMORY`, too many unchanged relaunches, a remedy past level 3; also a
+job cancelled before it started, whose group ended without any of its
+attempts taken: the calculation is `manual`, with the reason "no progress"):
 
 ```bash
 triboworkflow stop --wait 60
 # look at the output in systems/Cu111_Al111/<step>/<label>/ (or attempts/<n>/)
-triboworkflow relaunch adhesion/interface_max
+triboworkflow relaunch --step adhesion --calc interface_max
 triboworkflow start
 ```
 
-`relaunch` checks that the worker of the last attempt is surely over (no
-claim, or the run of the job of its claim over); otherwise it refuses with
-the state found. It writes a new group with a manual attempt at the same
-level, or at the one of `--level` with the values of that level, and
+`--step` is the step (`pes`, `adhesion`, `ppes`, …) and `--calc` the label of
+one or more of its calculations, as `status --calcs` lists them (the id of a
+calculation is `<step>/<label>`: `ppes/min_site_1.5` is `--step ppes --calc
+min_site_1.5`). With `--step` alone every calculation of the step that can be
+relaunched is, in one new group, and the others are listed with the reason
+(completed, or its worker may still run). With `--calc` those calculations
+only: all of them must be relaunchable, or nothing is written.
+
+`relaunch` checks that the worker of the last attempt of each calculation is
+surely over (no claim, or the run of the job of its claim over); otherwise it
+refuses with the state found. It writes a new group with a manual attempt at
+the same level, or at the one of `--level` with the values of that level, and
 submits it; the step goes back to running and the count of the unchanged
 relaunches starts again. The attempt continues the last one from `OUT/`
 under the same rule as the relaunches of the workflow, also after a stop by
 request of the user (an exit file), which the workflow never relaunches;
-`--from-scratch` starts it from scratch, `OUT/` removed. It prints the
-attempt, its level and
-how it starts:
+`--from-scratch` starts it from scratch, `OUT/` removed. A completed
+calculation is not run again. It prints the attempt, its level and how it
+starts:
 
 ```bash
-triboworkflow relaunch adhesion/interface_max --level 2 --from-scratch
+triboworkflow relaunch --step adhesion --calc interface_max --level 2 --from-scratch
 # Cu111_Al111/adhesion/interface_max: relaunched by hand, attempt 4 at level 2, from scratch
+# group Cu111_Al111.adhesion.6: 1 jobs submitted
 ```
 
-When the launch of the last attempt is not recorded and the groups that list
-it give different launches, it lists them: choose one with `--group`.
+When the launch of the last attempt of a calculation is not recorded and the
+groups that list it give different launches, it lists them: choose one with
+`--from-group` (for a single calculation, given with `--calc`).
 
 ### Rare cases
 
@@ -502,9 +529,9 @@ it give different launches, it lists them: choose one with `--group`.
   with code 1 when a submission is refused or its outcome is not known;
 - an empty claim (a worker that stopped right after taking a calculation):
   once its job no longer runs, `release-claim <calc_id> --worker-over`, then
-  `relaunch <calc_id>`. The attempt takes its launch (kind, level, values)
-  from the group that listed it; with several groups and different launches
-  the command lists them and `--group` chooses; with none (only if `jobs/`
+  `relaunch --step <step> --calc <label>`. The attempt takes its launch (kind,
+  level, values) from the group that listed it; with several groups and
+  different launches the command lists them and `--from-group` chooses; with none (only if `jobs/`
   was removed) it refuses: the level is never assigned by default. A
   `release-claim` interrupted is reported by `status` as an empty claim
   released in part: run the same `release-claim` again;

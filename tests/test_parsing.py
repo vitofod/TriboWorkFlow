@@ -18,8 +18,8 @@ from triboworkflow.execution.parsing import parse_calculation, with_parsed
 
 SYSTEM = 'Cu111_Al111'
 FORCES = ((0.001, -0.002, 0.003), (-0.001, 0.002, -0.003))
-MODEL = {'version': '7.3', 'species': [{'label': label, 'pseudopotential': upf, 'md5': md5}
-                                       for label, _, upf, md5 in pwo.SPECIES]}
+MODEL = {'version': '7.3', 'species': [{'label': label, 'pseudopotential': upf}
+                                       for label, _, upf, _ in pwo.SPECIES]}
 
 
 def calculation(tmp_path, output, calculation='relax', structure=True, s=None):

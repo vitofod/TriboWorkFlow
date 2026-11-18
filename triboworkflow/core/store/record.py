@@ -24,13 +24,13 @@ the same parallelization (``restart_problem``). Which results each kind of
 calculation must have is checked by the parser of its engine.
 
 The energy model is written by the engine. A null value in it marks a part
-that is not known, e.g. the expected checksum of a pseudopotential not
-given: the inputs can still be prepared and run, but such a record is never
+that is not known, e.g. the version of the engine not given: the inputs
+can still be prepared and run, but such a record is never
 reused and its energies are never combined (``check_energy_model``).
 
 What the output tells of the energy model is written by the parser in
 ``observed``, with the keys and the form of the energy model (e.g. the
-version of the engine, the checksum of each pseudopotential). Each value of
+version of the engine, the UPF file of each pseudopotential). Each value of
 ``observed`` whose key is also in the energy model is compared with it
 (``identity_differences``): an output that differs is kept, with its results
 and its states, but it does not stand for its energy model, so it is never
@@ -69,7 +69,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from .atomic import StoreError, check_json_value, read_json, write_json
 from .fingerprint import canonical_json, check_fingerprint, content_digest
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 RECORD_FILE = 'record.json'
 
 PROCESS_STATES = ('pending', 'running', 'ended', 'crashed', 'killed')
@@ -842,7 +842,7 @@ def unknown_parts(energy_model):
     Returns
     -------
     list of str
-        Path of each null value, e.g. ``['species[0].md5', 'version']``;
+        Path of each null value, e.g. ``['version']``;
         empty when the whole model is known.
     """
     found = []
@@ -875,9 +875,9 @@ def identity_differences(record):
     Returns
     -------
     list of str
-        One sentence per difference, e.g. ``"species[0].md5: expected 'ab...',
-        observed 'cd...'"``; empty when nothing differs or nothing was
-        observed.
+        One sentence per difference, e.g. ``"species[0].pseudopotential:
+        expected 'Fe.upf', observed 'Fe2.upf'"``; empty when nothing differs
+        or nothing was observed.
     """
     found = []
 

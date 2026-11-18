@@ -13,8 +13,8 @@ without relaxation (``scf``, ``calc_type`` ``slab_from_scratch``) for each:
 settings (``min_site_-0.75``). The kind of interface, ``regular`` or ``short``,
 is the one of ``[interface.adhesion]`` (D57); a run covers one site and one
 kind, and the results of the other site or kind stay in the document. The
-default shifts (``PPES_SHIFTS``) are 15 values from -0.75 to 3 angstrom with a
-step of 0.25 that jumps from 2.25 to 2.75: there is no 2.5 (A90); the fit
+default shifts (``PPES_SHIFTS``) are 16 values from -0.75 to 3 angstrom with a
+step of 0.25; the fit
 (``fit = "uber"``, off by default) uses the shifts that are zero or positive.
 
 The atoms to move are those of the slab on top, each told by the slab it belongs

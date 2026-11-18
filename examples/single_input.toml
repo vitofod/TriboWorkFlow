@@ -14,8 +14,6 @@
 #   triboworkflow gen single_input.toml
 # Field reference: docs/configuration.md; the command: docs/cli.md.
 
-schema_version = 1
-
 [structure]
 file = ""                          # TO FILL IN: CIF, XYZ, extxyz, PWI, PWO or POSCAR file.
 format = "auto"                    # auto | cif | xyz | extxyz | pwi | pwo | poscar | json
@@ -87,13 +85,11 @@ grid = [8, 8, 1]                   # nk1, nk2, nk3
 offset = [0, 0, 0]                 # sk1, sk2, sk3: each 0 or 1.
 gamma_for_unshifted_1x1x1 = true   # A grid 1 1 1 with offset 0 0 0 is written as K_POINTS gamma.
 
-# The pw.x expected on the HPC, optional here. Without version and upf_md5
-# the input is generated, but its result is never reused and its energy
-# never combined with others automatically.
+# The pw.x expected on the HPC, optional here. Without the version the
+# input is generated, but its result is never reused and its energy never
+# combined with others automatically.
 [qe]
 version = "7.2"                    # 7.1 | 7.2 | 7.3, compared with the output.
-# upf_md5 = "pseudo.md5"           # Expected MD5 of the UPF files, relative to this file;
-#                                  # made with: md5sum *.UPF > pseudo.md5 (in pseudo_dir).
 
 [generation]
 file_prefix = "input.pwi"          # Name of the input; its structure goes in input.extxyz.

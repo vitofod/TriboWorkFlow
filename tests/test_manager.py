@@ -177,6 +177,53 @@ def test_submitted_jobs_are_not_submitted_again(run_dir, manager, slurm):
     assert list(registry(run_dir)['jobs']) == ['1000', '1001']
 
 
+def test_jobs_are_submitted_with_the_options_of_their_step(run_dir, slurm, clock):
+    jobs = JobManager(run_dir, slurm, WAIT, now=clock,
+                      submit_options=lambda step: [f'--comment={step}', '--mem=0'])
+    jobs.add_group('batch1', 2)
+    jobs.cycle()
+    commands = [cmd for cmd in slurm.calls if cmd[0] == 'sbatch']
+    assert len(commands) == 2
+    for command in commands:
+        # After the walltime and the name, before the jobscript.
+        assert command[1:3] == ['--time=01:00:00', '--job-name=pes_scf_Cu111_Al111']
+        assert command[3:5] == ['--comment=pes_scf', '--mem=0']
+        assert command[5].endswith('jobscript.sh')
+
+
+def test_most_jobs_in_the_scheduler_at_the_same_time(run_dir, slurm, clock):
+    jobs = JobManager(run_dir, slurm, WAIT, now=clock, max_jobs=2)
+    jobs.add_group('batch1', 3)
+    jobs.add_group('batch2', 3)
+    jobs.cycle()
+    # Two of the six jobs, the first group first; the others wait.
+    assert slurm.count('sbatch') == 2 and jobs.jobs_in_queue() == 2
+    assert jobs.group_jobs('batch1') == ['1000', '1001'] and jobs.group_jobs('batch2') == []
+    jobs.cycle()
+    assert slurm.count('sbatch') == 2                       # nothing ends: nothing more
+    slurm.states['1000'] = 'COMPLETED'
+    jobs.cycle()
+    # One place free: the third job of the first group.
+    assert slurm.count('sbatch') == 3 and jobs.group_jobs('batch1') == ['1000', '1001', '1002']
+    for job_id in ('1001', '1002'):
+        slurm.states[job_id] = 'COMPLETED'
+    jobs.cycle()
+    jobs.cycle()
+    assert jobs.jobs_in_queue() == 2 and len(jobs.group_jobs('batch2')) == 2
+    for job_id in ('1003', '1004'):
+        slurm.states[job_id] = 'COMPLETED'
+    jobs.cycle()
+    jobs.cycle()
+    assert jobs.group_jobs('batch2') == ['1003', '1004', '1005']
+    assert slurm.count('sbatch') == 6
+
+
+def test_most_jobs_is_a_positive_integer(run_dir, slurm):
+    for value in (0, -1, 2.0, True):
+        with pytest.raises(JobManagerError, match='max_jobs'):
+            JobManager(run_dir, slurm, WAIT, max_jobs=value)
+
+
 def test_registry_content(run_dir, manager, slurm, clock):
     jobs = manager()
     jobs.add_group('batch1', 1)

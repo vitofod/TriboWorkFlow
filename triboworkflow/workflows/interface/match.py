@@ -668,6 +668,30 @@ def _load_run(run_dir):
     return load_run(run_dir)
 
 
+def slab_changes(workflow_slab):
+    """What the workflow changed in a slab read from a file, one sentence each.
+
+    Parameters
+    ----------
+    workflow_slab : triboworkflow.core.structures.WorkflowSlab
+
+    Returns
+    -------
+    list of str
+        The exchange of the vectors a and b of a left-handed cell, the
+        rotation to the frame of the workflow and the data dropped; empty
+        when nothing changed.
+    """
+    changed = []
+    if workflow_slab.swapped:
+        changed.append('vectors a and b exchanged (left-handed cell)')
+    if workflow_slab.rotated:
+        changed.append('rotated to the frame of the workflow')
+    if workflow_slab.dropped:
+        changed.append(f'{", ".join(workflow_slab.dropped)} dropped')
+    return changed
+
+
 class MatchStep(Step):
     """Step ``match``: interface and high-symmetry points, no calculation."""
 
@@ -687,11 +711,7 @@ class MatchStep(Step):
             raise ValueError(f'system {system!r}: the slabs of the settings make the interface '
                              f'{inputs.ids["mid"]!r}')
         for i, workflow_slab in enumerate(inputs.slabs):
-            changed = []
-            if workflow_slab.rotated:
-                changed.append('rotated to the frame of the workflow')
-            if workflow_slab.dropped:
-                changed.append(f'{", ".join(workflow_slab.dropped)} dropped')
+            changed = slab_changes(workflow_slab)
             if changed:
                 logger.warning('%s: slab %d (%s): %s', system, i + 1, inputs.files[i],
                                '; '.join(changed))

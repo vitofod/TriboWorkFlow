@@ -14,6 +14,7 @@ import json
 import logging
 import shutil
 import tomllib
+import types
 
 import numpy as np
 import pytest
@@ -190,6 +191,22 @@ def test_done_needs_all_five_entries(run_copy):
         writer.document.set(['highsym', 'extra'], 1)  # drops the provenance of highsym
         writer.save()
     assert not get_step('match').done(run_copy, SYSTEM)
+
+
+# --- what the workflow changed in a slab -------------------------------------------------
+
+@pytest.mark.parametrize('swapped, rotated, dropped, expected', [
+    (False, False, [], []),
+    (True, False, [], ['vectors a and b exchanged (left-handed cell)']),
+    (False, True, ['properties.qe_species'],
+     ['rotated to the frame of the workflow', 'properties.qe_species dropped']),
+    (True, True, ['properties.qe_species'],
+     ['vectors a and b exchanged (left-handed cell)', 'rotated to the frame of the workflow',
+      'properties.qe_species dropped']),
+])
+def test_changes_of_a_slab_are_told(swapped, rotated, dropped, expected):
+    slab = types.SimpleNamespace(swapped=swapped, rotated=rotated, dropped=dropped)
+    assert step.slab_changes(slab) == expected
 
 
 # --- writing again -------------------------------------------------------------------

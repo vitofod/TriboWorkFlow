@@ -392,6 +392,8 @@ def check_slabs(rep):
         return
     for i, (slab, name) in enumerate(zip(inputs.slabs, inputs.files), 1):
         changes = []
+        if slab.swapped:
+            changes.append('vectors a and b exchanged (left-handed cell)')
         if slab.rotated:
             deviation = float(np.abs(np.asarray(slab.rotation) - np.eye(3)).max())
             changes.append(f'rotated to the frame of the workflow (largest element of R - I '
@@ -402,7 +404,8 @@ def check_slabs(rep):
             changes.append(f'added: {", ".join(slab.added)}')
         text = f'{name} read as {slab.path}; ' + ('; '.join(changes) or 'no rotation, nothing '
                                                   'dropped or added')
-        rep.findings.add('note' if slab.rotated or slab.dropped else 'ok', f'slab {i}', text)
+        rep.findings.add('note' if slab.swapped or slab.rotated or slab.dropped else 'ok',
+                         f'slab {i}', text)
 
 
 # --- the PES -------------------------------------------------------------------------------
@@ -993,6 +996,44 @@ def check_shear_output(rep, strengths, mep):
                      f'shearstr, profiles of {mep.npts} points ({path.stat().st_size} bytes)')
 
 
+def walltime_differences(rep):
+    """Jobs whose ``Timelimit`` in ``sacct`` is not the walltime of their group.
+
+    The walltime of a group (``manifest.json`` or ``analysis.json``) is what the
+    worker takes ``max_seconds`` from and what the submission gave the scheduler
+    as the time limit: the two must be equal.
+
+    Returns
+    -------
+    differences : list of str
+        One sentence for each job whose limit differs or is not a time.
+    compared : int
+        Number of jobs compared.
+    unreadable : list of str
+        Groups whose file of walltime cannot be read (a run of a version before
+        the walltime of each step), not compared.
+    """
+    from triboworkflow.execution.jobs import SUBMITTED_FILE, JobError, group_walltime
+
+    differences, unreadable, compared = [], [], 0
+    for path in sorted((rep.run_dir / 'jobs').glob(f'*/{SUBMITTED_FILE}')):
+        try:
+            walltime = group_walltime(path.parent)
+        except (JobError, OSError, ValueError, KeyError):
+            unreadable.append(path.parent.name)
+            continue
+        for job_id in json.loads(path.read_text()).get('job_ids', []):
+            job = rep.sacct.get(job_id)
+            if job is None:
+                continue
+            compared += 1
+            limit = duration(job['Timelimit'])
+            if limit != walltime:
+                differences.append(f'job {job_id} of {path.parent.name}: Timelimit '
+                                   f'{job["Timelimit"]}, walltime of the group {walltime} s')
+    return differences, compared, unreadable
+
+
 def check_accounting(rep):
     from triboworkflow.execution.jobs import SUBMITTED_FILE
 
@@ -1010,11 +1051,17 @@ def check_accounting(rep):
     bad = {s: j for s, j in states.items() if s.startswith(('OUT_OF_ME', 'TIMEOUT'))}
     longest = max((duration(rep.sacct[j]['Elapsed']) or 0 for j in known), default=0)
     peak = max((rep.sacct[j]['MaxRSS'] for j in known), default=0)
+    differences, compared, unreadable = walltime_differences(rep)
     text = (f'{len(known)} of {len(ids)} jobs in the file: '
             + ', '.join(f'{len(j)} {s}' for s, j in states.items())
-            + f'; longest {longest} s, largest MaxRSS {_gib(peak)}')
-    rep.findings.add('PROBLEM' if bad else 'ok' if len(known) == len(ids) else 'note',
-                     'accounting', text + (f'; {bad}' if bad else ''))
+            + f'; longest {longest} s, largest MaxRSS {_gib(peak)}; Timelimit equal to the '
+            f'walltime of the group for {compared - len(differences)} of {compared} jobs'
+            + (f' ({len(unreadable)} groups of a version without it not compared)'
+               if unreadable else ''))
+    problems = [str(bad)] if bad else []
+    problems += differences[:5]
+    rep.findings.add('PROBLEM' if problems else 'ok' if len(known) == len(ids) else 'note',
+                     'accounting', text + ''.join(f'; {problem}' for problem in problems))
 
 
 # --- report --------------------------------------------------------------------------------

@@ -647,6 +647,18 @@ def test_analysis_jobscript_relative_to_the_settings_file():
     assert analysis_jobscript_path(settings) == EXAMPLES / 'analysis.sh'
     settings.execution.analysis.jobscript = '/abs/analysis.sh'
     assert analysis_jobscript_path(settings) == Path('/abs/analysis.sh')
+    # [execution.analysis] with options of the submission only: the jobscript of [execution].
+    settings = example_settings(analysis={'submit_options': ['--gres=gpu:1']})
+    assert analysis_jobscript_path(settings) == jobscript_path(settings) == Path('jobscript.sh')
+
+
+def test_the_options_of_the_user_follow_the_walltime_and_the_name(tmp_path, analysis_jobscript):
+    path = write_analysis(tmp_path / 'run', analysis(), analysis_jobscript)
+    scheduler = JobScheduler('slurm', dry_run=True)
+    assert submit_jobs(path, scheduler, 1, options=['--gres=gpu:1', '--mem=0']) == [None]
+    assert scheduler.commands == [(['sbatch', '--time=00:30:00',
+                                    '--job-name=plotpes_Cu111_Al111', '--gres=gpu:1', '--mem=0',
+                                    str(path / JOBSCRIPT_FILE)], None, path)]
 
 
 @pytest.mark.parametrize('count', [1, 4])

@@ -641,7 +641,9 @@ def observed_of(values, energy_model=None):
     dict
         ``version`` (``observed_version``) and ``species``: ``label``,
         ``pseudopotential`` (name of the UPF file), ``md5`` and ``path`` (as
-        printed) of each species, in the order of ``ATOMIC_SPECIES``.
+        printed) of each species, in the order of ``ATOMIC_SPECIES``. The
+        energy model has no checksum: ``md5`` and ``path`` are kept as
+        provenance and never compared.
     """
     expected = (energy_model or {}).get('version')
     return {'version': observed_version(values.version, expected),

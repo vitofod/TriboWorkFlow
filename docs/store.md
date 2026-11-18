@@ -38,7 +38,7 @@ MLIP) never run locally.
 
 | Key | Content |
 |---|---|
-| `schema_version` | 5 |
+| `schema_version` | 6 |
 | `calc_id` | `<step>/<label>`: the directory of the calculation within the system |
 | `system`, `step`, `label` | names of the three directories; no `/`, `\`, NUL, `.` or `..` |
 | `calc_type` | kind of calculation, which fixes its constraints |
@@ -95,22 +95,23 @@ of calculation must have (an energy, finite forces, ...) is checked by the
 parser of its engine.
 
 A null value in `energy_model` marks a part of the model that is not known,
-e.g. the expected checksum of a pseudopotential not given in the settings
-(`unknown_parts` lists their paths). Such a calculation can be prepared and
+e.g. the version of pw.x not given in the settings (`unknown_parts` lists
+their paths). Such a calculation can be prepared and
 run, but its results are never reused and its energy is never combined with
 others.
 
 `identity_differences(record)` compares each value of `observed` with the
 value at the same path of `energy_model` (keys the energy model does not
 have are not compared; two lists of different length differ as a whole),
-e.g. `species[0].md5: expected '...', observed '...'`. An output that
+e.g. `species[0].pseudopotential: expected '...', observed '...'`. An output that
 differs keeps its results and `parsing` `ok`, but does not stand for its
 energy model: it is never reused, never combined, and the `tasks` view
 refuses it. Absence (a null in `energy_model`) and difference are told
 apart. For pw.x (`engines/qe/results.py`) `observed` holds the version, with
 as many components as the version expected (`7.3` stands for every `7.3.x`,
 `7.3.1` for that one only), and for each species its label, the name of its
-UPF file, its checksum and the path printed.
+UPF file, its checksum and the path printed; the checksum and the path are
+provenance, not in the energy model, so they are never compared.
 
 `record.results_digest` identifies the results themselves: a calculation run
 again with the same input, or an output read again, that gives different

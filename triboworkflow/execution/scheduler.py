@@ -484,7 +484,8 @@ class JobScheduler:
             return job_id.split(".")[0]
         return job_id
 
-    def submit_job(self, script_path, script_args=None, cwd=None, walltime=None, job_name=None):
+    def submit_job(self, script_path, script_args=None, cwd=None, walltime=None, job_name=None,
+                   extra_options=None):
         """Submit a jobscript and return the job id.
 
         Parameters
@@ -506,6 +507,11 @@ class JobScheduler:
             Name of the job, given with the ``job_name_option`` of the table,
             which overrides a name in the jobscript; ignored by HTCondor.
             None: no option.
+        extra_options : list of str or None, optional
+            Options of the submission command given as they are, after those
+            of the walltime and of the name, in the syntax of the scheduler;
+            the command line of the scheduler wins over the lines of the
+            jobscript that set the same thing.
 
         Returns
         -------
@@ -537,7 +543,8 @@ class JobScheduler:
             if not all(isinstance(arg, str) for arg in script_args):
                 raise JobSchedulerError("All script_args must be strings")
 
-        options = self._walltime_options(walltime) + self._job_name_options(job_name)
+        options = (self._walltime_options(walltime) + self._job_name_options(job_name)
+                   + list(extra_options or []))
         if self.config.get("submit_method") == "stdin":
             cmd = self._build_command("submit", extra_args=options)
 

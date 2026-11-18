@@ -7,7 +7,6 @@ See ``schema.py`` for the tables and ``loader.py`` for the reading.
 """
 
 from .loader import load_settings, settings_from_dict, validate
-from .schema import SCHEMA_VERSION, Settings, SettingsError
+from .schema import Settings, SettingsError
 
-__all__ = ['SCHEMA_VERSION', 'Settings', 'SettingsError', 'load_settings',
-           'settings_from_dict', 'validate']
+__all__ = ['Settings', 'SettingsError', 'load_settings', 'settings_from_dict', 'validate']

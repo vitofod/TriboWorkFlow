@@ -11,7 +11,6 @@ manifests of the groups, as the jobs would. Then the report reads the run.
 POSIX only, since the worker launches pw.x with bash.
 """
 
-import hashlib
 import json
 import os
 import subprocess
@@ -46,14 +45,11 @@ SYSTEMS = {'Al': 'Al111_Al111', 'Si': 'Si111_Si111'}
 
 @pytest.fixture
 def machine(tmp_path):
-    """Machine file with the fake pw.x and pp.x, two UPF files and their manifest."""
+    """Machine file with the fake pw.x and pp.x and two UPF files."""
     pseudo = tmp_path / 'pseudo'
     pseudo.mkdir()
-    lines = []
     for name in ('Al.UPF', 'Si.UPF'):
         (pseudo / name).write_text(f'fake {name}\n')
-        lines.append(f'{hashlib.md5((pseudo / name).read_bytes()).hexdigest()}  {name}')
-    (pseudo / 'pseudo.md5').write_text('\n'.join(lines) + '\n')
     (tmp_path / 'job.sh').write_text(JOBSCRIPT)
     path = tmp_path / 'machine.toml'
     path.write_text(f'''scheduler = "slurm"
@@ -63,7 +59,6 @@ pp_command = "{sys.executable} {FAKE} pp"
 [qe]
 version = "7.2"
 pseudo_dir = "{pseudo}"
-upf_md5 = "{pseudo}/pseudo.md5"
 [species.Al]
 mass = 26.9815
 pseudopotential = "Al.UPF"

@@ -850,7 +850,7 @@ def change_model(model, change):
     if change == 'version':
         model['version'] = '7.3'
     elif change == 'pseudopotential':
-        model['species'][0]['md5'] = 'f' * 32
+        model['species'][0]['pseudopotential'] = 'Other.UPF'
     elif change == 'k-points':
         model['k_points']['kdens'] = 4.0
     elif change == 'spin':
@@ -892,12 +892,12 @@ def test_energies_of_another_engine_are_not_combined(surfaces_copy):
 
 
 def test_an_energy_model_not_known_is_not_combined(surfaces_copy):
-    # A record whose pseudopotentials were not checked has an energy model not fully known.
+    # A record without the version of pw.x has an energy model not fully known.
     calc_ids = finish_adhesion(surfaces_copy)
     sdir = system_dir(surfaces_copy, SYSTEM)
     record = store.read_record(sdir, calc_ids[0])
     model = copy.deepcopy(record.energy_model)
-    model['species'][0]['md5'] = None
+    model['version'] = None
     store.write_record(sdir, dataclasses.replace(record, energy_model=model))
     before = system_bytes(surfaces_copy)
     with pytest.raises(StoreError, match='energy model not known'):

@@ -88,7 +88,8 @@ from triboworkflow.core.store.atomic import read_json, write_json
 from triboworkflow.core.store.record import check_keys
 
 from .jobs import (MANIFEST_FILE, PENDING_KEY, SUBMITTED_FILE, WITHDRAWN_FILE, JobError,
-                   is_analysis, is_withdrawn, most_jobs, submit_jobs, surely_not_created)
+                   group_step, is_analysis, is_withdrawn, most_jobs, submit_jobs,
+                   surely_not_created)
 from .layout import JOBS_DIR, JOBS_REGISTRY_FILE, job_dir
 from .scheduler import JobSchedulerError
 
@@ -179,6 +180,14 @@ class JobManager:
     now : callable or None, optional
         Current time, as an aware ``datetime.datetime``; the local time by
         default.
+    submit_options : callable or None, optional
+        Function of the name of a step that gives the options of the command
+        that submits its jobs (``ExecutionParams.options_of``); no option by
+        default.
+    max_jobs : int or None, optional
+        Most jobs of the run in the scheduler at the same time, waiting or
+        running (``max_jobs`` of ``[execution]``): ``submit`` leaves the others
+        for a later call. None: no limit.
 
     Attributes
     ----------
@@ -202,12 +211,17 @@ class JobManager:
         is not valid.
     """
 
-    def __init__(self, run_dir, scheduler, report_wait, now=None):
+    def __init__(self, run_dir, scheduler, report_wait, now=None, submit_options=None,
+                 max_jobs=None):
         if type(report_wait) is not int or report_wait <= 0:
             raise JobManagerError(f'report_wait: {report_wait!r} is not an integer > 0')
+        if max_jobs is not None and (type(max_jobs) is not int or max_jobs <= 0):
+            raise JobManagerError(f'max_jobs: {max_jobs!r} is not an integer > 0')
         self.run_dir = Path(run_dir)
         self.scheduler = scheduler
         self.report_wait = report_wait
+        self.max_jobs = max_jobs
+        self._submit_options = submit_options or (lambda step: [])
         self.path = self.run_dir / JOBS_REGISTRY_FILE
         self._now = now or _local_now
         self.registry = self._load()
@@ -607,14 +621,23 @@ class JobManager:
             If the submission command of the scheduler is not found.
         """
         submitted = []
+        room = None if self.max_jobs is None else max(self.max_jobs - self.jobs_in_queue(), 0)
         for name, group in self.groups.items():
             missing = self.missing_jobs(name)
             if (name in skip or group['refused'] is not None or group['unknown'] or missing == 0
                     or is_withdrawn(job_dir(self.run_dir, name))):
                 continue
+            if room is not None:
+                if room == 0:
+                    logger.info('Group %s: %d jobs wait to be submitted, %d jobs of the run '
+                                'already in the scheduler (max_jobs)', name, missing,
+                                self.max_jobs)
+                    continue
+                missing = min(missing, room)
+            path = job_dir(self.run_dir, name)
             try:
-                job_ids = submit_jobs(job_dir(self.run_dir, name), self.scheduler, missing,
-                                      self._stamp)
+                job_ids = submit_jobs(path, self.scheduler, missing, self._stamp,
+                                      self._submit_options(group_step(path)[0]))
             except JobSchedulerError as error:
                 if surely_not_created(error):
                     group['refused'] = str(error)
@@ -630,8 +653,14 @@ class JobManager:
                 if job_id is not None:  # None in a dry run
                     self._add_job(job_id, name)
                     submitted.append(job_id)
+            if room is not None:
+                room -= len(job_ids)
             self._save()
         return submitted
+
+    def jobs_in_queue(self):
+        """Jobs of the run in the scheduler: those waiting or running, or not yet reported."""
+        return sum(1 for job in self.jobs.values() if job['active'] is not False)
 
     # --- status ----------------------------------------------------------------
 

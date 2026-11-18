@@ -140,7 +140,6 @@ KILLED_DIR = Path('qe_check') / 'killed'
 STRUCTURES_DIR = 'structures'
 CONFIG_FILE = 'config.toml'
 JOBSCRIPT_FILE = 'jobscript.sh'
-MD5_FILE = 'pseudo.md5'
 PLAN_VERSION = 1
 
 CASES = ('chain', 'restart', 'manual', 'claim', 'density', 'single')
@@ -231,7 +230,7 @@ def read_machine(path):
     for key in ('scheduler', 'jobscript', 'run_command'):
         _required(data, key, where)
     qe = _table(data, 'qe', where)
-    for key in ('version', 'pseudo_dir', 'upf_md5'):
+    for key in ('version', 'pseudo_dir'):
         _required(qe, key, f'{where}qe.')
     species = _table(data, 'species', where)
     for label in SYSTEMS:
@@ -263,11 +262,7 @@ def read_machine(path):
     if '{time}' not in text:
         raise CheckError(f'{jobscript}: no {{time}}: write it where the walltime goes (e.g. '
                          '"#SBATCH --time={time}"), since each case sets its own')
-    upf_md5 = Path(qe['upf_md5'])
-    if not upf_md5.is_absolute():
-        upf_md5 = path.parent / upf_md5
-    return {**data, 'source': str(path.resolve()), 'jobscript_text': text,
-            'upf_md5_path': str(upf_md5)}
+    return {**data, 'source': str(path.resolve()), 'jobscript_text': text}
 
 
 def hms(seconds):
@@ -496,7 +491,7 @@ def config_text(machine, case, system, steps, control, groups):
     other = OTHER_SPECIES[system]
     head = (f'# Written by tests/hpc/qe_check.py write, case {case}, system {system}, on '
             f'{datetime.date.today().isoformat()}.\n# Run of the check, not of the workflow: '
-            'see docs/hpc_check.md.\n\nschema_version = 1\n\n')
+            'see docs/hpc_check.md.\n\n')
     parts = [head]
     if case == 'single':
         parts.append(_toml_table('structure', {'file': f'{STRUCTURES_DIR}/bottom.extxyz'}))
@@ -518,7 +513,7 @@ def config_text(machine, case, system, steps, control, groups):
             'pseudopotential': entry['pseudopotential']}, array=True))
     parts.append(_toml_table('k_points', {'mode': 'kdens',
                                           'kdens': machine['k_points']['kdens']}))
-    parts.append(_toml_table('qe', {'version': machine['qe']['version'], 'upf_md5': MD5_FILE}))
+    parts.append(_toml_table('qe', {'version': machine['qe']['version']}))
     if case == 'single':
         parts.append(_toml_table('generation', {'file_prefix': 'input.pwi', 'overwrite': False}))
     else:
@@ -635,14 +630,9 @@ def write(args):
         groups = args.groups or values.get('groups', groups)
         if case in ('density',) and not machine.get('pp_command'):
             raise CheckError(f'{machine["source"]}: pp_command required by the case {case}')
-    upf_md5 = Path(machine['upf_md5_path'])
-    if not upf_md5.is_file():
-        raise CheckError(f'{upf_md5} not found: write it with "md5sum *.UPF > {upf_md5.name}" '
-                         'in the pseudo_dir')
     run_dir.mkdir(parents=True)
     (run_dir / 'qe_check').mkdir()
     shutil.copyfile(machine['source'], run_dir / 'qe_check' / 'machine.toml')
-    shutil.copyfile(upf_md5, run_dir / MD5_FILE)
     structures = run_dir / STRUCTURES_DIR
     structures.mkdir()
     for name, atoms in build_structures(system, options).items():
@@ -1658,13 +1648,13 @@ def report_single(rep):
     printed = [(s.label, s.pseudopotential.rsplit('/', 1)[-1], s.md5) for s in values.species]
     print(f'single: pw.x {pw.version}, stop {pw.stop_reason}, process {pw.process}, scf {pw.scf}')
     print('  species: ' + ', '.join(f'{label} {upf} md5 {md5}' for label, upf, md5 in printed))
-    differ = [f'{e["label"]}: expected md5 {e["md5"]}, printed {p[2]}'
-              for e, p in zip(expected, printed) if e['md5'] != p[2]]
+    differ = [f'{e["label"]}: expected UPF file {e["pseudopotential"]}, printed {p[1]}'
+              for e, p in zip(expected, printed) if e['pseudopotential'] != p[1]]
     if len(printed) != len(expected):
         differ.append(f'{len(printed)} species printed, {len(expected)} in the settings')
     ok = pw.stop_reason == 'completed' and not differ
     rep.findings.add('ok' if ok else 'PROBLEM', 'single', '; '.join(differ) or
-                     f'completed, {len(printed)} species (one without atoms), md5 as the manifest')
+                     f'completed, {len(printed)} species (one without atoms), UPF files as in the settings')
     qe = qe_symmetry(output.read_text(encoding='utf-8', errors='replace'))
     found = spglib_symmetry(read(rep.run_dir / 'input.extxyz'), SPGLIB_PRECISIONS[0])
     rep.findings.add('ok' if qe and found and qe['nsym'] + qe['ignored'] == found[0] else 'note',

@@ -387,7 +387,7 @@ def launch_for(run_dir, system, calc_id, n, group=None):
         listed = ', '.join(f'{name} ({launch.kind}, level {launch.level})'
                            for name, launch in entries)
         raise LaunchError(f'the groups that list {where} give different launches: {listed}; '
-                          'choose one with --group')
+                          'choose one with --from-group')
     return launch
 
 

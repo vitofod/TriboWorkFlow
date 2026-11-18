@@ -17,7 +17,6 @@ polling_interval = 120                 # seconds between two passes of the orche
 [qe]
 version = "7.2"                        # as pw.x prints it
 pseudo_dir = "<pseudo_dir>"            # absolute path of the UPF files
-upf_md5 = "<pseudo_dir>/pseudo.md5"    # md5sum *.UPF > pseudo.md5, in pseudo_dir
 
 # Both species are needed: each run declares the other one without atoms.
 [species.Al]

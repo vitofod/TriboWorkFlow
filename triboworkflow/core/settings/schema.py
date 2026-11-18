@@ -1,12 +1,12 @@
 # Author: Vito Foderà
 # Created: 2026-10-23
 
-"""Schema of the TOML settings (schema version 1): one dataclass per table.
+"""Schema of the TOML settings: one dataclass per table.
 
 A settings file describes either one calculation (``[structure]``) or the
 interface workflow (``[interface]``), together with the pw.x template
 (``[namelists]``, ``[[atomic_species]]``, ``[k_points]``), the pw.x expected
-(``[qe]``: version and checksums of the pseudopotentials) and, optionally,
+(``[qe]``: version) and, optionally,
 the execution on HPC (``[execution]``) and the MLIP model (``[mlip]``, read
 and checked but not used by any step yet). ``loader.py`` fills the dataclasses
 from the TOML tables with dacite and then runs their ``check`` methods.
@@ -46,7 +46,8 @@ from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-SCHEMA_VERSION = 1
+#: Value of the mass and of the pseudopotential of a species read from the structure files.
+AUTO = 'auto'
 
 NAMELISTS = ('CONTROL', 'SYSTEM', 'ELECTRONS', 'IONS')
 # Scheduler names of Xsorb's SCHEDULER_CONFIG (xsorb/io/scheduler.py:13-71).
@@ -104,11 +105,12 @@ ADHESION_TYPES = ('regular', 'short')
 # (angstrom), as in [interface.ppes].
 # To remove: the shifts are the default of TribChem's command line (-sh,
 # entrypoints/parsers/utils.py:741-745), 15 values from -0.75 to 3 that skip
-# 2.5 (A90); defaults.json has another list of 10. The command line never
-# passed a fit, so none was run (A88).
+# 2.5 (A90), with the 2.5 added here (DEV-48); defaults.json has another list
+# of 10. The command line never passed a fit, so none was run (A88).
 PPES_SITES = ('min_site', 'max_site')
 PPES_FITS = ('none', 'uber')
-PPES_SHIFTS = (-0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.75, 3.0)
+PPES_SHIFTS = (-0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5,
+               2.75, 3.0)
 # Sites of the surface that the step charge can start from and the operations that combine the
 # densities of the interface and of its two slabs, as in [interface.charge]: by default the
 # interface minus the bottom slab minus the top slab.
@@ -171,6 +173,9 @@ KEY_HINTS = {
     'london_rvdw': 'write "london_rvdw(i)" in [namelists.SYSTEM], i = position of the species '
                    'in [[atomic_species]], counted from 1',
     'mid': 'a slab is named by "id", e.g. id = "Fe110"; the system is <id1>_<id2>',
+    'schema_version': 'the settings have no version number: remove this line',
+    'upf_md5': 'the name of the UPF file identifies the pseudopotential and its content is '
+               'not checked: remove this line (and the manifest of the checksums)',
     'walltime': 'the walltime of the jobs of each step goes in the section of the step, e.g. '
                 '[execution.pes] walltime = "12:00:00"',
 }
@@ -481,18 +486,28 @@ class Species:
     ----------
     label : str
         Species label as in ``ATOMIC_POSITIONS`` (e.g. ``Fe1``).
-    mass : float
-        Atomic mass in amu.
+    mass : float or str
+        Atomic mass in amu, or ``"auto"``: the mass of the species ``label``
+        in the structure files, read when the settings are loaded
+        (``resolve_species``).
     pseudopotential : str
-        UPF file name.
+        UPF file name, or ``"auto"``: the one of the species ``label`` in the
+        structure files, as for ``mass``.
     starting_magnetization : float or None
         Written as ``starting_magnetization(i)``, i = position of the entry.
+        Never read from the structure files.
     """
 
     label: str
-    mass: float
+    mass: float | str
     pseudopotential: str
     starting_magnetization: float | None = None
+
+    def check(self, path):
+        """Validate the entry; errors name ``path``."""
+        if isinstance(self.mass, str) and self.mass != AUTO:
+            raise SettingsError(f'{path}.mass', f'{self.mass!r} is not a mass: give a number in '
+                                f'amu or "{AUTO}"')
 
 
 @dataclass
@@ -557,7 +572,7 @@ class GenerationParams:
 class QEParams:
     """``[qe]``: the pw.x expected on the machine that runs the calculations.
 
-    Both values enter the energy model of every calculation. Without them the
+    The version enters the energy model of every calculation. Without it the
     identity of the energy model is not known: the inputs are still
     generated, but their results are never reused and their energies never
     combined automatically.
@@ -571,16 +586,9 @@ class QEParams:
         ``QE_VERSIONS`` are accepted with a warning (``advice``). Required by
         the interface workflow when a step that runs calculations uses
         ``qe``.
-    upf_md5 : str or None
-        Manifest of the expected MD5 checksums of the UPF files, relative to
-        the folder of the settings file, in the format of ``md5sum``
-        (``<checksum>  <file>`` per line), e.g. made with ``md5sum *.UPF >
-        pseudo.md5`` in the ``pseudo_dir``. It must give the file of every
-        species; read when an input is generated.
     """
 
     version: str | None = None
-    upf_md5: str | None = None
 
     def check(self, path):
         """Validate the table; errors name ``path``."""
@@ -663,27 +671,48 @@ class MlipParams:
 
 @dataclass
 class AnalysisParams:
-    """``[execution.analysis]``: a jobscript of its own for the analyses in a job.
+    """``[execution.analysis]``: what the analyses in a job have of their own.
 
     Some analyses take more memory and time than the login node, where the
     orchestrator runs, can give: the interpolation of a potential energy
     surface builds a dense matrix of tens of GiB on large interfaces. The
     orchestrator never runs them itself: it submits each in a job of its own
     (``ANALYSIS_JOB_STEPS``) and follows it. Their jobs use the jobscript of
-    ``[execution]``; this table gives them another one, e.g. with fewer
-    resources (they run Python only, on one GPU at most) or another queue.
+    ``[execution]``; this table gives them another one, or other options of
+    the submission, e.g. with fewer resources (they run Python only, on one
+    GPU at most) or another queue.
 
     Attributes
     ----------
-    jobscript : str
+    jobscript : str or None
         Jobscript of these jobs, relative to the folder of the settings file;
         copied unchanged, with the line that runs the analysis added. Its lines
         give memory and partition; the walltime is the one of the step in its
         section ``[execution.<step>]``; the scheduler is the one of
-        ``[execution]``.
+        ``[execution]``. None: the jobscript of ``[execution]``.
+    submit_options : list of str
+        Options given as they are to the command that submits each of these
+        jobs, after those of the walltime and the name, in the syntax of the
+        scheduler (e.g. ``["--gres=gpu:1", "--mem=0"]`` with Slurm). An option
+        replaces the line of the jobscript that sets the same thing; it cannot
+        remove a line that has no option to replace it. They come before the
+        ``submit_options`` of the section of the step (``StepJobsParams``),
+        which come last.
     """
 
-    jobscript: str
+    jobscript: str | None = None
+    submit_options: list[str] = field(default_factory=list)
+
+    def check(self, path):
+        """Validate the table; errors name ``path``."""
+        _check_submit_options(f'{path}.submit_options', self.submit_options)
+
+
+def _check_submit_options(path, options):
+    """Options of a submission: strings that are not empty."""
+    for i, option in enumerate(options):
+        if not option.strip():
+            raise SettingsError(f'{path}[{i}]', 'an option must not be empty')
 
 
 def walltime_seconds(value):
@@ -711,13 +740,23 @@ class StepJobsParams:
         Jobs (one worker each) over which the calculations of a group of the
         step are spread; None: ``[execution].groups``. Only for the steps that
         run calculations: an analysis runs in one job.
+    submit_options : list of str
+        Options given as they are to the command that submits each job of the
+        step, after those of the walltime and the name and, for an analysis,
+        after those of ``[execution.analysis]``, in the syntax of the scheduler
+        (e.g. ``["--qos=boost_qos_dbg"]`` with Slurm): the queue of the step
+        without another jobscript. An option replaces the line of the jobscript
+        that sets the same thing; it cannot remove a line that has no option
+        to replace it.
     """
 
     walltime: str | None = None
     groups: int | None = None
+    submit_options: list[str] = field(default_factory=list)
 
     def check(self, path):
         """Validate the section; errors name ``path``, ``execution.<step>``."""
+        _check_submit_options(f'{path}.submit_options', self.submit_options)
         step = path.rsplit('.', 1)[-1]
         value = self.walltime
         if value is not None and (not WALLTIME_FORMAT.fullmatch(value)
@@ -770,12 +809,19 @@ class ExecutionParams:
         Seconds after its submission during which a job that the scheduler
         does not report is still waited for; after that it needs attention,
         and it is never submitted again automatically.
+    max_jobs : int or None
+        Most jobs of the run in the scheduler at the same time, waiting or
+        running (the jobs of the run only, not those of other runs of the
+        user): the orchestrator submits the others at the next passes, as
+        those in the scheduler end. For the queues that limit the jobs of a
+        user (e.g. a debug queue). None: no limit.
     analysis : AnalysisParams or None
-        Jobscript of the analyses in a job (``ANALYSIS_JOB_STEPS``); None:
-        they use ``jobscript``.
+        Jobscript and submission options of the analyses in a job
+        (``ANALYSIS_JOB_STEPS``); None: they use ``jobscript``.
     pes, pes_scf, adhesion, ppes, charge, plotpes, plotpes_scf, shear : StepJobsParams
-        ``[execution.<step>]``: walltime of the jobs of the step and, for the
-        steps that run calculations, their ``groups``.
+        ``[execution.<step>]``: walltime of the jobs of the step, their
+        submission options and, for the steps that run calculations, their
+        ``groups``.
     """
 
     scheduler: str
@@ -785,6 +831,7 @@ class ExecutionParams:
     groups: int | None = None
     max_seconds_margin: int = 600
     job_report_wait: int = 3600
+    max_jobs: int | None = None
     pp_command: str | None = None
     analysis: AnalysisParams | None = None
     pes: StepJobsParams = field(default_factory=StepJobsParams)
@@ -807,6 +854,19 @@ class ExecutionParams:
         _positive(f'{path}.polling_interval', self.polling_interval)
         _positive(f'{path}.max_seconds_margin', self.max_seconds_margin)
         _positive(f'{path}.job_report_wait', self.job_report_wait)
+        if self.max_jobs is not None:
+            _positive(f'{path}.max_jobs', self.max_jobs)
+        if self.scheduler == 'slurm':
+            # The time limit of a job is the walltime of its step: workers and scheduler must
+            # agree on it.
+            sections = [(f'{path}.analysis', self.analysis)] if self.analysis else []
+            sections += [(f'{path}.{step}', getattr(self, step)) for step in WALLTIME_STEPS]
+            for where, section in sections:
+                for i, option in enumerate(section.submit_options):
+                    if option.split('=')[0].strip() in ('--time', '-t'):
+                        raise SettingsError(f'{where}.submit_options[{i}]',
+                                            f'{option!r}: the time limit of the jobs of a step is '
+                                            'its walltime, [execution.<step>] walltime')
 
     def check_margin(self, steps, path):
         """Check ``max_seconds_margin`` against the walltime of each step of ``steps`` that runs
@@ -832,6 +892,17 @@ class ExecutionParams:
         """Walltime of the jobs of ``step``, in seconds; ``DEFAULT_WALLTIME`` when not given."""
         value = self.walltime_given(step)
         return walltime_seconds(DEFAULT_WALLTIME if value is None else value)
+
+    def options_of(self, step):
+        """Options of the submission of the jobs of ``step``, in the order they are given.
+
+        Those of ``[execution.analysis]`` first, for a step analysed in a job, then
+        those of ``[execution.<step>]``.
+        """
+        own = list(getattr(self, step).submit_options) if step in WALLTIME_STEPS else []
+        if step in ANALYSIS_JOB_STEPS and self.analysis is not None:
+            return list(self.analysis.submit_options) + own
+        return own
 
     def groups_of(self, step):
         """Jobs per group of ``step``: its own ``groups``, else ``[execution].groups``; or None."""
@@ -1104,7 +1175,7 @@ class PpesParams:
     shifts : list of float
         Shifts of the top slab from the relaxed interface, in angstrom,
         without repetitions; negative values bring the slabs closer. By
-        default 15 values from -0.75 to 3 that skip 2.5 (``PPES_SHIFTS``).
+        default 16 values from -0.75 to 3 in steps of 0.25 (``PPES_SHIFTS``).
     fit : str
         ``none`` (default) writes the energies only; ``uber`` also fits the
         universal binding energy relation (UBER) to the energies of the
@@ -1405,8 +1476,6 @@ class Settings:
 
     Attributes
     ----------
-    schema_version : int
-        Must equal ``SCHEMA_VERSION``.
     atomic_species : list of Species
     k_points : KPoints
     namelists : Namelists
@@ -1419,14 +1488,13 @@ class Settings:
         the loader gives the defaults.
     execution : ExecutionParams or None
     qe : QEParams
-        Expected version of pw.x and checksums of the UPF files.
+        Expected version of pw.x.
     mlip : MlipParams or None
         The MLIP model, when the run uses one.
     source : pathlib.Path or None
         File the settings were read from, set by the loader.
     """
 
-    schema_version: int
     atomic_species: list[Species]
     k_points: KPoints
     namelists: Namelists = field(default_factory=Namelists)
@@ -1438,12 +1506,11 @@ class Settings:
     mlip: MlipParams | None = None
     # File the settings were read from (set by the loader).
     source: Path | None = field(default=None, init=False, repr=False, compare=False)
+    # What the loader read from the structure files for the "auto" species, one sentence each.
+    species_read: list[str] = field(default_factory=list, init=False, repr=False, compare=False)
 
     def check(self, path=''):
         """Validate the checks that involve several tables."""
-        if self.schema_version != SCHEMA_VERSION:
-            raise SettingsError('schema_version', f'unsupported value {self.schema_version}; '
-                                f'supported: {SCHEMA_VERSION}')
         if (self.structure is None) == (self.interface is None):
             raise SettingsError('', 'give either [structure] (one calculation) '
                                     'or [interface] (interface workflow)')
@@ -1478,13 +1545,19 @@ class Settings:
         Returns
         -------
         list of str
-            Paths of the empty strings and of ``ecutwfc``/``ecutrho`` equal to 0.
+            Paths of the empty strings, of ``ecutwfc``/``ecutrho`` equal to 0
+            and of the mass or pseudopotential still ``"auto"`` (they are
+            read from the structure files by ``load_settings``).
         """
         missing = []
         for path, node in walk(self, children_first=False):
             for f in fields(node):
                 if f.init and getattr(node, f.name) == '':
                     missing.append(join(path, f.name))
+        for i, species in enumerate(self.atomic_species):
+            for name in ('mass', 'pseudopotential'):
+                if getattr(species, name) == AUTO:
+                    missing.append(f'atomic_species[{i}].{name}')
         for namelist in NAMELISTS:
             for key, value in getattr(self.namelists, namelist).items():
                 cutoff = key_name(key) in ('ecutwfc', 'ecutrho') and not isinstance(value, (str, bool))

@@ -21,7 +21,6 @@ other the right data, not that the numbers are those of pw.x. The slabs are two 
 covers Cu, and the interface of the example (Cu(111)/Al(111)) has an interpolation of 88 GiB.
 """
 
-import hashlib
 import json
 import os
 import subprocess
@@ -56,11 +55,8 @@ def chain_run(tmp_path):
                 'file = "slabs/Cu111.json"\nid = "Cu111"')
     pseudo = tmp_path / 'pseudo'
     pseudo.mkdir()
-    lines = []
     for name in ('Cu.UPF', 'Al.UPF'):
         (pseudo / name).write_text(f'fake {name}\n')
-        lines.append(f'{hashlib.md5((pseudo / name).read_bytes()).hexdigest()}  {name}')
-    (run_dir / 'pseudo.md5').write_text('\n'.join(lines) + '\n')
     edit_config(run_dir, 'pseudo_dir = "/path/to/pseudo"', f'pseudo_dir = "{pseudo}"')
     edit_config(run_dir, 'run_command = "mpirun -np 32 pw.x -nk 4"',
                 f'run_command = "{sys.executable} {FAKE} pw --emt"')
@@ -68,7 +64,7 @@ def chain_run(tmp_path):
                 f'pp_command = "{sys.executable} {FAKE} pp"')
     # A few shifts of the top slab, and short strings: the run must be quick.
     edit_config(run_dir, '# shifts = [-0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, '
-                '1.75, 2.0, 2.25, 2.75, 3.0]', f'shifts = {SHIFTS}')
+                '1.75, 2.0, 2.25, 2.5, 2.75, 3.0]', f'shifts = {SHIFTS}')
     edit_config(run_dir, 'npts = 101', 'npts = 6')
     edit_config(run_dir, 'nstepmax = 99999', 'nstepmax = 2')
     (run_dir / 'analysis.sh').write_text('#!/bin/bash\n#SBATCH --mem=8G\n')

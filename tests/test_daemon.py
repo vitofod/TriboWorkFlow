@@ -11,6 +11,7 @@ its log.
 """
 
 import json
+import logging
 import os
 import signal
 import socket
@@ -141,6 +142,16 @@ def test_stop_right_after_start_ends_the_pass(run_dir):
     assert saved is not None and saved == read(run_dir / 'passes'), report(run_dir)
     assert not (run_dir / daemon.PID_FILE).exists(), report(run_dir)
     assert 'SIGTERM received' in read(run_dir / daemon.LOG_FILE), report(run_dir)
+
+
+@posix_only
+def test_stop_names_the_run_by_its_whole_path(run_dir, monkeypatch, caplog):
+    """stop() of a run given as a relative path says which run it stops, with its whole path."""
+    start(run_dir, FACTORY, 'slurm')
+    monkeypatch.chdir(run_dir.parent)
+    with caplog.at_level(logging.INFO, logger='triboworkflow'):
+        assert stop(Path(run_dir.name), timeout=20) is True, report(run_dir)
+    assert f'orchestrator of {run_dir.resolve()} (pid' in caplog.text
 
 
 @posix_only

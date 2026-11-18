@@ -793,14 +793,14 @@ def analysis_jobscript_path(settings):
     Returns
     -------
     pathlib.Path or None
-        The one of ``[execution.analysis]``, else the one of ``[execution]``
-        (``jobscript_path``); None without ``[execution]``. Without a settings
+        The one of ``[execution.analysis]`` if it gives one, else the one of
+        ``[execution]`` (``jobscript_path``); None without ``[execution]``. Without a settings
         file a relative path is relative to the current directory.
     """
     execution = settings.execution
     if execution is None:
         return None
-    if execution.analysis is None:
+    if execution.analysis is None or execution.analysis.jobscript is None:
         return jobscript_path(settings)
     path = Path(execution.analysis.jobscript)
     if not path.is_absolute() and settings.source is not None:
@@ -932,7 +932,7 @@ def _local_stamp():
     return datetime.datetime.now().astimezone().isoformat(timespec='seconds')
 
 
-def submit_jobs(path, scheduler, count, now=None):
+def submit_jobs(path, scheduler, count, now=None, options=None):
     """Submit the jobscript of a group once per worker.
 
     ``count`` workers are asked for, but never more than the calculations of
@@ -947,7 +947,7 @@ def submit_jobs(path, scheduler, count, now=None):
     known. Submissions run from the directory of the group, where the
     scheduler writes the logs of the jobs, with the walltime of the group
     (``group_walltime``) and the name of its jobs (``job_name``) as options
-    of the command. In a dry run nothing is submitted
+    of the command, followed by ``options``. In a dry run nothing is submitted
     or written, and the commands are left in ``scheduler.commands``.
 
     Parameters
@@ -961,6 +961,9 @@ def submit_jobs(path, scheduler, count, now=None):
     now : callable or None, optional
         Time of a submission that starts, as an ISO 8601 string; the local
         time by default.
+    options : list of str or None, optional
+        Options of the submission command given after the walltime and the
+        name, as they are (``ExecutionParams.options_of``).
 
     Returns
     -------
@@ -1006,7 +1009,7 @@ def submit_jobs(path, scheduler, count, now=None):
         try:
             with hpc_only(scheduler.scheduler_name):
                 job_id = scheduler.submit_job(str(jobscript), cwd=path, walltime=walltime,
-                                              job_name=name)
+                                              job_name=name, extra_options=options)
         except (NotOnHPCError, JobSchedulerError) as error:
             if data is not None and surely_not_created(error):
                 if existed or data['job_ids']:

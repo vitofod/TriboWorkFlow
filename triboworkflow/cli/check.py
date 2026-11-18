@@ -34,13 +34,15 @@ Example:
         pass
 
     def run(self, args, run_dir, settings):
-        from triboworkflow.core.settings import SCHEMA_VERSION, load_settings
+        from triboworkflow.core.settings import load_settings
 
         from .run import config_file, print_placeholders, print_step_jobs, system_name
 
         path = config_file(run_dir)
         settings = load_settings(path)
-        print(f'Settings: {path} (schema version {SCHEMA_VERSION})')
+        print(f'Settings: {path}')
+        for sentence in settings.species_read:
+            print(f'Species read from the structure files: {sentence}')
         if settings.interface is not None:
             print(f'Interface workflow, system {system_name(settings)}')
             print(f'Steps: {", ".join(settings.interface.steps)}')

@@ -142,7 +142,7 @@ from .jobs import (MANIFEST_FILE, OUTCOME_FILE, SUBMITTED_FILE, Analysis, JobErr
                    group_step, is_analysis, is_withdrawn, write_analysis, write_job)
 from .layout import CLAIM_FILE, JOBS_DIR, calc_dir, job_dir, system_dir
 from .manager import HOLD_MESSAGES
-from .policy import LaunchSetup, decide, manual_launch
+from .policy import LaunchSetup, PolicyError, decide, manual_launch
 from .preparation import (check_calculations, complete_replacement, prepare_calculations,
                           start_replacement)
 from .reconcile import LaunchError, Reconciler, launch_for, run_launches
@@ -218,6 +218,20 @@ _IN_FLIGHT = ('pending', 'running', 'held', 'launched', 'uncertain')
 _STATE_KEYS = ('schema_version', 'systems')
 _STEP_KEYS = ('status', 'reason', 'calculations', 'error', 'calcs', 'attention', 'job',
               'updated')
+
+
+def cpu_note():
+    """Tail of the log line of a pass: the CPU time used so far by this process.
+
+    Notes
+    -----
+    To remove: temporary diagnostics (Q51). The login nodes of some HPC machines
+    stop a process that has used a given CPU time; the line of each pass shows how
+    much this process has used, so that a process that disappears can be compared
+    with that limit (``daemon.serve`` logs the limit). Remove it, with its use in
+    ``Orchestrator.run``, before the release.
+    """
+    return f'; CPU time of the process {time.process_time():.1f} s'
 
 
 class OrchestratorError(ValueError):
@@ -561,7 +575,7 @@ class Orchestrator:
         while True:
             report = self.run_pass()
             passes += 1
-            logger.info('Pass %d: %s', passes, self.summary(report))
+            logger.info('Pass %d: %s%s', passes, self.summary(report), cpu_note())
             if report.finished or self.manager.scheduler.dry_run:
                 return report
             if (max_passes is not None and passes >= max_passes) or (stop and stop()):
@@ -1397,7 +1411,8 @@ class Orchestrator:
                      if calc_id in (self.entry(system, step)['calculations'] or ())), None)
         if name is None:
             raise OrchestratorError(f'{system}/{calc_id} is not a calculation of a step of the '
-                                    'run')
+                                    'run (a calculation is <step>/<label>, e.g. ppes/'
+                                    'min_site_1.5; "status --calcs" lists them)')
         return name
 
     def relaunch(self, system, calc_id, group=None, level=None, from_scratch=False):
@@ -1435,23 +1450,106 @@ class Orchestrator:
         """
         self._check_replacements()
         name = self._step_of(system, calc_id)
-        entry = self.entry(system, name)
-        found = self._stale(system, name, entry)
+        written, _, _ = self.relaunch_step(system, name, [calc_id.split('/', 1)[1]], group, level,
+                                           from_scratch)
+        return written
+
+    def relaunch_step(self, system, step, labels=None, group=None, level=None,
+                      from_scratch=False):
+        """Relaunch by hand calculations of a step (``policy.manual_launch``) in one new group.
+
+        The step is followed again at the next pass. With ``labels`` the
+        calculations asked for must all be relaunchable, or nothing is
+        written; without, every calculation of the step that can be
+        relaunched is, and the others are left, with the reason.
+
+        Parameters
+        ----------
+        system, step : str
+            The step prepared.
+        labels : sequence of str or None, optional
+            Labels of the calculations of the step (``<step>/<label>`` is the
+            id); None: all of them.
+        group : str or None, optional
+            Group whose launch of the last attempt is taken, when the record
+            does not have it and the groups listing it give different ones;
+            for a single calculation.
+        level : int or None, optional
+            Level of the remedies of the new attempts; that of the last
+            attempt of each by default.
+        from_scratch : bool, optional
+            Start from scratch even when the last attempt could be continued
+            from the files of its output directory.
+
+        Returns
+        -------
+        written : str
+            Name of the group written.
+        launches : list of triboworkflow.execution.jobs.Launch
+            The calculations relaunched, in the order of the step.
+        left : dict
+            ``{calc_id: reason}`` of the calculations of the step not
+            relaunched (only without ``labels``).
+
+        Raises
+        ------
+        PolicyError
+            For a calculation asked for with ``labels`` whose worker may
+            still run, that has nothing to run again, or whose last launch is
+            not known.
+        OrchestratorError
+            If the system has no such step or calculation, no calculation can
+            be relaunched, ``group`` is given for more than one calculation,
+            or the settings changed since the step was prepared; nothing is
+            written.
+        """
+        self._check_replacements()
+        if step not in self.order:
+            raise OrchestratorError(f'{system}/{step} is not a step of the run; steps: '
+                                    f'{", ".join(self.order)}')
+        entry = self.entry(system, step)
+        prepared = list(entry['calculations'] or ())
+        if labels is None:
+            asked = prepared
+        else:
+            asked = [f'{step}/{label}' for label in labels]
+            unknown = [calc_id for calc_id in asked if calc_id not in prepared]
+            if unknown or not asked:
+                have = ', '.join(calc_id.split('/', 1)[1] for calc_id in prepared) or 'none'
+                raise OrchestratorError(
+                    f'{system}/{", ".join(unknown) if unknown else step}: not a calculation of '
+                    f'{step} (a calculation is given with --step {step} --calc <label>); '
+                    f'labels of {step}: {have}')
+        if group is not None and len(asked) != 1:
+            raise OrchestratorError('the group whose launch is taken is for one calculation: '
+                                    'give its label with --calc')
+        found = self._stale(system, step, entry)
         if found:
-            raise OrchestratorError(f'{system}/{name}: settings changed since the preparation: '
+            raise OrchestratorError(f'{system}/{step}: settings changed since the preparation: '
                                     f'{"; ".join(found)}; nothing relaunched')
         held = self._held_back()
         self.manager.cycle(held)
         reconciler = Reconciler(self.run_dir, self.manager, self.execution.polling_interval)
-        launch = manual_launch(reconciler, system, calc_id, self._launch_setup(), group, level,
-                               from_scratch)
-        archive_attempt(self.run_dir, system, calc_id)  # nothing to do if already archived
-        written = self._write_group(system, name, [launch])
+        launches, left = [], {}
+        for calc_id in asked:
+            try:
+                launches.append(manual_launch(reconciler, system, calc_id, self._launch_setup(),
+                                              group, level, from_scratch))
+            except PolicyError as error:
+                if labels is not None:
+                    raise
+                left[calc_id] = str(error)
+        if not launches:
+            raise OrchestratorError(f'{system}/{step}: no calculation to relaunch: '
+                                    + ('; '.join(left.values()) or 'the step has none'))
+        for launch in launches:
+            archive_attempt(self.run_dir, system, launch.calc_id)  # nothing if already archived
+        written = self._write_group(system, step, launches)
         self.manager.submit(held)
         if entry['status'] == 'failed' and entry['error'] is None:
             self._set(entry, 'running', 'relaunched by hand')
         self._save()
-        return written
+        return written, launches, left
 
     def release_claim(self, system, calc_id, group=None):
         """Archive the attempt of an empty claim, once the user knows its worker is over.

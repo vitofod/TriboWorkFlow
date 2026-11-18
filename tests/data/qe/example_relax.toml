@@ -11,8 +11,6 @@
 # C with its UPF file, the prefix and vdw_corr. The structure, with the last
 # atom fixed, is read from example_relax.pwi.
 
-schema_version = 1
-
 [structure]
 file = "example_relax.pwi"
 format = "pwi"

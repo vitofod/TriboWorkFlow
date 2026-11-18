@@ -10,8 +10,6 @@
 # the code for every calculation and must not be given here.
 # Field reference: docs/configuration.md.
 
-schema_version = 1
-
 [interface]
 # Steps to run, required: any of match, pes, pes_scf, plotpes, plotpes_scf,
 # shear, adhesion, ppes, charge. Each runs once the steps it needs are done;
@@ -78,8 +76,8 @@ type = "regular"                   # Default: regular; short only with pes = "pe
 [interface.ppes]
 site = "min_site"                  # Default: min_site or max_site, the interface at the minimum
                                    # or at the maximum of the surface.
-# shifts = [-0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.75, 3.0]
-                                   # Default, angstrom: 15 values from -0.75 to 3 that skip 2.5.
+# shifts = [-0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0]
+                                   # Default, angstrom: 16 values from -0.75 to 3, a step of 0.25.
 fit = "none"                       # Default: none (energies only) or uber (also g, in eV per cell,
                                    # and l, in angstrom, with their deviations).
 
@@ -147,6 +145,8 @@ conv_thr = 1.0e-6                  # Ry
 mixing_mode = "local-TF"
 mixing_beta = 0.4                  # Recommended 0.4, at least 0.1. Lowered by the relaunches.
 
+# mass and pseudopotential can be "auto": read from the ATOMIC_SPECIES of the slab files, when
+# they are inputs or outputs of pw.x (docs/configuration.md). The order of the species is yours.
 [[atomic_species]]
 label = "Cu"
 mass = 63.546
@@ -163,13 +163,10 @@ starting_magnetization = 0.5
 mode = "kdens"                     # Grid from the density, once the cell is known.
 kdens = 7.5                        # k-points per 1/angstrom of each reciprocal vector.
 
-# The pw.x expected on the HPC. Without upf_md5 the calculations are prepared
-# and run, but their results are never reused and their energies never
-# combined automatically.
+# The pw.x expected on the HPC. The pseudopotentials are told apart by the
+# name of their UPF file, as given in [[atomic_species]].
 [qe]
 version = "7.2"                    # Required: 7.1 | 7.2 | 7.3, compared with the output.
-upf_md5 = "pseudo.md5"             # Expected MD5 of the UPF files, relative to this file;
-                                   # made with: md5sum *.UPF > pseudo.md5 (in pseudo_dir).
 
 # The MLIP model, for the calculations that use one. Read and checked, but no step uses it yet:
 # the engines above are still qe only.
@@ -199,6 +196,9 @@ max_seconds_margin = 600           # Seconds kept free at the end of the walltim
                                    # walltime of every step that runs calculations. pw.x gets
                                    # max_seconds from these: not in [namelists.CONTROL].
 job_report_wait = 3600             # Seconds a submitted job may stay unreported by the scheduler.
+# max_jobs = 4                     # Most jobs of this run in the scheduler at the same time (a
+                                   # queue that limits the jobs of a user, e.g. a debug QoS): the
+                                   # others are submitted at the next checks. Default: no limit.
 
 # The jobs of each step, in a section of its own. walltime: "HH:MM:SS" (hours may pass 24,
 # e.g. "48:00:00"), given to the submission of every job of the step (sbatch --time, qsub
@@ -209,10 +209,14 @@ job_report_wait = 3600             # Seconds a submitted job may stay unreported
 # calculations; else [execution].groups; --groups holds for every step. plotpes,
 # plotpes_scf and shear run in one job each. A section of a step that is not run has no
 # effect. The jobs are named <step>_<name>, <name> being the --job-name of the jobscript
-# (else the system): ppes_testFe.
+# (else the system): ppes_testFe. submit_options: options given as they are to the command
+# that submits each job of the step, in the syntax of the scheduler, over the lines of the
+# jobscript that set the same thing (it cannot remove a line): the queue of a step without
+# another jobscript. Not --time: the time limit is the walltime.
 [execution.pes]
 walltime = "12:00:00"
 groups = 6
+# submit_options = ["--qos=boost_qos_dbg"]
 
 [execution.pes_scf]
 walltime = "04:00:00"
@@ -237,12 +241,14 @@ walltime = "00:30:00"
 [execution.shear]
 walltime = "00:30:00"
 
-# Jobscript of the analyses in a job (plotpes and plotpes_scf, which can need tens of GiB on
-# large interfaces; shear, which takes long): never run by the orchestrator, always in a
-# job of their own on a compute node. Without this table they use the jobscript of
-# [execution]; with it, a lighter one (they run Python only: one GPU is enough where the
-# partition asks for one, e.g. #SBATCH --gres=gpu:1) or another queue.
+# Jobscript or submission options of the analyses in a job (plotpes and plotpes_scf, which can
+# need tens of GiB on large interfaces; shear, which takes long): never run by the
+# orchestrator, always in a job of their own on a compute node. Without this table they use
+# the jobscript of [execution]; with it, a lighter one (they run Python only: one GPU is
+# enough where the partition asks for one, e.g. #SBATCH --gres=gpu:1) or another queue.
 # [execution.analysis]
-# jobscript = "analysis.sh"        # Relative to this file; copied with the analysis line added.
-#                                  # Memory and partition in its #SBATCH lines; the walltime
-#                                  # is the one of the step in its section above.
+# jobscript = "analysis.sh"        # Optional. Relative to this file; copied with the analysis
+#                                  # line added. Memory and partition in its #SBATCH lines; the
+#                                  # walltime is the one of the step in its section above.
+# submit_options = ["--gres=gpu:1", "--mem=0"]   # Optional. Over the lines of the jobscript,
+#                                  # before the submit_options of each step.

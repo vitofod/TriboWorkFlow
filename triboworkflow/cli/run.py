@@ -295,7 +295,8 @@ def build_orchestrator(run_dir, groups=None, steps=None, dry_run=False, step_obj
     names = list(settings.interface.steps if steps is None else steps)
     objects = dict(step_objects) if step_objects is not None else \
         {name: get_step(name) for name in names}
-    manager = JobManager(run_dir, make_scheduler(settings, dry_run), execution.job_report_wait)
+    manager = JobManager(run_dir, make_scheduler(settings, dry_run), execution.job_report_wait,
+                         submit_options=execution.options_of, max_jobs=execution.max_jobs)
     return Orchestrator(run_dir, [system_name(settings)], objects, manager, execution,
                         jobscript_path(settings),
                         graph=interface_graph(settings.interface.adhesion.pes),
@@ -338,7 +339,9 @@ def step_orchestrator(run_dir, settings, step, groups=None, override=True):
 
 def job_manager(run_dir, settings):
     """Job manager of a run, for the actions of the user on its groups."""
-    return JobManager(run_dir, make_scheduler(settings), execution_of(settings).job_report_wait)
+    execution = execution_of(settings)
+    return JobManager(run_dir, make_scheduler(settings), execution.job_report_wait,
+                      submit_options=execution.options_of, max_jobs=execution.max_jobs)
 
 
 def submissions(manager):

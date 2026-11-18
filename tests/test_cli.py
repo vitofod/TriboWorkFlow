@@ -282,7 +282,8 @@ def test_analyse_refusal_lists_the_missing_evidence(tmp_path, fake_steps, fake_s
     assert 'pes/c1' not in err
 
 
-@pytest.mark.parametrize('argv', [['submit', 'pes'], ['start'], ['relaunch', 'pes/aa']])
+@pytest.mark.parametrize('argv', [['submit', 'pes'], ['start'],
+                                  ['relaunch', '--step', 'pes', '--calc', 'aa']])
 def test_hpc_commands_write_nothing_away_from_hpc(tmp_path, monkeypatch, capsys, argv):
     run_dir = write_run(tmp_path)
     before = files(run_dir)
@@ -482,7 +483,8 @@ def store_status(process, scf=None):
 
 @pytest.mark.parametrize('holder', ['orchestrator', 'triboworkflow submit pes'])
 @pytest.mark.parametrize('argv', [
-    ['prepare', 'pes'], ['submit', 'pes'], ['analyse', 'pes'], ['relaunch', 'pes/aa'],
+    ['prepare', 'pes'], ['submit', 'pes'], ['analyse', 'pes'],
+    ['relaunch', '--step', 'pes', '--calc', 'aa'],
     ['retry', 'pes'], ['resolve-submission', 'g', '--no-job'], ['clear-refusal', 'g'],
     ['release-claim', 'pes/aa', '--worker-over'],
 ])
@@ -503,10 +505,65 @@ def test_relaunch_by_hand(tmp_path, fake_steps, fake_slurm, fake_scheduler_bin, 
     complete(run_dir, 'pes/c0', status=store_status('ended'), stop_reason='user_request')
     fake_slurm.states['900'] = 'COMPLETED'  # the job of its claim is over
     capsys.readouterr()
-    assert cli(run_dir, 'relaunch', 'pes/c0') == 0
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'c0') == 0
     assert f'group {SYSTEM}.pes.2: 1 jobs submitted' in capsys.readouterr().out
     assert launches(run_dir, f'{SYSTEM}.pes.2') == [('pes/c0', 2, 'manual', 1)]
     assert fake_slurm.submitted == 3
+
+
+def test_relaunch_of_a_step_relaunches_what_can_be_and_lists_the_rest(
+        tmp_path, fake_steps, fake_slurm, fake_scheduler_bin, capsys):
+    run_dir = write_run(tmp_path)
+    submitted_pes(run_dir)
+    complete(run_dir, 'pes/c0', status=store_status('ended'), stop_reason='user_request')
+    fake_slurm.states['900'] = 'COMPLETED'
+    capsys.readouterr()
+    assert cli(run_dir, 'relaunch', '--step', 'pes') == 0
+    out = capsys.readouterr().out
+    assert f'{SYSTEM}/pes/c0: relaunched by hand, attempt 2' in out
+    assert f'{SYSTEM}/pes/c1: not relaunched: ' in out
+    assert launches(run_dir, f'{SYSTEM}.pes.2') == [('pes/c0', 2, 'manual', 1)]
+    assert fake_slurm.submitted == 3
+
+
+def test_relaunch_of_calculations_asked_for_all_or_nothing(tmp_path, fake_steps, fake_slurm,
+                                                           fake_scheduler_bin, capsys):
+    run_dir = write_run(tmp_path)
+    submitted_pes(run_dir)
+    complete(run_dir, 'pes/c0', status=store_status('ended'), stop_reason='user_request')
+    fake_slurm.states['900'] = 'COMPLETED'
+    capsys.readouterr()
+    # c1 may still run: the relaunch of c0 with it is refused, and nothing is written.
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'c0', 'c1') == 1
+    err = capsys.readouterr().err
+    assert 'pes/c1' in err and 'may still run' in err
+    assert not layout.job_dir(run_dir, f'{SYSTEM}.pes.2').exists()
+    assert fake_slurm.submitted == 2
+
+
+def test_relaunch_names_the_labels_of_the_step_when_one_is_wrong(tmp_path, fake_steps, fake_slurm,
+                                                                 fake_scheduler_bin, capsys):
+    run_dir = write_run(tmp_path)
+    submitted_pes(run_dir)
+    capsys.readouterr()
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'zz') == 1
+    err = capsys.readouterr().err
+    assert 'pes/zz: not a calculation of pes' in err and 'labels of pes: c0, c1' in err
+    assert cli(run_dir, 'relaunch', '--step', 'nosuch') == 1
+    assert 'nosuch is not a step of the run' in capsys.readouterr().err
+    # The group whose launch is taken is for one calculation.
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--from-group', 'g') == 1
+    assert 'for one calculation' in capsys.readouterr().err
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'c0', 'c1', '--from-group',
+               'g') == 1
+    assert 'for one calculation' in capsys.readouterr().err
+    assert fake_slurm.submitted == 2
+
+
+def test_relaunch_needs_the_step(capsys):
+    with pytest.raises(SystemExit) as stop:
+        main(['relaunch'])
+    assert stop.value.code == 2
 
 
 def test_relaunch_at_another_level_from_scratch(tmp_path, fake_steps, fake_slurm,
@@ -519,9 +576,10 @@ def test_relaunch_at_another_level_from_scratch(tmp_path, fake_steps, fake_slurm
     output.write_text(text(header(mixing_beta=0.4), JOB_DONE))  # the summary of the attempt
     fake_slurm.states['900'] = 'COMPLETED'
     capsys.readouterr()
-    assert cli(run_dir, 'relaunch', 'pes/c0', '--level', '4') == 1
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'c0', '--level', '4') == 1
     assert 'level 4 is not an integer from 1 to 3' in capsys.readouterr().err
-    assert cli(run_dir, 'relaunch', 'pes/c0', '--level', '2', '--from-scratch') == 0
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'c0', '--level', '2',
+               '--from-scratch') == 0
     assert (f'{SYSTEM}/pes/c0: relaunched by hand, attempt 2 at level 2, from scratch'
             in capsys.readouterr().out)
     assert launches(run_dir, f'{SYSTEM}.pes.2') == [('pes/c0', 2, 'manual', 2)]
@@ -533,7 +591,7 @@ def test_relaunch_refused_while_the_worker_may_run(tmp_path, fake_steps, fake_sl
     submitted_pes(run_dir)
     complete(run_dir, 'pes/c0', status=store_status('ended'), stop_reason='user_request')
     fake_slurm.states['900'] = 'RUNNING'
-    assert cli(run_dir, 'relaunch', 'pes/c0') == 1
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'c0') == 1
     assert 'job 900 of the claim is running' in capsys.readouterr().err
     assert fake_slurm.submitted == 2
 
@@ -546,11 +604,12 @@ def test_relaunch_with_group(tmp_path, fake_steps, fake_slurm, fake_scheduler_bi
              stop_reason='truncated', clean_stop=False)  # attempt 2, its launch not recorded
     fake_slurm.states['901'] = 'FAILED'
     capsys.readouterr()
-    assert cli(run_dir, 'relaunch', 'pes/c0') == 1
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'c0') == 1
     err = capsys.readouterr().err
     assert f'{SYSTEM}.pes.2 (unchanged, level 1), {SYSTEM}.pes.3 (manual, level 1)' in err
-    assert '--group' in err
-    assert cli(run_dir, 'relaunch', 'pes/c0', '--group', f'{SYSTEM}.pes.2') == 0
+    assert '--from-group' in err
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'c0', '--from-group',
+               f'{SYSTEM}.pes.2') == 0
     assert launches(run_dir, f'{SYSTEM}.pes.4') == [('pes/c0', 3, 'manual', 1)]
 
 
@@ -610,7 +669,7 @@ def test_release_claim_then_relaunch(tmp_path, fake_steps, fake_slurm, fake_sche
     capsys.readouterr()
     assert cli(run_dir, 'release-claim', 'pes/c0', '--worker-over') == 0
     assert 'attempt 1' in capsys.readouterr().out
-    assert cli(run_dir, 'relaunch', 'pes/c0') == 0
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'c0') == 0
     assert launches(run_dir, f'{SYSTEM}.pes.2') == [('pes/c0', 2, 'manual', 1)]
     assert fake_slurm.submitted == 3
 
@@ -625,7 +684,7 @@ def test_release_claim_with_different_launches_needs_group(tmp_path, fake_steps,
     assert cli(run_dir, 'release-claim', 'pes/c0', '--worker-over') == 1
     err = capsys.readouterr().err
     assert f'{SYSTEM}.pes.2 (unchanged, level 1), {SYSTEM}.pes.3 (manual, level 1)' in err
-    assert cli(run_dir, 'release-claim', 'pes/c0', '--worker-over', '--group',
+    assert cli(run_dir, 'release-claim', 'pes/c0', '--worker-over', '--from-group',
                f'{SYSTEM}.pes.3') == 0
     from triboworkflow.core.store import read_record
     attempt = read_record(layout.system_dir(run_dir, SYSTEM), 'pes/c0').attempts[-1]
