@@ -25,8 +25,10 @@ at the end of its pass, while the jobs go on.
 
 --dry-run makes a limited check of the first pass on a temporary copy of a
 run that has submitted nothing yet: the first steps ready are prepared and
-the commands of the scheduler are printed, not run. Nothing is left in the
-run, and it works on any machine.
+the commands of the scheduler are printed, not run. A step analysed in a job
+of its own only gets that job, not analysed: in a new run this is match, so
+the steps after it wait and are not prepared. Nothing is left in the run, and
+it works on any machine.
 
 Example:
  $ triboworkflow start

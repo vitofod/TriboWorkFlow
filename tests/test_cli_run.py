@@ -20,7 +20,7 @@ from triboworkflow.cli.run import (CONFIG_FILE, GROUPS_DEFAULT, GROUPS_OVERRIDE,
                                    SCHEDULER_TIMEOUT, RunError, build_orchestrator,
                                    daemon_factory, load_run, make_scheduler, resolve_groups,
                                    system_name, terminal_ask)
-from triboworkflow.core.settings.schema import INTERFACE_STEPS
+from triboworkflow.core.settings.schema import ANALYSIS_JOB_STEPS, INTERFACE_STEPS
 from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
 from triboworkflow.workflows.interface.registry import STEPS, StepNotAvailable, get_step
 
@@ -124,9 +124,10 @@ def test_steps_in_the_registry(tmp_path):
         'match': MatchStep, 'pes': RelaxedPesStep, 'pes_scf': StaticPesStep,
         'plotpes': RelaxedPlotPesStep, 'plotpes_scf': StaticPlotPesStep, 'shear': ShearStep,
         'adhesion': AdhesionStep, 'ppes': PpesStep, 'charge': ChargeStep}
-    # Only the interpolations and the shear strength are left to the user.
+    # The matching, the interpolations and the shear strength run in a job of their own.
     assert [name for name in names if get_step(name).manual_analysis] == [
-        'plotpes', 'plotpes_scf', 'shear']
+        'match', 'plotpes', 'plotpes_scf', 'shear']
+    assert ANALYSIS_JOB_STEPS == ('match', 'plotpes', 'plotpes_scf', 'shear')
     assert build_orchestrator(write_run(tmp_path, steps=('match',))).order == ['match']
     run_dir = write_run(tmp_path, steps=('pes_scf', 'pes', 'match'), name='pes')
     assert build_orchestrator(run_dir).order == ['match', 'pes_scf', 'pes']

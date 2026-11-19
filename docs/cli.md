@@ -19,8 +19,8 @@ the option.
 The steps themselves (`match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`,
 `shear`, `adhesion`, `ppes`, `charge`) come from a registry that each step
 joins once it is implemented. In this version they are all implemented
-([interface.md](interface.md)), `plotpes`, `plotpes_scf` and `shear` analysed
-in a job of their own or by hand, never by the orchestrator (*The
+([interface.md](interface.md)), `match`, `plotpes`, `plotpes_scf` and `shear`
+analysed in a job of their own or by hand, never by the orchestrator (*The
 interpolation of the PES*); a step that the registry lacked would make a
 command answer `step '<name>' not available in this version`, with nothing
 prepared or submitted. `check`, `status`, `stop` and the actions on jobs and
@@ -77,7 +77,7 @@ CuAl/                       the run
 | `gen SETTINGS.toml` | one calculation, not a run: writes the pw.x input of `[structure]` and the extxyz of its structure next to the settings file (see *One calculation*); nothing is run |
 | `status [--calcs]` | the orchestrator (running, stopped, on another host), who holds the lock of the run, each step with its state, reason and time of its last update, the calculations that need the user and why, the jobs. **It reads only the files: it is the state last saved, not a query to the scheduler.** `--calcs` lists every calculation with its state: for one that has run, the state of its record (`running`, `completed`, `not_converged`, `crashed`, …); for one not started yet, the state the reconciliation gives it from the files: `ready for the first run` (prepared, in no group of jobs), `pending` (in a group whose job is not over, named), `not_taken` or `manual` (every job of its group is over and no worker took it) |
 | `prepare <step> [--replace]` | phase 1: checks the entries the step reads and writes its calculations (directories, inputs, extxyz of the structures, records). A missing or stale entry blocks the step with what is missing; nothing is computed in its place. A calculation already prepared is never overwritten: one that differs from the settings stops the preparation with the list, one that differs only in keys of the attempts (e.g. `mixing_beta`, `max_seconds`) is kept with the values logged. `--replace` moves every calculation that differs, with its attempts, to `replaced/` and prepares it again (`execution.md`, *Preparation and replacement*) |
-| `analyse <step>` | phase 3, from the files only: every calculation of the step must be done according to its claim, its record and the groups of jobs, with the fingerprint the settings give now; otherwise nothing is written and the error says what is missing for each calculation. For `match`, `plotpes`, `plotpes_scf` and `shear` it is the whole step; `plotpes`, `plotpes_scf` and `shear` are analysed by this command where there is enough memory, or in a job of their own by `submit` and `start`, and the command is refused while that job may run (*The interpolation of the PES*) |
+| `analyse <step>` | phase 3, from the files only: every calculation of the step must be done according to its claim, its record and the groups of jobs, with the fingerprint the settings give now; otherwise nothing is written and the error says what is missing for each calculation. For `match`, `plotpes`, `plotpes_scf` and `shear` it is the whole step, analysed by this command where there is enough memory and CPU time (e.g. in an interactive job), or in a job of their own by `submit` and `start`, and the command is refused while that job may run (*The interpolation of the PES*) |
 | `retry <step>` | a step failed for an error of its own (while it was prepared or analysed, because the settings changed after its preparation, or because the job of its analysis ended without completing it) starts again; for a job of an analysis, the next `submit` or pass submits a new one |
 | `clear-refusal <group>` | a group whose submission the scheduler refused is submitted again by the next `submit` or pass, once its copy of the jobscript (`jobs/<group>/jobscript.sh`) or the walltime of its step in `[execution.<step>]` is fixed; a group none of whose jobs was submitted takes that walltime as it is now |
 | `resolve-submission <group> --job-id ID` or `--no-job` | a submission whose answer was lost (e.g. `sbatch` timed out) created that job, or none |
@@ -88,7 +88,7 @@ found; elsewhere the command stops before writing anything):
 
 | Command | What it does |
 |---|---|
-| `submit <step> [--groups M]` | phase 2: asks the scheduler for the jobs, reconciles the calculations of the step, writes a group with what has to run and submits it, then exits. **Running it again is how a step is followed by hand, and it may start relaunches** (a crash, `max_seconds`), never the same attempt twice. For `plotpes`, `plotpes_scf` and `shear` it submits the job of the analysis (one job, no `--groups`) and, run again, follows it |
+| `submit <step> [--groups M]` | phase 2: asks the scheduler for the jobs, reconciles the calculations of the step, writes a group with what has to run and submits it, then exits. **Running it again is how a step is followed by hand, and it may start relaunches** (a crash, `max_seconds`), never the same attempt twice. For `match`, `plotpes`, `plotpes_scf` and `shear` it submits the job of the analysis (one job, no `--groups`) and, run again, follows it |
 | `start [--groups M] [--dry-run]` | starts the orchestrator of the steps of `[interface].steps` in the background, on the login node, and returns; `--dry-run` runs the first pass on a temporary copy of the run, without the scheduler, and works anywhere (*Dry run*) |
 | `relaunch --step STEP [--calc LABEL ...] [--groups M] [--from-group G] [--level L] [--from-scratch] [--redo]` | relaunches by hand, in one new group, the calculations of a step that can be (all of them), or those given with `--calc` (all must be relaunchable), at the level of their last attempt or at level `L` (1–3), once their workers are surely over; it continues the last attempt from `OUT/` when the workflow would, or after a stop by request of the user, unless `--from-scratch`; a completed calculation whose results cannot be used (e.g. pp.x failed) runs again from scratch, one whose results can be used only with `--redo`; the commands, walltime, options of the submission and `pseudo_dir` are those of the settings as they are now |
 
@@ -440,8 +440,8 @@ login node, holds `run.lock` while it lives and, every `polling_interval`:
    entries it reads missing, blocked with the reason; otherwise it prepares
    the calculations, checks that they match the settings, submits them in a
    group, follows them, relaunches them as the policy says and, once they are
-   all completed, analyses them; `plotpes`, `plotpes_scf` and `shear` are
-   analysed in a job of their own, which it submits and follows (*The
+   all completed, analyses them; `match`, `plotpes`, `plotpes_scf` and `shear`
+   are analysed in a job of their own, which it submits and follows (*The
    interpolation of the PES*);
 4. a failure blocks only what depends on it: if `ppes` fails, `charge` goes
    on;
@@ -588,9 +588,15 @@ temporary folder of the machine, e.g. `/scratch_local` on a login node),
 allowed only while the run has no `jobs/` yet, runs one pass there with the
 scheduler in a dry run and prints the steps and the commands of the
 scheduler that would run (`sbatch …/jobscript.sh`). The pass is a real one on
-the copy: `match` builds the interface and the calculations are prepared, so
-it takes the time of a first pass (minutes for the matching); the steps then
-read `running … launched` although nothing ran. The copy is deleted at the
+the copy, except that nothing is submitted: the steps ready are prepared and
+then read `running … launched` although nothing ran. A step analysed in a job
+of its own gets that job, and is not analysed: in a new run the first step
+ready is `match`, so the dry run prints its job (`match: running (analysis in
+a job of its own, group …)`) and the steps after it wait for it, not prepared;
+the matching never runs on the login node. To check the calculations of the
+PES before the run, analyse `match` by hand first (`analyse match` in an
+interactive job, which submits nothing): the dry run then starts from the
+next steps. The copy is deleted at the
 end: nothing is submitted and nothing is left in the run; later passes, jobs
 and relaunches are not simulated. It needs no scheduler, so it also works on
 a laptop. Only the run folder is copied: relative paths of the settings that

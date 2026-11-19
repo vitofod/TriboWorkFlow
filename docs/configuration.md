@@ -377,7 +377,7 @@ Needed only to run on HPC. No value is tied to a specific machine.
 | `max_seconds_margin` | int | `600` | > 0 s and below the walltime of every step of `[interface].steps` that runs calculations (the walltime of a step not run is not compared), time kept free at the end of the walltime |
 | `job_report_wait` | int | `3600` | > 0 s, time after its submission during which a job that the scheduler does not report is still waited for; after that it needs attention, and it is never submitted again automatically |
 | `max_jobs` | int | none | > 0, most jobs of the run in the scheduler at the same time, waiting or running (those of the run only, not those of other runs of the user): the others are submitted at the next checks, as those in the scheduler end, the groups in the order they were written. A submission whose answer was lost keeps its place until `resolve-submission` settles it. For the queues that limit the jobs of a user (e.g. a debug QoS with 4 jobs). Without it every job is submitted at once |
-| `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`, `plotpes`, `plotpes_scf`, `shear` | table | see below | `[execution.<step>]`: walltime, jobs per group and options of the submission of the jobs of the step |
+| `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`, `match`, `plotpes`, `plotpes_scf`, `shear` | table | see below | `[execution.<step>]`: walltime, jobs per group and options of the submission of the jobs of the step |
 
 Before each run the worker writes `max_seconds` in the input it runs: the
 walltime of its step minus the time since the worker started minus
@@ -394,8 +394,8 @@ gives it.
 The jobs of each step that submits them, in a section of its own:
 `[execution.pes]`, `[execution.pes_scf]`, `[execution.adhesion]`,
 `[execution.ppes]`, `[execution.charge]` (the jobs of the calculations) and
-`[execution.plotpes]`, `[execution.plotpes_scf]`, `[execution.shear]` (the
-job of the analysis).
+`[execution.match]`, `[execution.plotpes]`, `[execution.plotpes_scf]`,
+`[execution.shear]` (the job of the analysis).
 
 ```toml
 [execution.pes]
@@ -406,6 +406,10 @@ groups = 6
 walltime = "04:00:00"
 groups = 1
 
+[execution.match]
+walltime = "00:30:00"
+submit_options = ["--qos=boost_qos_dbg"]
+
 [execution.plotpes]
 walltime = "00:30:00"
 ```
@@ -413,7 +417,7 @@ walltime = "00:30:00"
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `walltime` | str | `"24:00:00"` | walltime of each job of the step, `"HH:MM:SS"` as `--time` of Slurm; hours may pass 24 (`"48:00:00"`); minutes and seconds are below 60 |
-| `groups` | int | `[execution].groups` | > 0, jobs (workers) per group of the step; only in the sections of the steps that run calculations: `plotpes`, `plotpes_scf` and `shear` run in one job, and `groups` there is an error |
+| `groups` | int | `[execution].groups` | > 0, jobs (workers) per group of the step; only in the sections of the steps that run calculations: `match`, `plotpes`, `plotpes_scf` and `shear` run in one job, and `groups` there is an error |
 | `submit_options` | list of str | none | options given as they are to the command that submits each job of the step, in the syntax of the scheduler, e.g. `["--qos=boost_qos_dbg"]` with Slurm: the queue of the step, without another jobscript |
 
 - `submit_options` come after the options of the walltime and of the name of
@@ -449,8 +453,8 @@ walltime = "00:30:00"
   `[execution].groups`; elsewhere it stops with an error that names the
   steps.
 - The section of a step that the run does not request has no effect.
-  Another section or key (a typo, `match`, which submits no job) is an
-  error that lists the keys allowed.
+  Another section or key (a typo, a step that does not exist) is an error
+  that lists the keys allowed.
 - A step that submits jobs without a walltime gets `24:00:00`, with a
   warning from `check` and `start` (`no walltime in [execution.<step>] for
   …`) and in the log when its group is written. A queue with a shorter limit
@@ -459,7 +463,8 @@ walltime = "00:30:00"
   section and run `triboworkflow clear-refusal`.
 - `check` and `start` print the jobs of each step that submits them, e.g.
   `Jobs of the steps: pes 12:00:00, 6 jobs per group; adhesion 24:00:00
-  (default), 4 jobs per group; plotpes 00:30:00, 1 job`.
+  (default), 4 jobs per group; match 00:30:00, 1 job; plotpes 00:30:00, 1
+  job` (the steps that run calculations first, then the analyses).
 - `walltime` in `[execution]`, as a number of seconds or as the table
   `[execution.walltime]` (the forms of earlier versions), is an error that
   points to the sections of the steps.
@@ -467,10 +472,13 @@ walltime = "00:30:00"
 ### `[execution.analysis]`
 
 Optional: a jobscript or options of the submission of their own for the jobs
-of the analyses that need a compute node, i.e. the interpolations of the PES (`plotpes`, `plotpes_scf`),
-whose memory grows with the square of the points
-([interface.md](interface.md#cost)), and the shear strength (`shear`), which
-interpolates the PES again and then runs the string method for a long time.
+of the analyses that need a compute node, i.e. the matching (`match`), which
+on large slabs passes the CPU time that a login node gives a process
+(`ulimit -t`, e.g. 10 minutes on the login nodes of Leonardo), the
+interpolations of the PES (`plotpes`, `plotpes_scf`), whose memory grows with
+the square of the points ([interface.md](interface.md#cost)), and the shear
+strength (`shear`), which interpolates the PES again and then runs the string
+method for a long time.
 The orchestrator never runs them on the login node: it submits each in a job
 of its own and follows it, with the jobscript of this table, else with the
 one of `[execution]`. They run Python only, so a lighter jobscript is enough:
@@ -517,7 +525,7 @@ one ([execution.md](execution.md), *Analyses in a job of their own*).
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `slabs` | list | R | two `[[interface.slabs]]` entries, slab 1 then slab 2: their order gives the name of the system (`<id1>_<id2>`) and the strain weights (`strain_weight_1` goes with slab 1); the slab on top is decided by the matching (see below) |
-| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both; `plotpes` interpolates `pes` and `plotpes_scf` interpolates `pes_scf`, each run only when listed, also both ([interface.md](interface.md)); `adhesion` reads the PES chosen in `[interface.adhesion]`; `ppes` reads the interface that `adhesion` relaxed, of the kind of `[interface.adhesion]` and at the site of `[interface.ppes]`; `charge` reads the same interface and the density of the slabs; `shear` reads the PES relaxed along z that `plotpes` interpolated (so it needs `pes` and `plotpes`, not `pes_scf`). `plotpes`, `plotpes_scf` and `shear` are analysed in a job of their own (`[execution.analysis]`), or by hand (`analyse plotpes`) |
+| `steps` | list of str | R | steps to run, each at most once: `match`, `pes`, `pes_scf`, `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes`, `charge`; a step runs once the steps it needs are done, and among the steps that are ready the order of the list decides. `pes` is the potential energy surface relaxed along z, `pes_scf` the static one: two distinct steps, each run only when listed, also both; `plotpes` interpolates `pes` and `plotpes_scf` interpolates `pes_scf`, each run only when listed, also both ([interface.md](interface.md)); `adhesion` reads the PES chosen in `[interface.adhesion]`; `ppes` reads the interface that `adhesion` relaxed, of the kind of `[interface.adhesion]` and at the site of `[interface.ppes]`; `charge` reads the same interface and the density of the slabs; `shear` reads the PES relaxed along z that `plotpes` interpolated (so it needs `pes` and `plotpes`, not `pes_scf`). `match`, `plotpes`, `plotpes_scf` and `shear` are analysed in a job of their own (`[execution.analysis]`), or by hand (`analyse plotpes`) |
 | `set_bm` | bool | `true` | strain weights from the bulk moduli of the two materials |
 | `engine` | str | `"qe"` | engine of the steps that run calculations |
 | `engines` | table | `{}` | per-step engine for `pes`, `pes_scf`, `adhesion`, `ppes`, `charge`; only `qe` for now |

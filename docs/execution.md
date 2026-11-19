@@ -514,8 +514,8 @@ from the settings (`interface_graph`, used by `build_orchestrator`), so with
 `pes = "pes_scf"` it depends on `pes_scf` and not on `pes`, and `ppes` and
 `charge` stay on `adhesion`. `shear` reads the interpolation of `plotpes`, so
 the relaxed PES, never the static one, and the cell of `match`; like
-`plotpes` it is never analysed by the orchestrator (*Analyses in a job of
-their own*).
+`match` and `plotpes` it is never analysed by the orchestrator (*Analyses in
+a job of their own*).
 Each pass:
 
 1. runs a cycle of the job manager;
@@ -536,7 +536,7 @@ Each pass:
    running) and the entries it reads (`check_prerequisites`: missing or
    stale, **blocked** with what is missing, nothing computed again), then
    prepares its calculations. A step whose analysis needs a compute node
-   (`Step.manual_analysis`: `plotpes`, `plotpes_scf`, `shear`) is checked the same
+   (`Step.manual_analysis`: `match`, `plotpes`, `plotpes_scf`, `shear`) is checked the same
    way once ready, and never analysed by the orchestrator: it is analysed in
    a job of its own (below, *Analyses in a job of their own*). An
    orchestrator built without a jobscript for the analyses (none in a run,
@@ -603,7 +603,10 @@ analysis stopped before its end (a signal, the walltime of a job) writes
 nothing: the step stays running with no calculations, and the next
 `analyse` starts it from the beginning, or the next pass gives it to a job
 of its own. The interpolation of the PES never runs in the orchestrator
-because its memory grows with the square of its points
+because its memory grows with the square of its points, and the matching of
+`match` because on large slabs it passes the CPU time that a login node gives
+a process (`ulimit -t`, e.g. 10 minutes on the login nodes of Leonardo), which
+would kill the pass
 ([interface.md](interface.md)).
 
 ### Analyses in a job of their own

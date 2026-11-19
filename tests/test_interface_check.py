@@ -449,14 +449,16 @@ def test_sacct_by_job_with_the_memory_of_its_steps(tmp_path):
 
 
 def test_the_memory_and_the_walltime_of_the_jobs_when_sacct_is_given(run, tmp_path):
-    ids = {j: ('COMPLETED', '2097152K') for step in ('pes', 'pes_scf', 'plotpes', 'plotpes_scf',
-                                                     'shear', 'adhesion', 'ppes', 'charge')
+    ids = {j: ('COMPLETED', '2097152K') for step in ('match', 'pes', 'pes_scf', 'plotpes',
+                                                     'plotpes_scf', 'shear', 'adhesion', 'ppes',
+                                                     'charge')
            for j in job_ids(run, step)}
     found = verdicts(run, sacct_file(tmp_path / 'sacct.txt', ids, run))
     assert found['accounting'][0] == 'ok' and 'largest MaxRSS 2.00 GiB' in found['accounting'][1]
     assert f'Timelimit equal to the walltime of the group for {len(ids)} of {len(ids)} jobs' \
         in found['accounting'][1]
-    for subject in ('plotpes job', 'shear job'):
+    # The matching runs in a job of its own too: its time and memory are read the same way.
+    for subject in ('match job', 'plotpes job', 'shear job'):
         assert found[subject][0] == 'ok'
         assert 'MaxRSS 2.00 GiB of 8G' in found[subject][1]
         assert 'elapsed 00:01:30 of 00:30:00' in found[subject][1]   # the walltime of the step

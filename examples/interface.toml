@@ -16,9 +16,9 @@
 # between steps that are ready, the order of this list decides. pes is the
 # potential energy surface relaxed along z, pes_scf the static one: two steps,
 # run when listed, also both. plotpes interpolates pes and plotpes_scf
-# interpolates pes_scf; shear reads the interpolation of plotpes. The three are
-# analysed in a job of their own (see [execution.analysis]) or by hand
-# ("triboworkflow analyse plotpes"), where there is enough memory.
+# interpolates pes_scf; shear reads the interpolation of plotpes. These three and
+# match are analysed in a job of their own (see [execution.analysis]) or by hand
+# ("triboworkflow analyse plotpes"), where there is enough memory and CPU time.
 steps = ["match", "pes", "pes_scf", "plotpes", "plotpes_scf", "shear", "adhesion", "ppes", "charge"]
 engine = "qe"                      # Engine of the steps that run calculations.
 # engines = { pes = "qe" }         # Per-step engine: pes, pes_scf, adhesion, ppes, charge.
@@ -206,7 +206,7 @@ job_report_wait = 3600             # Seconds a submitted job may stay unreported
 # jobscripts. A step run without a walltime gets 24:00:00, with a warning from check,
 # start and the log: a queue with a shorter limit (e.g. a debug QoS of 30 min) refuses
 # those jobs. groups: jobs (workers) per group of the step, for the steps that run
-# calculations; else [execution].groups; --groups holds for every step. plotpes,
+# calculations; else [execution].groups; --groups holds for every step. match, plotpes,
 # plotpes_scf and shear run in one job each. A section of a step that is not run has no
 # effect. The jobs are named <step>_<name>, <name> being the --job-name of the jobscript
 # (else the system): ppes_testFe. submit_options: options given as they are to the command
@@ -232,6 +232,9 @@ walltime = "04:00:00"
 walltime = "04:00:00"
 groups = 1
 
+[execution.match]
+walltime = "00:30:00"
+
 [execution.plotpes]
 walltime = "00:30:00"
 
@@ -241,8 +244,9 @@ walltime = "00:30:00"
 [execution.shear]
 walltime = "00:30:00"
 
-# Jobscript or submission options of the analyses in a job (plotpes and plotpes_scf, which can
-# need tens of GiB on large interfaces; shear, which takes long): never run by the
+# Jobscript or submission options of the analyses in a job (match, whose matching of large
+# slabs passes the CPU time of a login node; plotpes and plotpes_scf, which can need tens of
+# GiB on large interfaces; shear, which takes long): never run by the
 # orchestrator, always in a job of their own on a compute node. Without this table they use
 # the jobscript of [execution]; with it, a lighter one (they run Python only: one GPU is
 # enough where the partition asks for one, e.g. #SBATCH --gres=gpu:1) or another queue.

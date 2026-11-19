@@ -4,9 +4,10 @@
 """The analysis of one step in a job of its own, on a compute node.
 
 Some analyses need more memory and time than the login node, where the
-orchestrator runs, can give (``Step.manual_analysis``, e.g. the
-interpolation of a potential energy surface). With the jobscript of
-``[execution.analysis]``, or else of ``[execution]``, the orchestrator writes
+orchestrator runs, can give (``Step.manual_analysis``, e.g. the matching
+of two large slabs or the interpolation of a potential energy surface). With
+the jobscript of ``[execution.analysis]``, or else of ``[execution]``, the
+orchestrator writes
 for such a step a group of jobs with
 ``analysis.json`` (``execution/jobs.py``) and submits it; the last line of
 its jobscript is::

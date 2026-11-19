@@ -366,7 +366,7 @@ def test_walltime_missing_only_for_the_steps_that_submit_jobs():
     walltimes = {f'execution.{step}': DELETE for step in WALLTIME_STEPS}
     execution = settings_from_dict(edited(WORKFLOW, walltimes)).execution
     assert execution.missing_walltimes(['match', 'pes', 'charge', 'plotpes']) == \
-        ['pes', 'charge', 'plotpes']
+        ['pes', 'charge', 'match', 'plotpes']
     assert settings_from_dict(WORKFLOW).execution.missing_walltimes(INTERFACE_STEPS) == []
     # The walltime of a step not run has no effect.
     assert settings_from_dict(edited(WORKFLOW, walltimes | {
@@ -511,7 +511,8 @@ def test_options_of_the_submission_and_most_jobs():
     # An analysis: the options of all the analyses, then those of its step.
     assert execution.options_of('plotpes') == ['--gres=gpu:1', '--mem=0']
     assert execution.options_of('shear') == ['--gres=gpu:1', '--mem=0', '--qos=dbg']
-    assert execution.options_of('match') == []
+    # The matching too runs in a job of its own, with the options of the analyses.
+    assert execution.options_of('match') == ['--gres=gpu:1', '--mem=0']
     # Not given: no option, no limit.
     default = settings_from_dict(WORKFLOW).execution
     assert default.max_jobs is None and default.options_of('pes') == []
@@ -813,7 +814,7 @@ ERRORS = [
      '[execution.pes] walltime = "12:00:00")'),
     ('walltime-table', W, {'execution.walltime': {'pes': '12:00:00'}}, 'execution.walltime',
      'unknown key (the walltime of the jobs of each step goes in the section of the step'),
-    ('step-section', W, {'execution.match': {'walltime': '01:00:00'}}, 'execution.match',
+    ('step-section', W, {'execution.relax': {'walltime': '01:00:00'}}, 'execution.relax',
      'unknown key (allowed keys: scheduler, jobscript'),
     ('step-key', W, {'execution.pes.time': '01:00:00'}, 'execution.pes.time',
      'unknown key (allowed keys: walltime, groups, submit_options)'),

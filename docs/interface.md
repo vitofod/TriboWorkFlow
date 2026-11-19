@@ -20,10 +20,9 @@ triboworkflow analyse match
 triboworkflow prepare pes_scf
 ```
 
-In a pass of the orchestrator the step `match`, having no calculation, is
-analysed as soon as it starts. `plotpes`, `plotpes_scf` and `shear` have no
-calculation either, but are never analysed by the orchestrator: in a job of
-their own or by hand (*Where they run*, *Step `shear`*).
+`match`, `plotpes`, `plotpes_scf` and `shear` run no calculation, and are
+never analysed by the orchestrator: in a job of their own or by hand (*Where
+it runs* of `match`, *Where they run*, *Step `shear`*).
 
 **Files of an analysis.** Besides their entries in `system.json`, the steps
 `plotpes`, `plotpes_scf`, `shear`, `adhesion`, `ppes` and `charge` write
@@ -99,9 +98,29 @@ In `systems/<id1>_<id2>/match/`:
 | `interface.extxyz` | the interface, with vacuum |
 | `interface.json` | the same, as a pymatgen `Structure` dict |
 
+### Where it runs
+
+Never in the orchestrator, on the login node. The matching of two large slabs
+(e.g. a Fe3C(010) 2×2 slab on Ni(111)) takes more CPU time than a login node
+may give a process (`ulimit -t`, e.g. 10 minutes on the login nodes of
+Leonardo), and the process is killed. Like `plotpes`, the step runs:
+
+- **in a job of its own** on a compute node: once the run starts, the
+  orchestrator writes the group `jobs/<system>.match.<k>/`, submits it with
+  the jobscript of `[execution.analysis]` (else of `[execution]`), the
+  walltime of `[execution.match]` and its `submit_options` (e.g. a debug
+  queue, `["--qos=boost_qos_dbg"]` with `walltime = "00:30:00"`), and
+  follows the job ([execution.md](execution.md), *Analyses in a job of
+  their own*); the steps after it wait for that job. `start --dry-run` on a
+  new run therefore prints the job of `match` only: the steps after it are not
+  prepared ([cli.md](cli.md), *Dry run*);
+- **by hand** with `triboworkflow analyse match`, where there is enough CPU
+  time (e.g. in an interactive job), with the orchestrator stopped or ended.
+
 ### Message
 
-The step reports, in the terminal and in `cli.log`:
+The step reports, in the terminal and in `cli.log` (in a job of its own, in
+the log of the job, `jobs/<system>.match.<k>/`):
 
 ```text
 Cu111_Al111: interface Cu111_Al111: Al(111) (slab 2, Al111) on top of Cu(111) (slab 1, Cu111)
@@ -122,8 +141,8 @@ debug level only.
 The step is done when the five entries exist and their provenance is the one
 that the settings and the slab files give now. Changing a slab file, a key
 of `[interface.inter_params]`, a bulk modulus with `set_bm = true`, or
-`set_bm`, makes it run again at the next `analyse match` or pass of the
-orchestrator; the entries of the later steps computed from the old interface
+`set_bm`, makes it run again at the next `analyse match`, or in a job of its
+own from the next pass of the orchestrator; the entries of the later steps computed from the old interface
 are then no longer current. Changing `formula`, `name` or `id` gives
 another interface: `id` names another system; `formula` and `name` differ
 from the existing document, which is an error (remove `system.json` of the

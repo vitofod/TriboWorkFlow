@@ -18,14 +18,15 @@ written and the error says, for each calculation, what is missing. A step of
 analysis only (match, plotpes, plotpes_scf, shear) is done here whole. It
 works on any machine.
 
-plotpes, plotpes_scf and shear are never analysed by the orchestrator in the
-background: the interpolation of a large PES needs much memory, and the
-string method of the shear strength takes long. The orchestrator, or
-"submit", analyses them in a job of their own on a compute node, with the
-jobscript of [execution.analysis] or else of [execution]; this command
-analyses them by hand, where there is enough memory, with the orchestrator
-stopped or ended (it holds the run). It is refused while the job
-of the step may still run, according to the last query of the scheduler. The
+match, plotpes, plotpes_scf and shear are never analysed by the orchestrator
+in the background: the matching of large slabs passes the CPU time of a login
+node, the interpolation of a large PES needs much memory, and the string
+method of the shear strength takes long. The orchestrator, or "submit",
+analyses them in a job of their own on a compute node, with the jobscript of
+[execution.analysis] or else of [execution]; this command analyses them by
+hand, where there is enough memory and CPU time (e.g. in an interactive job),
+with the orchestrator stopped or ended (it holds the run). It is refused while
+the job of the step may still run, according to the last query of the scheduler. The
 step is saved as running while it is analysed; an analysis stopped before its
 end writes nothing, and the next one starts it again from the beginning.
 

@@ -48,6 +48,17 @@ The work goes in this order:
    attempts, the parameters used and the strain of the two slabs; what the
    matching code prints goes to the log at debug level.
 
+Where it runs: never in the orchestrator, on the login node
+(``Step.manual_analysis``). The matching of two large slabs takes more CPU time
+than a login node may give a process (10 minutes on some machines), and the
+process would be killed. The orchestrator submits the step in a job of its own
+on a compute node, with the jobscript of ``[execution.analysis]`` or else of
+``[execution]`` and the walltime of ``[execution.match]``, and follows the job,
+which runs ``analyse`` of this step (``cli/analysis_job.py``); the steps after
+it wait for that job. The user may also run ``triboworkflow analyse match``
+where there is enough CPU time, e.g. in an interactive job; that command takes
+the lock of the run, so it runs with the orchestrator stopped or ended.
+
 Notes
 -----
 To remove: port of TribChem's ``FT_StartInterfaceMatch`` (inputs and
@@ -693,9 +704,15 @@ def slab_changes(workflow_slab):
 
 
 class MatchStep(Step):
-    """Step ``match``: interface and high-symmetry points, no calculation."""
+    """Step ``match``: interface and high-symmetry points, no calculation.
+
+    Never analysed by the orchestrator (``manual_analysis``), but in a job of
+    its own or by hand: the matching of large slabs passes the CPU time of a
+    login node.
+    """
 
     name = STEP
+    manual_analysis = True
 
     def done(self, run_dir, system):
         """Whether the five entries are written and current (``match_provenance``)."""

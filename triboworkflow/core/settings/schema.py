@@ -74,9 +74,10 @@ INTERFACE_STEPS = ('match', 'pes', 'pes_scf', 'plotpes', 'plotpes_scf', 'shear',
 STEPS_WITH_ENGINE = ('pes', 'pes_scf', 'adhesion', 'ppes', 'charge')
 # Interface steps that submit jobs, each with its section [execution.<step>] (walltime, and
 # groups for the steps with calculations): those that run calculations, then those analysed in
-# a job of their own. A walltime is "HH:MM:SS" (hours may pass 24); a step without one gets
+# a job of their own (the matching of two large slabs passes the CPU time that a login node
+# gives a process). A walltime is "HH:MM:SS" (hours may pass 24); a step without one gets
 # DEFAULT_WALLTIME.
-ANALYSIS_JOB_STEPS = ('plotpes', 'plotpes_scf', 'shear')
+ANALYSIS_JOB_STEPS = ('match', 'plotpes', 'plotpes_scf', 'shear')
 WALLTIME_STEPS = STEPS_WITH_ENGINE + ANALYSIS_JOB_STEPS
 WALLTIME_FORMAT = re.compile(r'([0-9]+):([0-5][0-9]):([0-5][0-9])')
 DEFAULT_WALLTIME = '24:00:00'
@@ -675,7 +676,9 @@ class AnalysisParams:
 
     Some analyses take more memory and time than the login node, where the
     orchestrator runs, can give: the interpolation of a potential energy
-    surface builds a dense matrix of tens of GiB on large interfaces. The
+    surface builds a dense matrix of tens of GiB on large interfaces, and the
+    matching of two large slabs passes the CPU time that a login node may
+    give a process (10 minutes on some machines). The
     orchestrator never runs them itself: it submits each in a job of its own
     (``ANALYSIS_JOB_STEPS``) and follows it. Their jobs use the jobscript of
     ``[execution]``; this table gives them another one, or other options of
@@ -837,7 +840,7 @@ class ExecutionParams:
     analysis : AnalysisParams or None
         Jobscript and submission options of the analyses in a job
         (``ANALYSIS_JOB_STEPS``); None: they use ``jobscript``.
-    pes, pes_scf, adhesion, ppes, charge, plotpes, plotpes_scf, shear : StepJobsParams
+    pes, pes_scf, adhesion, ppes, charge, match, plotpes, plotpes_scf, shear : StepJobsParams
         ``[execution.<step>]``: walltime of the jobs of the step, their
         submission options and, for the steps that run calculations, their
         ``groups``.
@@ -858,6 +861,7 @@ class ExecutionParams:
     adhesion: StepJobsParams = field(default_factory=StepJobsParams)
     ppes: StepJobsParams = field(default_factory=StepJobsParams)
     charge: StepJobsParams = field(default_factory=StepJobsParams)
+    match: StepJobsParams = field(default_factory=StepJobsParams)
     plotpes: StepJobsParams = field(default_factory=StepJobsParams)
     plotpes_scf: StepJobsParams = field(default_factory=StepJobsParams)
     shear: StepJobsParams = field(default_factory=StepJobsParams)

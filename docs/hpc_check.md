@@ -9,11 +9,11 @@ all of them, whose
 calculations are those of a case of the check (module
 docstring of the script). It complements `tests/hpc/hpc_check.py` (fake
 engine: claims, exit codes, locks; `execution.md`, "Checking a new
-machine"). The jobs of the analyses (the interpolation of the PES and the
-shear strength, with `[execution.analysis]` or the jobscript of
+machine"). The jobs of the analyses (the matching, the interpolation of the
+PES and the shear strength, with `[execution.analysis]` or the jobscript of
 `[execution]`) run no pw.x and are not part
-of this check: they are checked with a run of the interface workflow that
-interpolates its PES and analyses the shear strength
+of this check, whose own steps match in the pass: they are checked with a run
+of the interface workflow that interpolates its PES and analyses the shear strength
 (`execution.md`, "Analyses in a job of their own"), which
 `tests/hpc/interface_check.py` reads ([run_report.md](run_report.md)).
 

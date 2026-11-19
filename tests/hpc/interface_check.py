@@ -381,6 +381,12 @@ def check_spin(rep):
                          f'{len(rep.records)} inputs: not spin-polarized')
 
 
+def check_match_job(rep):
+    """The job of the matching: its outcome and, with ``--sacct``, its time and memory."""
+    verdict, text, _ = _analysis_job(rep, 'match')
+    rep.findings.add(verdict, 'match job', text)
+
+
 def check_slabs(rep):
     from triboworkflow.core.structures import StructureError
     from triboworkflow.workflows.interface.match import match_inputs
@@ -555,8 +561,8 @@ def _analysis_job(rep, step):
         return 'not observed', f'{step} not completed', {}
     group = rep.group_dir(step)
     if group is None:
-        return 'not observed', f'{step} analysed by hand, or [execution.analysis] not given: ' \
-            'no job', {}
+        return 'not observed', f'{step} analysed by hand, or by the orchestrator of a version ' \
+            'that did not give it a job: no job', {}
     if not group.is_dir():
         return 'PROBLEM', f'the folder of the group {group.name} is not in the copy', {}
     outcome_path = group / 'outcome.json'
@@ -1113,6 +1119,8 @@ def make_report(run_dir, sacct=None):
     _run(rep, 'calculations', check_calculations)
     _run(rep, 'spin', check_spin)
     _run(rep, 'slabs', check_slabs)
+    if 'match' in rep.steps:
+        _run(rep, 'match job', check_match_job)
     for name in ('pes', 'pes_scf'):
         if name in rep.steps:
             _run(rep, name, check_pes, name)

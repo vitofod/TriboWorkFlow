@@ -107,9 +107,10 @@ def test_check_prints_the_walltime_of_each_step(tmp_path, capsys):
     run_dir = write_run(tmp_path, steps=('match', 'pes', 'plotpes', 'adhesion'))
     assert main(['check', '-r', str(run_dir)]) == 0
     captured = capsys.readouterr()
-    # plotpes runs in a job, with the jobscript of [execution] without [execution.analysis].
+    # match and plotpes run in a job, with the jobscript of [execution] without
+    # [execution.analysis]; the steps that run calculations come first.
     assert ('Jobs of the steps: pes 12:00:00, 6 jobs per group; adhesion 12:00:00, 4 jobs per '
-            'group; plotpes 00:30:00, 1 job\n') in captured.out
+            'group; match 00:30:00, 1 job; plotpes 00:30:00, 1 job\n') in captured.out
     assert 'walltime' not in captured.err
     config = run_dir / 'config.toml'
     config.write_text(config.read_text().replace('[execution.adhesion]\nwalltime = "12:00:00"\n',
@@ -119,7 +120,7 @@ def test_check_prints_the_walltime_of_each_step(tmp_path, capsys):
     assert main(['check', '-r', str(run_dir)]) == 0
     captured = capsys.readouterr()
     assert ('Jobs of the steps: pes 12:00:00, 6 jobs per group; adhesion 24:00:00 (default), '
-            '4 jobs per group; plotpes 00:30:00, 1 job\n') in captured.out
+            '4 jobs per group; match 00:30:00, 1 job; plotpes 00:30:00, 1 job\n') in captured.out
     assert ('no walltime in [execution.<step>] for adhesion: their jobs get 24:00:00'
             in captured.err)
     assert re.search(r'\S*analysis\.sh has an #SBATCH --time: the walltime of each step in '
@@ -388,7 +389,7 @@ def test_start_passes_the_factory_and_groups(tmp_path, monkeypatch, fake_schedul
                       ('3', 'override'))]
     out = capsys.readouterr().out
     assert 'running: pid 4242 on login01 since now' in out
-    assert 'Jobs of the steps: pes 12:00:00, 3 jobs per group\n' in out
+    assert 'Jobs of the steps: pes 12:00:00, 3 jobs per group; match 00:30:00, 1 job\n' in out
     assert 'running: pid 4242' in (run_dir / 'cli.log').read_text()
     # The settings give the jobs of every step: nothing to pass to the process.
     calls.clear()
@@ -404,7 +405,8 @@ def test_start_warns_about_a_step_without_walltime(tmp_path, fake_steps, fake_sc
                                                  '[execution.pes]\n'))
     assert cli(run_dir, 'start', '--dry-run') == 0
     captured = capsys.readouterr()
-    assert 'Jobs of the steps: pes 24:00:00 (default), 6 jobs per group\n' in captured.out
+    assert ('Jobs of the steps: pes 24:00:00 (default), 6 jobs per group; match 00:30:00, '
+            '1 job\n') in captured.out
     assert 'no walltime in [execution.<step>] for pes: their jobs get 24:00:00' in captured.err
     # The jobs of the step get it from the submission command, with their name.
     assert f'sbatch --time=24:00:00 --job-name=pes_{SYSTEM} ' in captured.out
@@ -429,6 +431,24 @@ def test_dry_run_leaves_the_run_untouched(tmp_path, fake_steps, fake_scheduler_b
     assert cli(run_dir, 'start', '--dry-run') == 0
     out = capsys.readouterr().out
     assert 'first pass only' in out and 'sbatch --time=12:00:00 ' in out
+    assert files(run_dir) == before and not fake_scheduler_bin.exists()
+
+
+def test_dry_run_gives_the_match_a_job_and_never_matches(tmp_path, monkeypatch,
+                                                         fake_scheduler_bin, capsys):
+    # The matching of large slabs passes the CPU time of a login node: a pass, and so the dry
+    # run, writes the job of the step match and leaves the matching to it.
+    from test_pes import pes_run
+    from triboworkflow.workflows.interface import match
+    monkeypatch.setattr(match, 'run_match', lambda *args: pytest.fail('matched in the pass'))
+    run_dir = pes_run(tmp_path, steps=('match', 'pes'))   # the example with its slabs
+    before = files(run_dir)
+    assert cli(run_dir, 'start', '--dry-run') == 0
+    out = capsys.readouterr().out
+    assert f'{SYSTEM}/match: running (analysis in a job of its own, group {SYSTEM}.match.1)' in out
+    assert f'{SYSTEM}/pes: waiting (waits for match)' in out
+    assert f'sbatch --time=00:30:00 --job-name=match_{SYSTEM} ' in out
+    assert out.count('sbatch ') == 1
     assert files(run_dir) == before and not fake_scheduler_bin.exists()
 
 
