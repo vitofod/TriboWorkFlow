@@ -21,13 +21,15 @@ machine with a fake engine.
 │       ├── run.pwi              input of the current attempt
 │       ├── output.pwo           output of the current attempt
 │       ├── structure_out.extxyz final structure, once the output is parsed
+│       ├── trajectory.extxyz    every ionic step of a relax, whatever its outcome
 │       ├── output.ppo           pp.x output of the current attempt
 │       ├── density.filplot      charge density written by pp.x
 │       ├── claim                taken by the worker running the attempt
 │       ├── record.json
 │       ├── OUT/                 outdir of pw.x
 │       └── attempts/<n>/        the files of attempt n: run.pwi, output.pwo,
-│                                structure_out.extxyz, output.ppo, density.filplot
+│                                structure_out.extxyz, trajectory.extxyz, output.ppo,
+│                                density.filplot
 ├── jobs/<name>/                 one group of jobs
 │   ├── manifest.json            or analysis.json, for the job of an analysis
 │   ├── outcome.json             written by the job of an analysis
@@ -240,7 +242,10 @@ other worker has taken it:
    calculation directory;
 7. records the end time, the exit code, the digests of `run.pwi` and
    `output.pwo`, the states read from the output, the reason of the stop,
-   whether pw.x closed the run and the version it printed; when the
+   whether pw.x closed the run and the version it printed; for a `relax`,
+   whatever its outcome, every ionic step goes to `trajectory.extxyz`
+   ([qe_results.md](qe_results.md), *Trajectory of a relaxation*: for the
+   user, a failure is only a warning in the log); when the
    calculation is over with the SCF and the geometry converged, it reads the
    results (`execution/parsing.py`, [qe_results.md](qe_results.md)): the
    record gets `parsing`, the results and `observed`, the directory
@@ -315,7 +320,7 @@ given.
 Before a calculation runs again, its last attempt is archived
 (`execution/archive.py`): `run.pwi` and `output.pwo` move to `attempts/<n>/`
 after a check of their digests, with `structure_out.extxyz` when the output
-was parsed and, after pp.x, `output.ppo` and `density.filplot` (checked
+was parsed, `trajectory.extxyz` when written and, after pp.x, `output.ppo` and `density.filplot` (checked
 against the digests of the post-processing; `input.ppi` stays in place),
 the record gets the new paths, and the claim is removed last. An interrupted archiving is completed by running it again.
 An attempt still recorded as `running` is not archived; the archiving does

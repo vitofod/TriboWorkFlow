@@ -116,6 +116,42 @@ Xsorb applies its constraints in `get_forces()`); `Final energy`, the
 species table and the checksums read; strict blocks, one line per atom,
 numbered.
 
+## Trajectory of a relaxation
+
+`structure_out.extxyz` holds the final structure only. To look at the whole
+relaxation, the parsing of a `relax` writes, at the end of each attempt and
+whatever its outcome (converged, not converged, stopped at the walltime,
+crashed), `trajectory.extxyz` in the directory of the calculation
+(`engines/qe/trajectory.py`, `execution/parsing.write_trajectory`):
+
+```bash
+ase gui systems/Cu111_Al111/pes/ontop_1-bridge_1/trajectory.extxyz
+```
+
+- one frame per configuration of the output followed by a result: the
+  positions of the header, then those printed after each ionic step
+  (`ATOMIC_POSITIONS`); the final coordinates are those of the last frame;
+  an output cut short gives the frames printed until then;
+- each frame has the cell, labels, `move_mask` and the other per-atom data of
+  `structure_in.extxyz`, the positions of the output, and its `energy` (eV),
+  `forces` (eV/Å, as printed: read them with `get_forces(apply_constraint=False)`,
+  as ASE applies the `move_mask` otherwise) and, when spin-polarized,
+  `magmoms` (μB); no stress;
+- energies and forces are converted with the constants of QE, as the
+  results: the last frame of a converged relaxation has the energy and the
+  forces of the record. The output is read with ASE's `read_espresso_out`
+  (as Xsorb reads its trajectories, `get_atoms_traj_from_calc`), whose
+  CODATA 2006 values are converted back;
+- the file goes to `attempts/<n>/` with its attempt: a relaxation continued
+  from `OUT/` keeps each part in the attempt that ran it;
+- nothing reads it: an output or an input structure that cannot be read, or
+  a file that cannot be written, leave a warning in the log and no file, and
+  never change the parsing or the record.
+
+For an output written before this file existed: `ase convert -i
+espresso-out output.pwo trajectory.extxyz` (energies in the units of ASE), or
+`ase gui output.pwo`.
+
 ## Tests
 
 `tests/test_qe_results.py` and `tests/test_parsing.py` use synthetic outputs

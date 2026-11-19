@@ -11,6 +11,13 @@ needs nothing but the files of the directory, so it can be run on its own;
 the worker calls it at the end of each attempt, and the reconciliation when
 it fixes an attempt whose worker did not end it.
 
+For a ``relax``, whatever its outcome (converged, not converged, stopped,
+crashed), ``write_trajectory`` writes first every ionic step of the attempt
+in ``trajectory.extxyz`` (``engines/qe/trajectory.py``), archived with the
+attempt. It is for the user to look at, nothing reads it: a trajectory that
+cannot be written leaves a warning in the log, and the parsing and the
+record never depend on it.
+
 ``with_parsed`` puts what it read in the record: the state ``parsing``, the
 results, ``observed``, the version printed (``Engine.version``) and, for an
 output that cannot be parsed, the reason in the attempt (``parse_error``).
@@ -42,9 +49,10 @@ from triboworkflow.engines.qe.density import (DENSITY_PLOT_NUM, DensityError, re
 from triboworkflow.engines.qe.ppi import pp_output_problem
 from triboworkflow.engines.qe.results import Parsed, parse_output
 from triboworkflow.engines.qe.status import pw_status
+from triboworkflow.engines.qe.trajectory import trajectory_text
 
 from .layout import (DENSITY_FILE, INPUT_FILE, OUTPUT_FILE, PP_OUTPUT_FILE, RECORD_FILE,
-                     STRUCTURE_IN_FILE, STRUCTURE_OUT_FILE)
+                     STRUCTURE_IN_FILE, STRUCTURE_OUT_FILE, TRAJECTORY_FILE)
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +79,8 @@ def parse_calculation(path, calculation=None, energy_model=None):
     -------
     triboworkflow.engines.qe.results.Parsed
         As ``parse_output``. With ``parsing = 'ok'``, ``structure_out.extxyz``
-        is written in the directory.
+        is written in the directory; for a ``relax``, ``trajectory.extxyz``
+        whatever the outcome (``write_trajectory``).
 
     Raises
     ------
@@ -90,7 +99,10 @@ def parse_calculation(path, calculation=None, energy_model=None):
         energy_model = Record.from_dict(read_json(path / RECORD_FILE),
                                         source=path / RECORD_FILE).energy_model
     text = (path / OUTPUT_FILE).read_text(encoding='utf-8', errors='replace')
-    if not _converged(pw_status(text, calculation)):
+    status = pw_status(text, calculation)
+    if calculation == 'relax':
+        write_trajectory(path, text)
+    if not _converged(status):
         return Parsed(None)
     try:
         structure = read_structure(path / STRUCTURE_IN_FILE, format='extxyz')
@@ -108,6 +120,40 @@ def parse_calculation(path, calculation=None, energy_model=None):
             return dataclasses.replace(parsed, parsing='failed', results=None, structure=None,
                                        reason=f'{STRUCTURE_OUT_FILE} not written: {error}')
     return parsed
+
+
+def write_trajectory(path, text):
+    """Write the frames of a relaxation in ``trajectory.extxyz`` of its directory.
+
+    Parameters
+    ----------
+    path : path-like
+        Directory of the calculation, with ``structure_in.extxyz``.
+    text : str
+        Content of its ``output.pwo``.
+
+    Returns
+    -------
+    bool
+        True if the file was written. Never raises: an input structure or an
+        output that cannot be read, or a file that cannot be written, leave a
+        warning in the log and no file; an output without a configuration
+        with results (pw.x stopped in its first SCF cycle) leaves no file.
+    """
+    path = Path(path)
+    try:
+        structure = read_structure(path / STRUCTURE_IN_FILE, format='extxyz')
+        trajectory = trajectory_text(text, structure)
+        if trajectory is None:
+            logger.info('%s: no ionic step with results in %s: no %s', path, OUTPUT_FILE,
+                        TRAJECTORY_FILE)
+            return False
+        write_text(path / TRAJECTORY_FILE, trajectory)
+    except Exception as error:  # the trajectory is for the user: never fails the parsing
+        logger.warning('%s: %s not written: %s: %s', path, TRAJECTORY_FILE,
+                       type(error).__name__, error)
+        return False
+    return True
 
 
 def with_parsed(record, attempt, parsed, version):

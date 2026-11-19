@@ -15,14 +15,15 @@ A run keeps the systems and the jobs that run their calculations::
     │       ├── run.pwi              input of the current attempt
     │       ├── output.pwo           output of the current attempt
     │       ├── structure_out.extxyz final structure, once the output is parsed
+    │       ├── trajectory.extxyz    every ionic step of a relax, at the end of the attempt
     │       ├── output.ppo           pp.x output of the current attempt
     │       ├── density.filplot      charge density written by pp.x
     │       ├── claim                taken by the worker running the attempt
     │       ├── record.json
     │       ├── OUT/                 outdir of pw.x
     │       └── attempts/<n>/        the files of attempt n: run.pwi, output.pwo,
-    │                                structure_out.extxyz, and input.ppi, output.ppo and
-    │                                density.filplot of the charge density
+    │                                structure_out.extxyz, trajectory.extxyz, and
+    │                                output.ppo and density.filplot of the charge density
     ├── jobs/<name>/                 one group of jobs
     │   ├── manifest.json            calculations of the group and how to run them
     │   ├── analysis.json            in place of manifest.json: the step analysed in the job
@@ -59,6 +60,7 @@ STRUCTURE_IN_FILE = 'structure_in.extxyz'
 RUN_INPUT_FILE = 'run.pwi'
 OUTPUT_FILE = 'output.pwo'
 STRUCTURE_OUT_FILE = 'structure_out.extxyz'
+TRAJECTORY_FILE = 'trajectory.extxyz'
 PP_INPUT_FILE = 'input.ppi'
 PP_OUTPUT_FILE = 'output.ppo'
 DENSITY_FILE = 'density.filplot'
@@ -71,6 +73,7 @@ __all__ = ['ATTEMPTS_DIR', 'CLAIM_FILE', 'DENSITY_FILE', 'INPUT_FILE', 'JOBS_DIR
            'JOBS_REGISTRY_FILE', 'OUTDIR', 'OUTPUT_FILE', 'PP_INPUT_FILE', 'PP_OUTPUT_FILE',
            'RECORD_FILE', 'REPLACED_DIR', 'REPLACEMENT_FILE',
            'RUN_INPUT_FILE', 'STRUCTURE_IN_FILE', 'STRUCTURE_OUT_FILE', 'SYSTEMS_DIR',
+           'TRAJECTORY_FILE',
            'attempt_dir', 'calc_dir',
            'calc_prefix', 'job_dir', 'replaced_dir', 'system_dir']
 

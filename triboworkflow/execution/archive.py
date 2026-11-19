@@ -15,8 +15,9 @@ attempt is archived:
    it, with what the claim tells (job, host, time) and the rest null;
 3. ``run.pwi`` and ``output.pwo`` are moved to ``attempts/<n>/`` with
    ``os.replace``, after checking them against the digests recorded, and
-   ``structure_out.extxyz`` with them when the output was parsed (it has no
-   digest: it is read again from the output when needed); for a calculation
+   ``structure_out.extxyz`` with them when the output was parsed, and
+   ``trajectory.extxyz`` when written (they have no digest: they are read
+   again from the output when needed); for a calculation
    that gives the charge density, ``output.ppo`` and ``density.filplot`` too,
    checked against the digests of the post-processing (``input.ppi``, as
    prepared, stays in place);
@@ -42,13 +43,16 @@ from triboworkflow.core.store import Attempt, AttemptFile, file_digest, read_rec
 from triboworkflow.core.store.atomic import write_json
 
 from .layout import (ATTEMPTS_DIR, CLAIM_FILE, DENSITY_FILE, OUTPUT_FILE, PP_OUTPUT_FILE,
-                     RUN_INPUT_FILE, STRUCTURE_OUT_FILE, attempt_dir, calc_dir, system_dir)
+                     RUN_INPUT_FILE, STRUCTURE_OUT_FILE, TRAJECTORY_FILE, attempt_dir, calc_dir,
+                     system_dir)
 
 _CLAIM_KEYS = ('n', 'job_id', 'host', 'pid', 'since')
 RESTART_COUNT_KEY = 'restart_count'
 # Files of an attempt, moved to its archive: of the engine, the final
-# structure, and of the post-processing of the charge density.
-ATTEMPT_FILES = (RUN_INPUT_FILE, OUTPUT_FILE, STRUCTURE_OUT_FILE, PP_OUTPUT_FILE, DENSITY_FILE)
+# structure, the frames of a relaxation, and of the post-processing of the
+# charge density.
+ATTEMPT_FILES = (RUN_INPUT_FILE, OUTPUT_FILE, STRUCTURE_OUT_FILE, TRAJECTORY_FILE,
+                 PP_OUTPUT_FILE, DENSITY_FILE)
 # Files of an attempt that only a worker writes, never there without a claim.
 _RUN_FILES = (RUN_INPUT_FILE, OUTPUT_FILE, PP_OUTPUT_FILE, DENSITY_FILE)
 

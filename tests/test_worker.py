@@ -453,7 +453,22 @@ def test_results_read_at_the_end_of_the_attempt(run, calculation, caplog):
     expected = pwo.relaxed(s) if calculation == 'relax' else pwo.structure_in(s).cart_coords
     assert np.allclose(final.cart_coords, expected, atol=1e-8)
     assert final.labels == ['Fe1', 'H']
+    # Every ionic step of a relaxation, for the user.
+    assert (calc_path(run, 'aa') / layout.TRAJECTORY_FILE).is_file() == (calculation == 'relax')
     assert caplog.records == []
+
+
+@posix_only
+def test_the_trajectory_of_a_relaxation_is_archived_with_its_attempt(run):
+    s = pwo.structure()
+    manifest = run(output=pwo.pw_output(s, 'relax', forces=FORCES), input_text=pwi('relax'))
+    with_structure(run, s)
+    Worker(manifest, clock=Clock(0.0)).run()
+    path = calc_path(run, 'aa')
+    trajectory = (path / layout.TRAJECTORY_FILE).read_bytes()
+    assert archive_attempt(run.run_dir, SYSTEM, 'pes_scf/aa') == 1
+    assert (path / 'attempts' / '1' / layout.TRAJECTORY_FILE).read_bytes() == trajectory
+    assert not (path / layout.TRAJECTORY_FILE).exists()
 
 
 @posix_only

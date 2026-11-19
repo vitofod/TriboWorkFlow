@@ -102,6 +102,9 @@ def header(s, calculation='scf', version='7.2', species=SPECIES, md5_lines=None,
                                              BOHR_TO_ANGSTROM / alat), 1):
         lines.append(f'{n:10d}           {site.label:3s}tau({n:4d}) = ({x:12.7f}{y:12.7f}'
                      f'{z:12.7f}  )')
+    # The k-points, as printed when they are too many to list (ASE's reader needs the line).
+    lines += ['', '     number of k points=   150  Marzari-Vanderbilt smearing, width (Ry)=  '
+              '0.0100', '', "     Number of k-points >= 100: set verbosity='high' to print them."]
     return lines + ['']
 
 
@@ -111,6 +114,7 @@ def scf_cycle(nat, energy, forces=None, stress=None, verbosity_high=False, dispe
              '     iteration #  1     ecut=    30.00 Ry     beta= 0.30',
              f'     total energy              = {energy + 0.01:17.8f} Ry', '',
              '     End of self-consistent calculation', '',
+             "     Number of k-points >= 100: set verbosity='high' to print the bands.", '',
              f'!    total energy              = {energy:17.8f} Ry',
              '     smearing contrib. (-TS)   =      -0.00270760 Ry',
              f'     internal energy E=F+TS    = {energy + 0.0027076:17.8f} Ry', '',

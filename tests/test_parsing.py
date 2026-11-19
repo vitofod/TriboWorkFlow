@@ -12,7 +12,7 @@ import pytest
 import pwo_helpers as pwo
 from triboworkflow.core import store
 from triboworkflow.core.structures import extxyz_text, read_structure
-from triboworkflow.engines.qe.results import Parsed
+from triboworkflow.engines.qe.results import BOHR_TO_ANGSTROM, RY_TO_EV, Parsed
 from triboworkflow.execution import layout, parsing
 from triboworkflow.execution.parsing import parse_calculation, with_parsed
 
@@ -98,6 +98,81 @@ def test_final_structure_not_written_fails(tmp_path, monkeypatch):
     assert (parsed.parsing, parsed.results, parsed.structure) == ('failed', None, None)
     assert parsed.reason == 'structure_out.extxyz not written: disk full'
     assert parsed.observed is not None
+
+
+# --- trajectory of a relaxation ---------------------------------------------------------------
+
+def read_frames(path):
+    import ase.io
+    return ase.io.read(path / layout.TRAJECTORY_FILE, index=':', format='extxyz')
+
+
+def test_trajectory_of_a_relaxation_has_every_ionic_step(tmp_path):
+    s = pwo.structure(if_pos=[[0, 0, 1], [1, 1, 1]])
+    output = pwo.pw_output(s, 'relax', energy=-31.1, forces=FORCES, steps=3,
+                           final_if_pos=[[0, 0, 1], [1, 1, 1]])
+    _, path = calculation(tmp_path, output, s=s)
+    parsed = parse_calculation(path)
+    assert parsed.parsing == 'ok'
+    frames = read_frames(path)
+    # One frame per SCF cycle: the header, then the positions after each ionic step.
+    assert len(frames) == 3
+    energies = [frame.get_potential_energy() for frame in frames]
+    # With the constants of QE, not those of ASE's reader (3.7e-5 eV apart here): the last
+    # frame has the energy and the forces of the record.
+    assert np.allclose(energies, np.array([-30.9, -31.0, -31.1]) * RY_TO_EV, rtol=0, atol=1e-7)
+    assert energies[-1] == pytest.approx(parsed.results['output']['energy'], abs=1e-7)
+    # The forces as printed: the constraints of the frames are not applied.
+    forces = [frame.get_forces(apply_constraint=False) for frame in frames]
+    assert np.allclose(forces[-1], parsed.results['output']['forces'], atol=1e-8)
+    assert np.allclose(forces[0], np.asarray(FORCES) * RY_TO_EV / BOHR_TO_ANGSTROM, atol=1e-8)
+    # Positions of the output (alat units in the header, angstrom after); cell, labels and
+    # constraints of the input.
+    expected = pwo.structure_in(s)
+    assert np.allclose(frames[0].positions, expected.cart_coords, atol=1e-5)
+    assert np.allclose(frames[1].positions, s.cart_coords, atol=1e-8)
+    for k in range(3):
+        frame = read_structure(path / layout.TRAJECTORY_FILE, format='extxyz', frame=k)
+        assert np.allclose(frame.lattice.matrix, expected.lattice.matrix, rtol=0, atol=1e-12)
+        assert frame.labels == ['Fe1', 'H']
+        assert frame.site_properties['if_pos'] == [[0, 0, 1], [1, 1, 1]]
+
+
+def test_trajectory_of_a_relaxation_cut_short_or_not_converged(tmp_path):
+    s = pwo.structure()
+    # Stopped before its end (e.g. the walltime): nothing is parsed, the frames are kept.
+    output = pwo.pw_output(s, 'relax', forces=FORCES, steps=3, job_done=False)
+    cut = output[:output.index('     bfgs converged')]
+    _, path = calculation(tmp_path, cut)
+    assert parse_calculation(path) == Parsed(None)
+    assert len(read_frames(path)) == 3
+    assert not (path / layout.STRUCTURE_OUT_FILE).exists()
+
+
+def test_no_trajectory_for_a_scf_or_without_ionic_step(tmp_path, caplog):
+    _, path = calculation(tmp_path, pwo.pw_output(pwo.structure(), 'scf', forces=FORCES),
+                          calculation='scf')
+    assert parse_calculation(path).parsing == 'ok'
+    assert not (path / layout.TRAJECTORY_FILE).exists()
+    # A relaxation stopped in its first SCF cycle: no frame, no file, no warning.
+    text = pwo.pw_output(pwo.structure(), 'relax', forces=FORCES, job_done=False)
+    _, path = calculation(tmp_path / 'first', text[:text.index('     Self-consistent')])
+    caplog.set_level('INFO')
+    assert parse_calculation(path) == Parsed(None)
+    assert not (path / layout.TRAJECTORY_FILE).exists()
+    assert 'no ionic step with results' in caplog.text and 'WARNING' not in caplog.text
+
+
+def test_trajectory_not_written_is_only_a_warning(tmp_path, monkeypatch, caplog):
+    _, path = calculation(tmp_path, pwo.pw_output(pwo.structure(), 'relax', forces=FORCES))
+
+    def broken(*args):
+        raise RuntimeError('unreadable')
+    monkeypatch.setattr(parsing, 'trajectory_text', broken)
+    parsed = parse_calculation(path)
+    assert parsed.parsing == 'ok' and (path / layout.STRUCTURE_OUT_FILE).is_file()
+    assert not (path / layout.TRAJECTORY_FILE).exists()
+    assert 'trajectory.extxyz not written: RuntimeError: unreadable' in caplog.text
 
 
 def test_with_parsed_gives_the_reason_to_the_attempt(tmp_path):
