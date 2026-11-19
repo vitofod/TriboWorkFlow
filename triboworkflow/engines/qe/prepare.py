@@ -29,7 +29,9 @@ included.
 settings give now: equal, different only in keys of class ``'attempt'`` or
 ``'resource'`` (``keys.py``), whose values are listed, or different elsewhere.
 Each key is alone on its line (``pwi.py``), so the comparison goes line by
-line.
+line. ``with_resources`` gives an input prepared earlier with the keys of
+class ``'resource'`` (e.g. ``pseudo_dir``) of the one the settings give now,
+for a relaunch.
 """
 
 import re
@@ -41,7 +43,7 @@ from triboworkflow.core.store.record import split_calc_id
 from triboworkflow.core.structures import (calc_type_if_pos, extxyz_text, load_structure,
                                            structure_differences, with_if_pos)
 
-from .keys import key_class
+from .keys import key_class, normal_key
 from .model import ENGINE, PROGRAM, energy_model, input_fingerprint
 from .ppi import density_input, disk_io_problem
 from .pwi import kpoints_card, pw_input, workflow_input
@@ -119,6 +121,71 @@ def input_differences(kept, new):
     return InputDifference('attempt', keys) if keys else InputDifference('other')
 
 
+def _resource_lines(text):
+    """``{(NAMELIST, key): (line, value)}`` of the keys of class ``'resource'`` of an input."""
+    lines, namelist = {}, None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if namelist is None and stripped.startswith('&'):
+            namelist = stripped[1:].upper()
+        elif namelist is not None and stripped == '/':
+            namelist = None
+        elif namelist is not None:
+            match = _ENTRY.fullmatch(line)
+            if match and key_class(match.group(1)) == 'resource':
+                lines[(namelist, normal_key(match.group(1)))] = (line, match.group(2))
+    return lines
+
+
+def with_resources(kept, new):
+    """The input ``kept`` with the keys of class ``'resource'`` as the input ``new`` writes them.
+
+    Every other line of ``kept`` stays as it is, the keys of the attempts
+    included. A key of the resources of ``new`` missing from ``kept`` is
+    written at the end of its namelist; one of ``kept`` missing from ``new``
+    is removed.
+
+    Parameters
+    ----------
+    kept, new : str
+        Texts of an input prepared earlier and of the one prepared now.
+
+    Returns
+    -------
+    text : str
+        The input ``kept`` with those keys.
+    keys : tuple of (str, str or None, str or None)
+        Each key changed (``namelists.<NAME>.<key>``), with its value in
+        ``kept`` and in ``new`` as written, None where the key is absent.
+    """
+    wanted, have = _resource_lines(new), _resource_lines(kept)
+    out, namelist = [], None
+    for line in kept.splitlines():
+        stripped = line.strip()
+        if namelist is None and stripped.startswith('&'):
+            namelist = stripped[1:].upper()
+        elif namelist is not None and stripped == '/':
+            out += [text for (name, key), (text, _) in wanted.items()
+                    if name == namelist and (name, key) not in have]
+            namelist = None
+        elif namelist is not None:
+            match = _ENTRY.fullmatch(line)
+            if match and key_class(match.group(1)) == 'resource':
+                found = wanted.get((namelist, normal_key(match.group(1))))
+                if found is not None:
+                    out.append(found[0])
+                continue
+        out.append(line)
+
+    def value(lines, place):
+        return lines[place][1] if place in lines else None
+
+    keys = tuple((f'namelists.{name}.{key}', value(have, (name, key)), value(wanted, (name, key)))
+                 for name, key in dict.fromkeys([*have, *wanted])
+                 if value(have, (name, key)) != value(wanted, (name, key)))
+    return '\n'.join(out) + ('\n' if kept.endswith('\n') else ''), keys
+
+
 @dataclass(frozen=True)
 class QECalculation:
     """A pw.x calculation as the settings give it now, nothing written.
@@ -151,6 +218,10 @@ class QECalculation:
     def input_differences(self, kept):
         """``input_differences`` of an input on disk from this one."""
         return input_differences(kept, self.input_text)
+
+    def with_resources(self, kept):
+        """``with_resources`` of an input on disk: with the keys of the resources of this one."""
+        return with_resources(kept, self.input_text)
 
     def structure_differences(self, kept):
         """``structure_differences`` of an extxyz on disk from this one."""

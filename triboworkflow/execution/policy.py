@@ -84,7 +84,11 @@ then runs with another parallelization, or one not known, is not reused
 (``core.store.restart_problem``): the user decides. Every other relaunch,
 after a crash or a kill above all, starts from scratch.
 
-``manual_launch`` gives the launch of a relaunch asked for by the user.
+``manual_launch`` gives the launch of a relaunch asked for by the user. A
+completed calculation whose results cannot be used (``unusable_results``,
+e.g. its charge density failed) runs again from scratch, pw.x and then pp.x;
+one whose results can be used only when the user asks for it (``redo``),
+also from scratch.
 """
 
 import logging
@@ -93,7 +97,7 @@ from pathlib import Path
 
 from ase.io.espresso import read_fortran_namelist
 
-from triboworkflow.core.store import read_record
+from triboworkflow.core.store import read_record, reuse_problem
 from triboworkflow.core.store.record import PER_PROCESS_STOPS
 from triboworkflow.engines.qe.status import PwOutputError, read_parallelization, read_pw_status
 
@@ -408,13 +412,42 @@ def decide(run_dir, state, setup):
         return make('manual', reason=f'{state.reason}; no relaunch decided: {error}')
 
 
+def unusable_results(record):
+    """Why the results of a calculation whose last attempt completed cannot be used.
+
+    Its output was not parsed, or its parsing failed, or the record does not
+    stand for its own fingerprint (``reuse_problem``: no results, an energy
+    model not fully known, an output of another energy model, a charge
+    density that failed). The fingerprint itself is compared with the
+    settings by the orchestrator.
+
+    Returns
+    -------
+    str or None
+        The reason, None if the results can be used.
+    """
+    k = len(record.attempts)
+    if record.status.parsing is None:
+        return f'attempt {k} completed, its output not parsed'
+    if record.status.parsing == 'failed':
+        return f'attempt {k} completed, its output not parsed: {record.attempts[-1].parse_error}'
+    problem = reuse_problem(record, record.fingerprint)
+    if problem is not None:
+        return f'attempt {k} completed, its results cannot be used: {problem}'
+    return None
+
+
 def manual_launch(reconciler, system, calc_id, setup, group=None, level=None,
-                  from_scratch=False):
+                  from_scratch=False, redo=False):
     """Launch of a relaunch asked for by the user.
 
     It is allowed only once the worker of the last attempt is surely over:
     the attempt is not running, and the calculation has no claim, or the run
-    of the job of its claim is over (``Reconciler.run_over``). The new attempt
+    of the job of its claim is over (``Reconciler.run_over``). A completed
+    calculation whose results cannot be used (``unusable_results``) is
+    launched again from scratch, pw.x and then pp.x for one that gives the
+    charge density; one whose results can be used only with ``redo``, also
+    from scratch. The new attempt
     is of kind ``'manual'``, at the level of the last attempt with its input,
     or at ``level`` with the values of that level (``level_values``, from the
     effective values at level 1, as for a remedy), and keeps the history;
@@ -447,6 +480,8 @@ def manual_launch(reconciler, system, calc_id, setup, group=None, level=None,
         the level of the last attempt by default.
     from_scratch : bool, optional
         Start from scratch even when the last attempt could be continued.
+    redo : bool, optional
+        Run again a completed calculation whose results can be used.
 
     Returns
     -------
@@ -455,23 +490,29 @@ def manual_launch(reconciler, system, calc_id, setup, group=None, level=None,
     Raises
     ------
     PolicyError
-        If the calculation is completed, never launched, or its worker may
-        still run; if the launch of the last attempt is not recorded and the
-        groups do not give it; if ``group`` is given and not needed; if
-        ``level`` is not a level, cannot be computed, or is asked for an
-        attempt that runs as it was listed. The message says the state found.
+        If the calculation is completed with results that can be used and
+        ``redo`` is false, never launched, or its worker may still run; if
+        the launch of the last attempt is not recorded and the groups do not
+        give it; if ``group`` is given and not needed; if ``level`` is not a
+        level, cannot be computed, or is asked for an attempt that runs as it
+        was listed. The message says the state found.
     """
     where = f'{system}/{calc_id}'
     if level is not None and (type(level) is not int or not 1 <= level <= MAX_LEVEL):
         raise PolicyError(f'{where}: level {level!r} is not an integer from 1 to {MAX_LEVEL}')
     state = reconciler.calculation(system, calc_id)
+    run_dir = Path(reconciler.run_dir)
+    again = None  # why a completed calculation runs again
     if state.state == 'completed':
-        raise PolicyError(f'{where} is completed: nothing to run again')
+        again = unusable_results(read_record(system_dir(run_dir, system), calc_id))
+        if again is None and not redo:
+            raise PolicyError(f'{where} is completed and its results can be used: nothing to run '
+                              'again (--redo runs it again from scratch)')
+        again = again or 'its results can be used, run again as asked'
     if state.state == 'new':
         raise PolicyError(f'{where} was never launched: the workflow launches it')
     if state.state in ('pending', 'running', 'held', 'uncertain'):
         raise PolicyError(f'{where} is {state.state} ({state.reason}): its worker may still run')
-    run_dir = Path(reconciler.run_dir)
     if not state.released:
         path = calc_dir(run_dir, system, calc_id)
         claim = read_claim(path / CLAIM_FILE)
@@ -512,8 +553,12 @@ def manual_launch(reconciler, system, calc_id, setup, group=None, level=None,
                 initial = initial or initial_values(path, record, calculation)
             values = level_values(level, calculation, initial)
             initial = initial if level > 1 else {}
-        restart, why = (False, 'from scratch, as asked') if from_scratch else \
-            can_restart(path, last, calculation, setup)
+        if again is not None:
+            restart, why = False, f'from scratch: {again}'
+        elif from_scratch:
+            restart, why = False, 'from scratch, as asked'
+        else:
+            restart, why = can_restart(path, last, calculation, setup)
     except (OSError, ValueError, WorkerError) as error:
         raise PolicyError(f'{where}: no relaunch at level {level or current}: {error}') from None
     logger.info('%s: manual attempt %d at level %d, %s', where, len(record.attempts) + 1,

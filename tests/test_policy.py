@@ -9,6 +9,8 @@ with the outputs where the policy reads the summary of pw.x; the
 calculations are then reconciled and decided as the workflow does.
 """
 
+import dataclasses
+
 import pytest
 
 from run_helpers import (CONVERGED, JOB_DONE, JOBSCRIPT_DIGEST, MAX_SECONDS, MAX_STEPS,
@@ -532,17 +534,59 @@ def test_attempt_not_taken_keeps_its_launch(run):
 
 
 @pytest.mark.parametrize('case, message', [
-    ('completed', 'is completed: nothing to run again'),
     ('new', 'was never launched'),
     ('no job id', 'the claim gives no job'),
 ])
 def test_manual_relaunch_refused(run, case, message):
     calc_id = run.calc()
-    if case == 'completed':
-        history(run, calc_id, made(1, 'initial', process='ended', stop='completed',
-                                   scf='converged'))
-    elif case == 'no job id':
+    if case == 'no job id':
         history(run, calc_id, made(1, 'initial'))
         run.claim(calc_id, 1, None)
     with pytest.raises(PolicyError, match=message):
         manual_launch(run.reconciler(), SYSTEM, calc_id, SETUP)
+
+
+COMPLETED = dict(status=store.Status('ended', 'converged', 'n/a', 'ok'), stop_reason='completed',
+                 clean_stop=True)
+
+
+def completed(run, **fields):
+    """A calculation whose attempt 1 completed in a job now over; its claim is still there.
+
+    With ``density`` in ``fields`` the calculation gives the charge density.
+    """
+    calc_id, job_id = started(run)
+    if 'density' in fields:
+        store.write_record(run.sdir, dataclasses.replace(run.record(calc_id), density=True))
+    run.finish(calc_id, **{**COMPLETED, **fields})
+    run.poll(60, **{job_id: 'COMPLETED'})
+    assert run.reconcile(calc_id).state == 'completed'
+    return calc_id
+
+
+def test_completed_with_usable_results_runs_again_only_with_redo(run, caplog):
+    calc_id = completed(run)
+    with pytest.raises(PolicyError, match=r'pes_scf/aa is completed and its results can be used: '
+                                          r'nothing to run again \(--redo runs it again from '
+                                          r'scratch\)'):
+        manual_launch(run.reconciler(), SYSTEM, calc_id, SETUP)
+    caplog.set_level('INFO')
+    launch = manual_launch(run.reconciler(), SYSTEM, calc_id, SETUP, redo=True)
+    assert launch == Launch(SYSTEM, calc_id, 2, 'manual', 1)
+    assert 'from scratch: its results can be used, run again as asked' in caplog.text
+
+
+@pytest.mark.parametrize('fields, reason', [
+    (dict(status=store.Status('ended', 'converged', 'n/a')),
+     'attempt 1 completed, its output not parsed'),
+    # pp.x failed after pw.x: the charge density is missing.
+    (dict(status=store.Status('ended', 'converged', 'n/a', 'ok', 'failed'),
+          density=store.DensityRun('pp.x', error='pp.x stopped on an error in routine postproc')),
+     'attempt 1 completed, its results cannot be used: charge density failed: pp.x stopped'),
+])
+def test_completed_with_results_not_usable_runs_again_from_scratch(run, fields, reason, caplog):
+    calc_id = completed(run, **fields)
+    caplog.set_level('INFO')
+    launch = manual_launch(run.reconciler(), SYSTEM, calc_id, SETUP)
+    assert (launch.n, launch.kind, launch.level, launch.restart) == (2, 'manual', 1, False)
+    assert f'from scratch: {reason}' in caplog.text

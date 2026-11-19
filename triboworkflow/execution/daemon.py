@@ -40,11 +40,23 @@ process); it returns an object with the ``run`` method of ``Orchestrator``.
 Before anything starts, the submission command of the scheduler is looked
 for (``require_scheduler``): away from the HPC machine nothing starts.
 
+Each pass runs in a process of its own (``pass_in_child``: the same module,
+action ``pass``), which builds the orchestrator again with the factory, runs
+one pass (``Orchestrator.logged_pass``) and tells by its exit code whether
+the passes are over; the background process only waits between passes. The
+login nodes of some HPC machines stop a process that has used a given CPU
+time (on Leonardo 600 s, ``ulimit -t``): so each pass has the whole limit,
+the background process lasts, and a pass stopped by a signal leaves a line
+in the log. The next pass completes it, as after any interruption; after
+``MAX_PASSES_KILLED`` such passes in a row the orchestrator stops, since the
+limit is then too low for a pass.
+
 The handler of SIGTERM only records the request (``StopRequest``). Python
 runs it in the main thread between two instructions, also while that thread
 holds a lock or writes to the log, so the handler takes no lock and writes
 nothing. The orchestrator sees the request after each pass and while it
-waits between two passes, which it does in short steps.
+waits between two passes, which it does in short steps. The pass under way
+is not signalled: it ends, then the background process stops.
 
 Notes
 -----
@@ -82,10 +94,15 @@ PID_FILE = 'orchestrator.pid'
 LOG_FILE = 'orchestrator.log'
 MODULE = 'triboworkflow.execution.daemon'
 
-# Seconds start() waits for the process to confirm its start.
-START_TIMEOUT = 120.0
+# Seconds start() waits for the process to confirm its start; on a loaded login node building
+# the orchestrator may take minutes.
+START_TIMEOUT = 600.0
 # Longest sleep, in seconds, between two checks of a stop request.
 STOP_STEP = 0.2
+# Exit codes of the process of a pass: passes to go on, passes over.
+PASS_GOES_ON, PASS_OVER = 0, 3
+# Passes stopped by a signal in a row after which the orchestrator stops.
+MAX_PASSES_KILLED = 2
 
 
 class DaemonError(RuntimeError):
@@ -408,6 +425,78 @@ def _cpu_limit():
     return resource.getrlimit(resource.RLIMIT_CPU)
 
 
+def pass_in_child(run_dir, factory, factory_args=(), python=None):
+    """A function that runs pass ``n`` of the orchestrator in a process of its own.
+
+    The process (``python -m triboworkflow.execution.daemon pass``) builds the
+    orchestrator with the factory and runs one pass (``run_one_pass``); its
+    log goes where the log of this process goes.
+
+    Parameters
+    ----------
+    run_dir : path-like
+        Directory of the run.
+    factory : str
+        ``"module:function"`` building the orchestrator.
+    factory_args : sequence of str, optional
+        Arguments of the factory after the directory.
+    python : str or None, optional
+        Interpreter of the process; the one running this code by default.
+
+    Returns
+    -------
+    callable
+        ``one_pass(n)`` → whether the passes are over, for
+        ``Orchestrator.run``. A pass stopped by a signal is logged and the
+        passes go on.
+
+    Raises
+    ------
+    DaemonError
+        From ``one_pass``: if the process of a pass ends with an error, or
+        ``MAX_PASSES_KILLED`` passes in a row are stopped by a signal.
+    """
+    killed = []
+
+    def one_pass(n):
+        code = subprocess.call([python or sys.executable, '-m', MODULE, 'pass', str(run_dir),
+                                factory, str(n), *map(str, factory_args)],
+                               stdin=subprocess.DEVNULL, cwd=run_dir)
+        if code in (PASS_GOES_ON, PASS_OVER):
+            killed.clear()
+            return code == PASS_OVER
+        if code >= 0:
+            raise DaemonError(f'pass {n} ended with code {code}: see the lines above in the log')
+        killed.append(n)
+        try:
+            name = signal.Signals(-code).name
+        except ValueError:
+            name = str(-code)
+        logger.error('Pass %d: its process was stopped by the signal %s (on a login node, '
+                     'likely its limit of CPU time, "ulimit -t"); the next pass completes it',
+                     n, name)
+        if len(killed) >= MAX_PASSES_KILLED:
+            raise DaemonError(f'passes {", ".join(map(str, killed))} stopped by a signal in a '
+                              'row: the orchestrator stops. Is the limit of CPU time of the '
+                              'login node ("ulimit -t") too low for a pass?')
+        return False
+
+    return one_pass
+
+
+def run_one_pass(run_dir, factory, n, factory_args=()):
+    """Body of the process of a pass: build the orchestrator and run its pass ``n``.
+
+    Returns
+    -------
+    int
+        ``PASS_OVER`` when no step waits or runs, else ``PASS_GOES_ON``.
+    """
+    orchestrator = load_factory(factory)(run_dir, *factory_args)
+    _, over = orchestrator.logged_pass(n)
+    return PASS_OVER if over else PASS_GOES_ON
+
+
 def serve(run_dir, factory, token, factory_args=()):
     """Body of the background process: run the orchestrator until it is done or stopped.
 
@@ -415,8 +504,9 @@ def serve(run_dir, factory, token, factory_args=()):
     with ``token`` is adopted, before anything of the run is loaded, and held
     until the end; then the orchestrator is built, by the factory called with
     the directory and ``factory_args``, and the pid of this process written
-    in the pid file, which confirms the start to ``start``. The pid file and
-    the lock are removed at the end, if they still hold ``token``.
+    in the pid file, which confirms the start to ``start``. Each pass then
+    runs in a process of its own (``pass_in_child``). The pid file and the
+    lock are removed at the end, if they still hold ``token``.
 
     Raises
     ------
@@ -443,7 +533,8 @@ def serve(run_dir, factory, token, factory_args=()):
         write_json(path, {**data, 'pid': os.getpid()})
         logger.info('Orchestrator of %s running: pid %d', run_dir, os.getpid())
         logger.info('CPU time limit of the process (soft, hard): %s', _cpu_limit())  # To remove
-        report = orchestrator.run(sleep=request.wait, stop=request.asked)
+        report = orchestrator.run(sleep=request.wait, stop=request.asked,
+                                  one_pass=pass_in_child(run_dir, factory, factory_args))
         logger.info('Orchestrator %s', 'stopped by a signal' if request.asked() else 'done')
         return report
     finally:
@@ -455,7 +546,9 @@ def serve(run_dir, factory, token, factory_args=()):
 def main(argv=None):
     """Entry point of the background process.
 
-    ``python -m triboworkflow.execution.daemon serve <run> <factory> <token> [arg ...]``.
+    ``python -m triboworkflow.execution.daemon serve <run> <factory> <token> [arg ...]``, and
+    for one pass ``... pass <run> <factory> <n> [arg ...]``, whose exit code is that of
+    ``run_one_pass``.
     """
     parser = argparse.ArgumentParser(description='Orchestrator of a run in the background.')
     sub = parser.add_subparsers(dest='action', required=True)
@@ -464,8 +557,15 @@ def main(argv=None):
     serve_parser.add_argument('factory', help='"module:function" building the orchestrator')
     serve_parser.add_argument('token', help='token of the pid file written by start()')
     serve_parser.add_argument('factory_args', nargs='*', help='arguments of the factory')
+    pass_parser = sub.add_parser('pass', help='run one pass (started by the orchestrator)')
+    pass_parser.add_argument('run_dir')
+    pass_parser.add_argument('factory', help='"module:function" building the orchestrator')
+    pass_parser.add_argument('n', type=int, help='number of the pass')
+    pass_parser.add_argument('factory_args', nargs='*', help='arguments of the factory')
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    if args.action == 'pass':
+        return run_one_pass(args.run_dir, args.factory, args.n, args.factory_args)
     serve(args.run_dir, args.factory, args.token, args.factory_args)
     return 0
 

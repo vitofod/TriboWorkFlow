@@ -31,6 +31,10 @@ nothing is overwritten:
 The changes made to the settings in a new input (e.g. ``nstep = 1`` in an
 scf) are logged, one line per calculation and change, with the values.
 
+A relaunch by hand writes in ``input.pwi`` the keys of the resources that the
+settings give now (``update_resources``, e.g. ``pseudo_dir``), which are out
+of the fingerprint; the keys of the attempts stay as prepared.
+
 A replacement, asked by the user, moves the directories of the calculations
 ``kept`` and ``changed`` to ``<run>/replaced/`` (``replacement.py``), so that
 they are prepared again. Every check comes before any change, and the
@@ -69,7 +73,7 @@ from triboworkflow.engines.qe.prepare import qe_calculation
 from .archive import read_claim
 from .layout import (CLAIM_FILE, DENSITY_FILE, INPUT_FILE, OUTDIR, PP_INPUT_FILE,
                      STRUCTURE_IN_FILE, calc_dir, calc_prefix, system_dir)
-from .reconcile import read_groups
+from .reconcile import jobs_of_the_workers, read_groups
 from .replacement import new_replacement, retired_launches, unfinished
 
 logger = logging.getLogger(__name__)
@@ -299,6 +303,46 @@ def prepare_calculations(run_dir, system, calcs, step=None):
     return [calc.calc_id for calc in calcs]
 
 
+def update_resources(run_dir, system, calc):
+    """Write in ``input.pwi`` of a calculation the keys of the resources the settings give now.
+
+    For a relaunch: the keys of class ``'resource'`` (e.g. ``pseudo_dir``)
+    are out of the fingerprint, so a calculation kept as prepared takes
+    those of the settings as they are now; each key changed is logged. The
+    keys of the attempts stay as prepared, since the levels of the remedies
+    start from them. Nothing is written for an input that differs from the
+    settings elsewhere (``input_differences``), nor for a calculation
+    without ``with_resources``.
+
+    Parameters
+    ----------
+    run_dir : path-like
+        Directory of the run.
+    system : str
+    calc
+        The calculation as the settings make it now (e.g. ``QECalculation``).
+
+    Returns
+    -------
+    tuple of (str, str or None, str or None)
+        The keys changed, with the value kept before and the one written.
+    """
+    if not hasattr(calc, 'with_resources'):
+        return ()
+    path = calc_dir(run_dir, system, calc.calc_id) / INPUT_FILE
+    kept = path.read_text(encoding='utf-8')
+    if calc.input_differences(kept).kind != 'attempt':
+        return ()
+    text, keys = calc.with_resources(kept)
+    if keys:
+        write_text(path, text)
+    for key, old, new in keys:
+        logger.info('%s/%s: %s: %s = %s from the settings, was %s', system, calc.calc_id,
+                    INPUT_FILE, key, 'absent' if new is None else new,
+                    'absent' if old is None else old)
+    return keys
+
+
 def _write(run_dir, system, calc):
     """Write inputs, extxyz and, last, the record of a calculation; log its changes."""
     path = calc_dir(run_dir, system, calc.calc_id)
@@ -387,7 +431,11 @@ def start_replacement(run_dir, system, step, calcs, manager, command, at):
             elif manager.partly_submitted(name) is not None:
                 blockers.append(_partly_submitted(name, step, *manager.partly_submitted(name)))
             else:
-                blockers.append(f'group {name}: {reason}')
+                found = jobs_of_the_workers(run_dir, name, manager.jobs) \
+                    if manager.groups.get(name, {}).get('unknown') else []
+                blockers.append(f'group {name}: {reason}' + (
+                    f'; its calculations name job {", ".join(found)}, not registered: once checked, '
+                    f'"triboworkflow resolve-submission {name} --job-id ID"' if found else ''))
         if blockers:
             problems.append(f'{calc_id}: {"; ".join(blockers)}')
         entries[calc_id] = {'reasons': list(check.reasons + check.warnings),
@@ -409,7 +457,8 @@ def _claim_problem(path, manager):
     None also when there is no claim. The worker of the claim may still run
     unless the claim names a job that the job manager follows and that is in
     a final state confirmed by its last query (as ``JobManager.open_reason``
-    asks of the jobs of a group). The scheduler is not asked.
+    asks of the jobs of a group). The scheduler is not asked here:
+    ``Orchestrator.replace_step`` asks it first on the HPC machine.
     """
     if not (path / CLAIM_FILE).exists():
         return None
@@ -428,8 +477,8 @@ def _claim_problem(path, manager):
             and manager.scheduler.is_final(job['state'])):
         state = 'not queried yet' if job['state'] is None else job['state']
         return (f'job {job_id} of its claim is not in a final state confirmed by the last query '
-                f'({state}); once it is over, query it again on the HPC machine (e.g. '
-                '"triboworkflow start")')
+                f'({state}); once it is over, run the command again on the HPC machine, where it '
+                'asks the scheduler')
     return None
 
 

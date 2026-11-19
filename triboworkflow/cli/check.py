@@ -9,7 +9,12 @@ As ``settings`` of Xsorb (``xsorb/cli/settings.py``, CC BY 4.0): a summary of
 the settings read.
 """
 
+import logging
+from pathlib import Path
+
 from .command import CLICommandBase
+
+logger = logging.getLogger(__name__)
 
 
 class CLICommand(CLICommandBase):
@@ -20,8 +25,10 @@ path of the field. The advice on the values changed by the relaunches is
 printed as a warning. The walltime and the jobs per group of each step are
 printed; the steps without a walltime in [execution.<step>] (they get
 24:00:00) and, with Slurm, the jobscripts with a --time, which the walltimes
-replace, are printed as warnings. The placeholders left in the settings and
-in the jobscripts (e.g. <venv>) are listed. Nothing is written.
+replace, are printed as warnings. A relative pseudo_dir is printed as a
+warning: pw.x reads it from the directory of each calculation, not from the
+folder of config.toml. The placeholders left in the settings and in the
+jobscripts (e.g. <venv>) are listed. Nothing is written.
 
 Example:
  $ triboworkflow check
@@ -57,4 +64,22 @@ Example:
             print(f'Execution: scheduler {execution.scheduler}, groups: {groups}')
             if settings.interface is not None:
                 print_step_jobs(settings)
+        note = pseudo_dir_note(settings)
+        if note is not None:
+            logger.warning('%s', note)
         print_placeholders(settings)
+
+
+def pseudo_dir_note(settings):
+    """Warning on a relative ``pseudo_dir``, or None.
+
+    pw.x runs in the directory of each calculation, where a relative path is
+    not the one written next to ``config.toml``.
+    """
+    key = settings.namelists.key('CONTROL', 'pseudo_dir')
+    value = settings.namelists.CONTROL[key] if key is not None else None
+    if not isinstance(value, str) or Path(value).is_absolute():
+        return None
+    return (f'namelists.CONTROL.{key} = {value!r} is a relative path: pw.x reads it from the '
+            'directory of each calculation (systems/<system>/<step>/<label>/), not from the '
+            'folder of config.toml; give an absolute path')

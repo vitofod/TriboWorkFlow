@@ -336,6 +336,51 @@ def run_launches(run_dir):
     return launch_index(read_groups(run_dir), retired_launches(run_dir))
 
 
+def jobs_of_the_workers(run_dir, name, known=()):
+    """Jobs whose workers took calculations of a group, as the claims and the records tell.
+
+    For a submission of outcome not known: the worker of a job writes its id
+    in the claim and in the attempt of each calculation it takes, so a job of
+    the group that the registry lacks shows there. Only the attempts that the
+    group lists are read. The job is not registered here: the user checks it
+    (a worker started by hand in another job would write that job) and gives
+    it to ``JobManager.resolve_submission``.
+
+    Parameters
+    ----------
+    run_dir : path-like
+        Directory of the run.
+    name : str
+        Name of the group.
+    known : collection of str, optional
+        Ids already registered, left out.
+
+    Returns
+    -------
+    list of str
+        The ids found, sorted; empty for a group without manifest (an
+        analysis) or whose claims and records name no other job.
+    """
+    run_dir = Path(run_dir)
+    path = job_dir(run_dir, name) / MANIFEST_FILE
+    if not path.is_file():
+        return []
+    manifest, _ = read_manifest(path)
+    found = set()
+    for launch in manifest.calculations:
+        claim_path = calc_dir(run_dir, launch.system, launch.calc_id) / CLAIM_FILE
+        claim = read_claim(claim_path) if claim_path.is_file() else None
+        if claim is not None and claim['n'] == launch.n and claim['job_id'] is not None:
+            found.add(str(claim['job_id']))
+        try:
+            record = read_record(system_dir(run_dir, launch.system), launch.calc_id)
+        except (OSError, ValueError):
+            continue
+        if len(record.attempts) >= launch.n and record.attempts[launch.n - 1].job_id is not None:
+            found.add(str(record.attempts[launch.n - 1].job_id))
+    return sorted(found - set(map(str, known)))
+
+
 class LaunchError(ValueError):
     """The launch of an attempt that the manifests do not give for certain."""
 

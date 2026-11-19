@@ -66,9 +66,9 @@ never the static one. ``adhesion`` reads the surface chosen in
      and submitted; when every calculation is completed, ``Step.analyse``
      writes the entries and the step is ``completed``; a calculation
      completed whose output was not parsed, or whose results cannot be used
-     (``_unusable``), needs the user and is never relaunched; when what is
-     left needs the user, the step has ``failed``, with the calculations and
-     why;
+     (``policy.unusable_results``), needs the user and is never relaunched
+     automatically; when what is left needs the user, the step has
+     ``failed``, with the calculations and why;
 
 4. saves the state in ``<run>/orchestrator.json`` and returns the report.
 
@@ -130,8 +130,9 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from triboworkflow.core.guard import NotOnHPCError
 from triboworkflow.core.store import (PrerequisiteError, check_prerequisites, file_digest,
-                                      read_record, read_system, reuse_problem)
+                                      read_record, read_system)
 from triboworkflow.core.store.atomic import read_json, write_json
 from triboworkflow.core.store.record import check_keys
 
@@ -142,9 +143,9 @@ from .jobs import (MANIFEST_FILE, OUTCOME_FILE, SUBMITTED_FILE, Analysis, JobErr
                    group_step, is_analysis, is_withdrawn, write_analysis, write_job)
 from .layout import CLAIM_FILE, JOBS_DIR, calc_dir, job_dir, system_dir
 from .manager import HOLD_MESSAGES
-from .policy import LaunchSetup, PolicyError, decide, manual_launch
+from .policy import LaunchSetup, PolicyError, decide, manual_launch, unusable_results
 from .preparation import (check_calculations, complete_replacement, prepare_calculations,
-                          start_replacement)
+                          start_replacement, update_resources)
 from .reconcile import LaunchError, Reconciler, launch_for, run_launches
 from .replacement import mark_done, unfinished
 from .scheduler import REVERSIBLE_STATES
@@ -229,7 +230,7 @@ def cpu_note():
     stop a process that has used a given CPU time; the line of each pass shows how
     much this process has used, so that a process that disappears can be compared
     with that limit (``daemon.serve`` logs the limit). Remove it, with its use in
-    ``Orchestrator.run``, before the release.
+    ``Orchestrator.logged_pass``, before the release.
     """
     return f'; CPU time of the process {time.process_time():.1f} s'
 
@@ -404,30 +405,6 @@ def order_steps(requested, graph):
     return ordered
 
 
-def _unusable(record):
-    """Why the results of a calculation whose last attempt completed cannot be used.
-
-    Its output was not parsed, or its parsing failed, or the record does not
-    stand for its own fingerprint (``reuse_problem``: no results, an energy
-    model not fully known, an output of another energy model). The
-    fingerprint itself is compared with the settings by ``_prepared_current``.
-
-    Returns
-    -------
-    str or None
-        The reason, None if the results can be used.
-    """
-    k = len(record.attempts)
-    if record.status.parsing is None:
-        return f'attempt {k} completed, its output not parsed'
-    if record.status.parsing == 'failed':
-        return f'attempt {k} completed, its output not parsed: {record.attempts[-1].parse_error}'
-    problem = reuse_problem(record, record.fingerprint)
-    if problem is not None:
-        return f'attempt {k} completed, its results cannot be used: {problem}'
-    return None
-
-
 class Orchestrator:
     """Steps of a workflow for the systems of a run.
 
@@ -553,8 +530,21 @@ class Orchestrator:
         self._save()
         return self.report(written)
 
-    def run(self, sleep=time.sleep, max_passes=None, stop=None):
-        """Repeat ``run_pass`` every ``polling_interval`` seconds until no step waits or runs.
+    def logged_pass(self, number):
+        """``run_pass``, logged as pass ``number``; whether the passes are over.
+
+        Returns
+        -------
+        report : Report
+        over : bool
+            True when no step waits or runs, or the scheduler is in a dry run.
+        """
+        report = self.run_pass()
+        logger.info('Pass %d: %s%s', number, self.summary(report), cpu_note())
+        return report, report.finished or self.manager.scheduler.dry_run
+
+    def run(self, sleep=time.sleep, max_passes=None, stop=None, one_pass=None):
+        """Repeat a pass every ``polling_interval`` seconds until no step waits or runs.
 
         Parameters
         ----------
@@ -565,18 +555,24 @@ class Orchestrator:
         stop : callable or None, optional
             Called after each pass; a true value stops the loop (e.g. at a
             signal). The state of the last pass is saved.
+        one_pass : callable or None, optional
+            Runs pass ``n``, given its number, elsewhere (e.g. in a process of
+            its own, ``daemon.pass_in_child``) and returns whether the passes
+            are over; by default each pass runs here (``logged_pass``).
 
         Returns
         -------
-        Report
-            Of the last pass.
+        Report or None
+            Of the last pass; None when the passes ran elsewhere.
         """
         passes = 0
         while True:
-            report = self.run_pass()
             passes += 1
-            logger.info('Pass %d: %s%s', passes, self.summary(report), cpu_note())
-            if report.finished or self.manager.scheduler.dry_run:
+            if one_pass is None:
+                report, over = self.logged_pass(passes)
+            else:
+                report, over = None, one_pass(passes)
+            if over:
                 return report
             if (max_passes is not None and passes >= max_passes) or (stop and stop()):
                 return report
@@ -992,7 +988,7 @@ class Orchestrator:
         """Reconcile, decide and relaunch the calculations of a running step.
 
         A calculation completed counts as such only when its results can be
-        used (``_unusable``); otherwise it needs the user, with the reason.
+        used (``unusable_results``); otherwise it needs the user, with the reason.
         With ``analyse`` False, a step whose calculations are all completed
         stays running, to be analysed by ``analyse_step``.
         """
@@ -1013,7 +1009,7 @@ class Orchestrator:
             decision = decide(self.run_dir, state, setup)
             if decision.action == 'done':
                 try:
-                    why = _unusable(read_record(sdir, state.calc_id))
+                    why = unusable_results(read_record(sdir, state.calc_id))
                 except (OSError, ValueError) as error:
                     note('uncertain', state, f'record not read: {error}')
                     continue
@@ -1081,12 +1077,17 @@ class Orchestrator:
         return self.execution.walltime_of(name)
 
     def _group_name(self, system, name):
-        """``<system>.<step>.<k>``, with ``k`` one more than the groups of the step on disk."""
+        """``<system>.<step>.<k>``, with ``k`` one more than the groups of the step.
+
+        The groups on disk and those in the registry of the job manager count,
+        so that a folder of a group removed by hand does not give its name to
+        a new group while the registry still holds it.
+        """
         prefix = f'{system}.{name}.'
         root = self.run_dir / JOBS_DIR
-        taken = [int(p.name[len(prefix):]) for p in root.iterdir()
-                 if p.name.startswith(prefix) and p.name[len(prefix):].isdigit()] \
-            if root.is_dir() else []
+        names = [p.name for p in root.iterdir()] if root.is_dir() else []
+        taken = [int(group[len(prefix):]) for group in [*names, *self.manager.groups]
+                 if group.startswith(prefix) and group[len(prefix):].isdigit()]
         return f'{prefix}{max(taken, default=0) + 1}'
 
     # --- phases of one step ------------------------------------------------------
@@ -1160,7 +1161,10 @@ class Orchestrator:
         with nothing changed. Then the step goes back to waiting, as with
         ``retry``, the journal is marked done and the step is prepared. A
         replacement of this step not completed is completed first, with the
-        calculations of its journal.
+        calculations of its journal. On the HPC machine the jobs are first
+        recovered and asked for their state, as by ``relaunch_step``, so that
+        a job over since the last pass does not stop it; elsewhere their
+        states are those of the last query.
 
         Parameters
         ----------
@@ -1187,6 +1191,12 @@ class Orchestrator:
         """
         self._check_replacements(allow=(system, name))
         entry = self.entry(system, name)
+        self.manager.recover()
+        try:
+            self.manager.poll()
+        except NotOnHPCError:
+            logger.info('Not on the HPC machine: the states of the jobs are those of the last '
+                        'query')
         found = [r for r in unfinished(self.run_dir) if (r.system, r.step) == (system, name)]
         for replacement in found:
             logger.warning('Replacement %s not completed: completed now', replacement.path)
@@ -1369,7 +1379,7 @@ class Orchestrator:
         Done: the record has attempts, any claim is the one of the last
         attempt, no group lists a next attempt, the last attempt is not
         recorded as running and ended completed (``Status.summary``), and the
-        results of the record can be used (``_unusable``): its output was
+        results of the record can be used (``unusable_results``): its output was
         parsed, its energy model is fully known and the output agrees with
         it. Only files are read: claims, records and manifests.
         """
@@ -1398,7 +1408,7 @@ class Orchestrator:
                 why = f'attempt {k} recorded as running: its job may still run'
             elif record.attempts[-1].status.summary != 'completed':
                 why = f'attempt {k} {record.attempts[-1].status.summary}'
-            elif (why := _unusable(record)) is None:
+            elif (why := unusable_results(record)) is None:
                 continue
             missing.append(f'{calc_id}: {why}')
         return missing
@@ -1415,7 +1425,7 @@ class Orchestrator:
                                     'min_site_1.5; "status --calcs" lists them)')
         return name
 
-    def relaunch(self, system, calc_id, group=None, level=None, from_scratch=False):
+    def relaunch(self, system, calc_id, group=None, level=None, from_scratch=False, redo=False):
         """Relaunch a calculation by hand (``policy.manual_launch``) in a new group.
 
         The step of the calculation is followed again at the next pass.
@@ -1433,6 +1443,8 @@ class Orchestrator:
         from_scratch : bool, optional
             Start from scratch even when the last attempt could be continued
             from the files of its output directory.
+        redo : bool, optional
+            Run it again also if it is completed with results that can be used.
 
         Returns
         -------
@@ -1451,18 +1463,29 @@ class Orchestrator:
         self._check_replacements()
         name = self._step_of(system, calc_id)
         written, _, _ = self.relaunch_step(system, name, [calc_id.split('/', 1)[1]], group, level,
-                                           from_scratch)
+                                           from_scratch, redo)
         return written
 
     def relaunch_step(self, system, step, labels=None, group=None, level=None,
-                      from_scratch=False):
+                      from_scratch=False, redo=False):
         """Relaunch by hand calculations of a step (``policy.manual_launch``) in one new group.
 
         The step is followed again at the next pass. With ``labels`` the
         calculations asked for must all be relaunchable before archiving
         attempts or submitting jobs. Without labels, every calculation of
         the step that can be relaunched is, and the others are left, with
-        the reason.
+        the reason. A completed calculation whose results cannot be used
+        runs again from scratch; with ``redo`` one whose results can be used
+        too, and the step, completed or failed, is followed again and
+        analysed once its calculations are completed. The steps that read
+        its entries then run again at the next passes, if those entries
+        changed (``Step.done``).
+
+        The relaunch takes from the settings as they are now the command, the
+        jobscript, the walltime and the options of the submission, and the
+        keys of the resources of ``input.pwi`` (e.g. ``pseudo_dir``,
+        ``preparation.update_resources``); what changes the fingerprint needs
+        ``replace_step``.
 
         Parameters
         ----------
@@ -1481,6 +1504,9 @@ class Orchestrator:
         from_scratch : bool, optional
             Start from scratch even when the last attempt could be continued
             from the files of its output directory.
+        redo : bool, optional
+            Run again also the calculations completed with results that can
+            be used.
 
         Returns
         -------
@@ -1543,7 +1569,7 @@ class Orchestrator:
         for calc_id in asked:
             try:
                 launches.append(manual_launch(reconciler, system, calc_id, self._launch_setup(),
-                                              group, level, from_scratch))
+                                              group, level, from_scratch, redo))
             except PolicyError as error:
                 if labels is not None:
                     raise
@@ -1551,11 +1577,17 @@ class Orchestrator:
         if not launches:
             raise OrchestratorError(f'{system}/{step}: no calculation to relaunch: '
                                     + ('; '.join(left.values()) or 'the step has none'))
+        current = {calc.calc_id: calc for calc in self.steps[step].calculations(self.run_dir,
+                                                                                system)}
+        for launch in launches:
+            if launch.calc_id in current:
+                update_resources(self.run_dir, system, current[launch.calc_id])
         for launch in launches:
             archive_attempt(self.run_dir, system, launch.calc_id)  # nothing if already archived
         written = self._write_group(system, step, launches)
         self.manager.submit(held)
-        if entry['status'] == 'failed' and entry['error'] is None:
+        if (entry['status'] == 'failed' and entry['error'] is None) or \
+                entry['status'] == 'completed':
             self._set(entry, 'running', 'relaunched by hand')
         self._save()
         return written, launches, left

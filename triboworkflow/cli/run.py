@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 CONFIG_FILE = 'config.toml'
 CLI_LOG = 'cli.log'
 GROUPS_QUESTION = 'Number of jobs (workers) per group: '
+# Seconds after which a command of the scheduler is stopped. On a loaded login node a
+# submission may take longer than the 30 s of the scheduler class, and one stopped may have
+# created its job anyway (a submission of outcome not known).
+SCHEDULER_TIMEOUT = 120
 
 
 class RunError(RuntimeError):
@@ -250,8 +254,12 @@ def terminal_ask(stdin=None, stdout=None):
 
 
 def make_scheduler(settings, dry_run=False):
-    """Scheduler of ``[execution]``; with ``dry_run`` its commands are recorded, not run."""
-    return JobScheduler(execution_of(settings).scheduler, dry_run=dry_run)
+    """Scheduler of ``[execution]``; with ``dry_run`` its commands are recorded, not run.
+
+    Its commands are stopped after ``SCHEDULER_TIMEOUT`` seconds.
+    """
+    return JobScheduler(execution_of(settings).scheduler, timeout=SCHEDULER_TIMEOUT,
+                        dry_run=dry_run)
 
 
 def build_orchestrator(run_dir, groups=None, steps=None, dry_run=False, step_objects=None,

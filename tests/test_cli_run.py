@@ -16,8 +16,9 @@ import shutil
 import pytest
 
 from cli_helpers import EXAMPLE, ROOT, SYSTEM, fake_steps, write_run  # noqa: F401 (fixture)
-from triboworkflow.cli.run import (CONFIG_FILE, GROUPS_DEFAULT, GROUPS_OVERRIDE, RunError,
-                                   build_orchestrator, daemon_factory, load_run, resolve_groups,
+from triboworkflow.cli.run import (CONFIG_FILE, GROUPS_DEFAULT, GROUPS_OVERRIDE,
+                                   SCHEDULER_TIMEOUT, RunError, build_orchestrator,
+                                   daemon_factory, load_run, make_scheduler, resolve_groups,
                                    system_name, terminal_ask)
 from triboworkflow.core.settings.schema import INTERFACE_STEPS
 from triboworkflow.execution.orchestrator import INTERFACE_GRAPH
@@ -44,6 +45,11 @@ def test_structure_settings_have_no_steps(tmp_path):
 
 def test_system_is_the_interface_of_the_two_slabs(tmp_path):
     assert system_name(load_run(write_run(tmp_path))) == SYSTEM == 'Cu111_Al111'
+
+
+def test_the_commands_of_the_scheduler_wait_two_minutes(tmp_path):
+    """On a loaded login node a submission may take more than the 30 s of the scheduler class."""
+    assert make_scheduler(load_run(write_run(tmp_path))).timeout == SCHEDULER_TIMEOUT == 120
 
 
 def test_groups_resolution(tmp_path, caplog):

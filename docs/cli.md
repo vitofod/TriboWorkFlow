@@ -73,7 +73,7 @@ CuAl/                       the run
 
 | Command | What it does |
 |---|---|
-| `check` | reads and validates `config.toml` and prints a summary: system, steps, scheduler, groups, the walltime and the jobs per group of each step that submits jobs (`[execution.<step>]`, `24:00:00 (default)` when not given), placeholders to fill in, in the settings and in the jobscripts (e.g. `jobscript.sh line 9: <venv>`); a warning names the steps without a walltime and, with Slurm, the jobscripts with a `--time`, which the walltime of the step replaces; code 1 if the settings are not valid, with the TOML path of the field |
+| `check` | reads and validates `config.toml` and prints a summary: system, steps, scheduler, groups, the walltime and the jobs per group of each step that submits jobs (`[execution.<step>]`, `24:00:00 (default)` when not given), placeholders to fill in, in the settings and in the jobscripts (e.g. `jobscript.sh line 9: <venv>`); a warning names the steps without a walltime and, with Slurm, the jobscripts with a `--time`, which the walltime of the step replaces, and a relative `pseudo_dir` (pw.x reads it from the directory of each calculation); code 1 if the settings are not valid, with the TOML path of the field (the first error found) |
 | `gen SETTINGS.toml` | one calculation, not a run: writes the pw.x input of `[structure]` and the extxyz of its structure next to the settings file (see *One calculation*); nothing is run |
 | `status [--calcs]` | the orchestrator (running, stopped, on another host), who holds the lock of the run, each step with its state, reason and time of its last update, the calculations that need the user and why, the jobs. **It reads only the files: it is the state last saved, not a query to the scheduler.** `--calcs` lists every calculation with its state: for one that has run, the state of its record (`running`, `completed`, `not_converged`, `crashed`, …); for one not started yet, the state the reconciliation gives it from the files: `ready for the first run` (prepared, in no group of jobs), `pending` (in a group whose job is not over, named), `not_taken` or `manual` (every job of its group is over and no worker took it) |
 | `prepare <step> [--replace]` | phase 1: checks the entries the step reads and writes its calculations (directories, inputs, extxyz of the structures, records). A missing or stale entry blocks the step with what is missing; nothing is computed in its place. A calculation already prepared is never overwritten: one that differs from the settings stops the preparation with the list, one that differs only in keys of the attempts (e.g. `mixing_beta`, `max_seconds`) is kept with the values logged. `--replace` moves every calculation that differs, with its attempts, to `replaced/` and prepares it again (`execution.md`, *Preparation and replacement*) |
@@ -89,8 +89,8 @@ found; elsewhere the command stops before writing anything):
 | Command | What it does |
 |---|---|
 | `submit <step> [--groups M]` | phase 2: asks the scheduler for the jobs, reconciles the calculations of the step, writes a group with what has to run and submits it, then exits. **Running it again is how a step is followed by hand, and it may start relaunches** (a crash, `max_seconds`), never the same attempt twice. For `plotpes`, `plotpes_scf` and `shear` it submits the job of the analysis (one job, no `--groups`) and, run again, follows it |
-| `start [--groups M] [--dry-run]` | starts the orchestrator of the steps of `[interface].steps` in the background, on the login node, and returns |
-| `relaunch --step STEP [--calc LABEL ...] [--groups M] [--from-group G] [--level L] [--from-scratch]` | relaunches by hand, in one new group, the calculations of a step that can be (all of them), or those given with `--calc` (all must be relaunchable), at the level of their last attempt or at level `L` (1–3), once their workers are surely over; a completed calculation is not run again; it continues the last attempt from `OUT/` when the workflow would, or after a stop by request of the user, unless `--from-scratch` |
+| `start [--groups M] [--dry-run]` | starts the orchestrator of the steps of `[interface].steps` in the background, on the login node, and returns; `--dry-run` runs the first pass on a temporary copy of the run, without the scheduler, and works anywhere (*Dry run*) |
+| `relaunch --step STEP [--calc LABEL ...] [--groups M] [--from-group G] [--level L] [--from-scratch] [--redo]` | relaunches by hand, in one new group, the calculations of a step that can be (all of them), or those given with `--calc` (all must be relaunchable), at the level of their last attempt or at level `L` (1–3), once their workers are surely over; it continues the last attempt from `OUT/` when the workflow would, or after a stop by request of the user, unless `--from-scratch`; a completed calculation whose results cannot be used (e.g. pp.x failed) runs again from scratch, one whose results can be used only with `--redo`; the commands, walltime, options of the submission and `pseudo_dir` are those of the settings as they are now |
 
 **Where the orchestrator runs:**
 
@@ -463,6 +463,14 @@ jobs go on and the next `start` replaces the pid file and the lock it left,
 recovers the jobs and goes on without duplicates. Look at the end of
 `orchestrator.log` for the cause.
 
+Each pass runs in a process of its own, so that the limit of CPU time of a
+login node (on Leonardo 600 s per process, `ulimit -t`) holds for each pass
+and not for the whole life of the orchestrator. A pass stopped by that limit
+leaves `Pass <n>: its process was stopped by the signal SIGKILL …` in the log,
+and the next pass completes it; two in a row stop the orchestrator. If
+`start` says that the orchestrator `did not confirm its start within 600.0 s`,
+the login node is overloaded: start it from another login node.
+
 Meanwhile:
 
 ```bash
@@ -490,7 +498,8 @@ one or more of its calculations, as `status --calcs` lists them (the id of a
 calculation is `<step>/<label>`: `ppes/min_site_1.5` is `--step ppes --calc
 min_site_1.5`). With `--step` alone every calculation of the step that can be
 relaunched is, in one new group, and the others are listed with the reason
-(completed, or its worker may still run). With `--calc`, all the selected
+(completed with results that can be used, or its worker may still run). With
+`--calc`, all the selected
 calculations must be relaunchable before any attempt is archived or any job
 is submitted. The checks may refresh existing job and attempt states.
 
@@ -502,9 +511,8 @@ submits it; the step goes back to running and the count of the unchanged
 relaunches starts again. The attempt continues the last one from `OUT/`
 under the same rule as the relaunches of the workflow, also after a stop by
 request of the user (an exit file), which the workflow never relaunches;
-`--from-scratch` starts it from scratch, `OUT/` removed. A completed
-calculation is not run again. It prints the attempt, its level and how it
-starts:
+`--from-scratch` starts it from scratch, `OUT/` removed. It prints the
+attempt, its level and how it starts:
 
 ```bash
 triboworkflow relaunch --step adhesion --calc interface_max --level 2 --from-scratch
@@ -516,18 +524,41 @@ When the launch of the last attempt of a calculation is not recorded and the
 groups that list it give different launches, it lists them: choose one with
 `--from-group` (for a single calculation, given with `--calc`).
 
-A **completed** calculation cannot be run again with a command yet. Do not
-remove its folder to force it: the record, the output and the history of the
+A **completed** calculation whose results cannot be used needs the user
+(`status` says why, e.g. `charge density failed: pp.x stopped …` after a
+wrong `pp_command`): fix the cause, then `relaunch` runs it again from
+scratch, pw.x and then pp.x. A completed calculation whose results can be used
+runs again only with `--redo`, also from scratch: its step is analysed again
+once its calculations are completed, and the steps that read its entries run
+again at the next passes if those entries changed, reusing their own
+calculations whose settings did not change. Never remove the folder of a
+calculation to run it again: the record, the output and the history of the
 attempts are lost, and when the group that ran it held no other calculation the
 reconciliation finds `manual: no progress` and nothing is submitted.
+
+```bash
+# pp.x failed in the three calculations of charge; pp_command fixed in config.toml
+triboworkflow relaunch --step charge
+# Cu111_Al111/charge/min_site_interface: relaunched by hand, attempt 2 at level 1, from scratch
+```
+
+The relaunch takes the settings as they are now for what does not change the
+fingerprint: `run_command`, `pp_command`, the jobscript, the walltime and
+`submit_options`, and the keys of the resources of `input.pwi` (`pseudo_dir`,
+…), each change logged. The keys of the attempts (`mixing_beta`, `nstep`)
+stay as prepared, since `--level` starts from them. A change of the settings
+that changes the fingerprint (e.g. `ecutwfc`) needs `prepare <step> --replace`.
 
 ### Rare cases
 
 `status` shows them with the command to use:
 
-- `sbatch` timed out without an answer: the submission is never repeated by
-  itself; look for the job (`squeue -u $USER`), then
-  `resolve-submission <group> --job-id 123456` or `--no-job`;
+- `sbatch` timed out without an answer (the commands of the scheduler wait
+  120 s): the submission is never repeated by itself; when the job ran, its
+  workers wrote its id in the claims of the calculations, and `status` names
+  it with the command; check it (e.g. its output in `jobs/<group>/`), or look
+  for the job (`squeue -u $USER`), then `resolve-submission <group> --job-id
+  123456` or `--no-job`;
 - a submission refused (e.g. a wrong partition in the jobscript): each group
   submits its own copy of the jobscript, so fix `jobs/<group>/jobscript.sh`,
   keeping its last line (the worker), and the jobscript of the run for the
@@ -552,11 +583,15 @@ reconciliation finds `manual: no progress` and nothing is submitted.
 ## Dry run
 
 `start --dry-run` is a **limited check of the first pass**. It copies the
-run folder to a temporary directory, allowed only while the run has no
-`jobs/` yet, runs one pass there with the scheduler in a dry run and prints
-the steps and the commands of the scheduler that would run
-(`sbatch …/jobscript.sh`). Nothing is submitted and nothing is left in the
-run; later passes, jobs and relaunches are not simulated. It needs no
-scheduler, so it also works on a laptop. Only the run folder is copied:
-relative paths of the settings that leave it (`../`) do not hold in the
-copy.
+run folder to a temporary directory (`triboworkflow-dry-run-*` in the
+temporary folder of the machine, e.g. `/scratch_local` on a login node),
+allowed only while the run has no `jobs/` yet, runs one pass there with the
+scheduler in a dry run and prints the steps and the commands of the
+scheduler that would run (`sbatch …/jobscript.sh`). The pass is a real one on
+the copy: `match` builds the interface and the calculations are prepared, so
+it takes the time of a first pass (minutes for the matching); the steps then
+read `running … launched` although nothing ran. The copy is deleted at the
+end: nothing is submitted and nothing is left in the run; later passes, jobs
+and relaunches are not simulated. It needs no scheduler, so it also works on
+a laptop. Only the run folder is copied: relative paths of the settings that
+leave it (`../`) do not hold in the copy.

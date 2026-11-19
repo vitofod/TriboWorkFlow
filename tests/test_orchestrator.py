@@ -15,6 +15,7 @@ import dataclasses
 import datetime
 import json
 import re
+import shutil
 
 import pytest
 
@@ -1015,6 +1016,94 @@ def test_completed_with_results_not_usable_needs_the_user(run, case, reason):
     assert pes.attention == [{'calc_id': 'pes/c0', 'state': 'completed', 'reason': reason}]
     assert report.submitted == [] and 'analyse' not in orch.steps['pes'].calls
     assert len(run.record('pes/c0').attempts) == 1
+
+
+def test_completed_with_results_not_usable_is_relaunched_from_scratch(run):
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.run_pass()
+    work(run, 'not_parsed', only=['pes/c0'])
+    work(run, only=['pes/c1'])
+    assert statuses(orch.run_pass())['pes'] == 'failed'
+    group = orch.relaunch(SYSTEM, 'pes/c0')
+    manifest, _ = read_manifest(layout.job_dir(run.dir, group) / MANIFEST_FILE)
+    assert [(l.calc_id, l.n, l.kind, l.restart) for l in manifest.calculations] == \
+        [('pes/c0', 2, 'manual', False)]
+    assert orch.entry(SYSTEM, 'pes')['status'] == 'running'
+    work(run)
+    assert statuses(orch.run_pass())['pes'] == 'completed'
+    assert orch.steps['pes'].calls == ['prepare', 'analyse']
+
+
+def test_a_group_folder_removed_by_hand_does_not_give_its_name_again(run):
+    """The registry still holds the group: a new group with its name would be refused."""
+    orch = orchestrator(run, ['match', 'pes'])
+    orch.run_pass()
+    work(run, 'not_parsed', only=['pes/c0'])
+    work(run, only=['pes/c1'])
+    orch.run_pass()
+    shutil.rmtree(layout.job_dir(run.dir, f'{SYSTEM}.pes.1'))
+    assert orch.relaunch(SYSTEM, 'pes/c0') == f'{SYSTEM}.pes.2'
+
+
+class ChainStep(FakeStep):
+    """A step whose entry holds a value and whose provenance holds the values it read.
+
+    It is done only while the entries it read keep the values it read, as
+    the real steps are (``Step.done``); ``VALUES`` holds the value each step
+    writes, its result.
+    """
+
+    VALUES = {}
+
+    def _provenance(self, run_dir, system):
+        document = read_system(layout.system_dir(run_dir, system))
+        read = {dep: document.get((dep, 'value')) for dep in self.graph[self.name]}
+        return Provenance.build(self.name, {'read': read})
+
+    def done(self, run_dir, system):
+        sdir = layout.system_dir(run_dir, system)
+        return is_done(read_system(sdir), [self.name], self._provenance(run_dir, system), sdir)
+
+    def expected(self, run_dir, system):
+        return {}
+
+    def analyse(self, run_dir, system, calculations):
+        self.calls.append('analyse')
+        provenance = self._provenance(run_dir, system)
+        with SystemWriter(layout.system_dir(run_dir, system)) as writer:
+            if not writer.document.exists:
+                writer.document.create({})
+            writer.document.set([self.name], {'value': self.VALUES.get(self.name, 1)})
+            writer.document.set_provenance([self.name], provenance)
+            writer.save()
+
+
+@pytest.mark.parametrize('changed', [True, False])
+def test_redo_of_a_completed_step_and_the_steps_that_read_it(run, monkeypatch, changed):
+    """pes run again by hand: adhesion and plotpes run again only if its entries changed,
+    and the calculations of adhesion are reused."""
+    monkeypatch.setattr(ChainStep, 'VALUES', {'pes': 1})
+    requested = ['match', 'pes', 'plotpes', 'adhesion']
+    orch = orchestrator(run, steps={name: ChainStep(run, name, {}) for name in requested})
+    for _ in range(3):
+        orch.run_pass()
+        work(run)
+    assert set(statuses(orch.run_pass()).values()) == {'completed'}
+    submitted = run.slurm.submitted
+    with pytest.raises(PolicyError, match='completed and its results can be used'):
+        orch.relaunch(SYSTEM, 'pes/c0')
+    group, launches, left = orch.relaunch_step(SYSTEM, 'pes', redo=True)
+    assert [(l.calc_id, l.n, l.kind, l.restart) for l in launches] == \
+        [('pes/c0', 2, 'manual', False), ('pes/c1', 2, 'manual', False)] and left == {}
+    assert orch.entry(SYSTEM, 'pes')['status'] == 'running'
+    ChainStep.VALUES['pes'] = 2 if changed else 1
+    work(run)
+    report = orch.run_pass()
+    assert set(statuses(report).values()) == {'completed'}
+    calls = {name: orch.steps[name].calls.count('analyse') for name in requested}
+    assert calls == {'match': 1, 'pes': 2, 'plotpes': 2 if changed else 1,
+                     'adhesion': 2 if changed else 1}
+    assert run.slurm.submitted == submitted + 2  # the two jobs of the relaunch of pes only
 
 
 def test_held_job_is_waited_for(run, monkeypatch):

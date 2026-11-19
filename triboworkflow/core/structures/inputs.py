@@ -107,6 +107,22 @@ def load_structure(settings):
                           path, params.format, params.frame)
 
 
+# Species of the structure files read by this process, by file (path, time of the last change,
+# size), format and frame: the settings are loaded again by every step at every pass of the
+# orchestrator, and an output of pw.x may be large.
+_SPECIES_READ = {}
+
+
+def _file_species(path, fmt=None, frame=None):
+    """``properties[QE_SPECIES]`` of a structure file, read once per process while it is unchanged."""
+    stat = Path(path).stat()
+    key = (str(Path(path).resolve()), stat.st_mtime_ns, stat.st_size, fmt, frame)
+    if key not in _SPECIES_READ:
+        args = () if fmt is None and frame is None else (fmt, frame)
+        _SPECIES_READ[key] = read_structure(path, *args).properties.get(QE_SPECIES)
+    return _SPECIES_READ[key]
+
+
 def resolve_species(settings):
     """Replace the ``"auto"`` mass and pseudopotential of the species by those of the files.
 
@@ -116,7 +132,9 @@ def resolve_species(settings):
     ``[interface]``, or ``[structure]``), which must be inputs or outputs of
     pw.x, for the species of the same label. The order and the labels of the
     species, ``starting_magnetization`` and the other values stay as written.
-    Nothing is read when no species asks for it.
+    Nothing is read when no species asks for it. A file is read once per
+    process while it does not change (its path, time of the last change and
+    size).
 
     Parameters
     ----------
@@ -144,14 +162,13 @@ def resolve_species(settings):
     if settings.interface is not None:
         files = [structure_path(settings, slab.file, f'interface.slabs[{i}].file')
                  for i, slab in enumerate(settings.interface.slabs)]
-        structures = [read_structure(path) for path in files]
+        species = [_file_species(path) for path in files]
     else:
         params = settings.structure
         files = [structure_path(settings, params.file, 'structure.file')]
-        structures = [read_structure(files[0], params.format, params.frame)]
+        species = [_file_species(files[0], params.format, params.frame)]
     found = {}
-    for path, structure in zip(files, structures):
-        entries = structure.properties.get(QE_SPECIES)
+    for path, entries in zip(files, species):
         if entries is None:
             raise StructureError(f'{path}: "{AUTO}" in atomic_species needs structure files that '
                                  'are inputs or outputs of pw.x, which give the mass and the '

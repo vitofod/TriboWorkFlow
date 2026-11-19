@@ -137,6 +137,41 @@ def test_loaded_settings_have_the_species_of_the_structure_file(tmp_path, caplog
     assert 'atomic_species[0].mass = 12.011 for C' in caplog.text
 
 
+def test_a_file_is_read_once_while_it_does_not_change(tmp_path, settings, monkeypatch):
+    """The orchestrator loads the settings again for every step at every pass."""
+    from triboworkflow.core.structures import inputs
+
+    write_pwi(tmp_path / 'a.pwi', [('Cu', 63.546, 'Cu.upf')])
+    write_pwi(tmp_path / 'b.pwi', [('Cu', 63.546, 'Cu.upf')])
+    reads, real = [], inputs.read_structure
+
+    def counted(path, *args):
+        reads.append(path)
+        return real(path, *args)
+
+    monkeypatch.setattr(inputs, 'read_structure', counted)
+    for _ in range(3):
+        settings.atomic_species = [Species('Cu', AUTO, AUTO)]
+        resolve_species(settings)
+    assert reads == [tmp_path / 'a.pwi', tmp_path / 'b.pwi']
+    write_pwi(tmp_path / 'b.pwi', [('Cu', 63.546, 'Cu.upf'), ('Fe', 55.845, 'Fe.upf')])
+    settings.atomic_species = [Species('Fe', AUTO, AUTO)]
+    resolve_species(settings)
+    assert reads[2:] == [tmp_path / 'b.pwi']  # changed: read again
+    assert values(settings) == [('Fe', 55.845, 'Fe.upf', None)]
+
+
+def test_the_species_read_are_logged_once(tmp_path, caplog):
+    for name in ('example_relax.toml', 'example_relax.pwi'):
+        (tmp_path / name).write_text((DATA / name).read_text())
+    path = tmp_path / 'example_relax.toml'
+    path.write_text(path.read_text().replace('mass = 12.011', 'mass = "auto"'))
+    with caplog.at_level(logging.INFO, logger='triboworkflow'):
+        for _ in range(3):
+            assert load_settings(path).species_read
+    assert caplog.text.count('atomic_species[0].mass = 12.011 for C') == 1
+
+
 def test_loaded_settings_with_a_species_in_no_file(tmp_path):
     for name in ('example_relax.toml', 'example_relax.pwi'):
         (tmp_path / name).write_text((DATA / name).read_text())

@@ -91,9 +91,8 @@ Example:
             print(f'  group {name}: submission refused: {error}; fix jobs/{name}/jobscript.sh '
                   f'(keep its last line, the worker), then "triboworkflow clear-refusal {name}"')
         for name, count in jobs.unknown.items():
-            print(f'  group {name}: {count} submissions of outcome not known; look for the job '
-                  f'in the queue, then "triboworkflow resolve-submission {name} --job-id ID" '
-                  'or "--no-job"')
+            print(f'  group {name}: {count} submissions of outcome not known; '
+                  + resolve_hint(run_dir, name, registry))
         for name in jobs.withdrawn:
             print(f'  group {name}: withdrawn before any of its jobs was submitted')
         if args.calcs:
@@ -113,6 +112,29 @@ Example:
                     else:
                         state = _not_started(reconciler.calculation(system, calc_id))
                     print(f'  {calc_id:<24} {state}')
+
+
+def resolve_hint(run_dir, name, registry):
+    """How to resolve a submission of outcome not known of group ``name``, in words.
+
+    With the job that the claims and the records of its calculations name and
+    the registry lacks (``reconcile.jobs_of_the_workers``), the exact command;
+    otherwise where to look for the job.
+    """
+    from triboworkflow.execution.reconcile import jobs_of_the_workers
+
+    found = jobs_of_the_workers(run_dir, name, registry)
+    if len(found) == 1:
+        return (f'the claims or the attempts of its calculations name job {found[0]}, not '
+                f'registered: check that it is a job of this group (e.g. its output in '
+                f'jobs/{name}), then "triboworkflow resolve-submission {name} --job-id '
+                f'{found[0]}"')
+    if found:
+        return (f'the claims or the attempts of its calculations name jobs {", ".join(found)}, '
+                'not registered: check which ones belong to this group, then "triboworkflow '
+                f'resolve-submission {name} --job-id ID" for each')
+    return (f'look for the job in the queue, then "triboworkflow resolve-submission {name} '
+            '--job-id ID" or "--no-job"')
 
 
 def _not_started(state):

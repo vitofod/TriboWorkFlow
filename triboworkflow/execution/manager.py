@@ -405,8 +405,8 @@ class JobManager:
                                                     and self.scheduler.is_final(job['state']))]
         if running:
             return (f'jobs not in a final state confirmed by the last query: {", ".join(running)}; '
-                    'once they are over, query them again on the HPC machine (e.g. "triboworkflow '
-                    'start")')
+                    'once they are over, run the command again on the HPC machine, where it asks '
+                    'the scheduler')
         if group['refused'] is not None:
             return 'a submission was refused after other jobs: one may still be submitted'
         return f'{self.missing_jobs(name)} jobs still to submit'

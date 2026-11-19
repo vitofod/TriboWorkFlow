@@ -53,6 +53,7 @@ from triboworkflow.core.store.legacy import LegacyStore
 from triboworkflow.core.structures.readers import read_extxyz_text
 from triboworkflow.engines.qe.results import parse_output
 from triboworkflow.execution.layout import system_dir
+from triboworkflow.vendored.physics.base.units import Converter
 from triboworkflow.vendored.physics.tribology.ppes import PPESModel, fit_ppes
 from triboworkflow.workflows.interface import adhesion, pes, ppes
 from triboworkflow.workflows.interface.figures import figure_paths
@@ -1389,6 +1390,59 @@ def test_ppes_output_and_figure(ppes_copy):
     figure = ppes.figure_path(sdir, 'regular', 'min_site', name_of(ppes_copy))
     png, pdf = figure_paths(figure)
     assert png.read_bytes()[:8] == b'\x89PNG\r\n\x1a\n' and pdf.read_bytes()[:5] == b'%PDF-'
+
+
+def drawn_figure(monkeypatch):
+    """What ``draw_ppes`` gives to the figure: abscissa, energies and label of the ordinate."""
+    drawn, real = {}, ppes.ppes_figure
+
+    def capture(x, energy, png, pdf, xlabel, ylabel, fitted, stamp):
+        drawn.update(x=np.array(x), energy=np.array(energy), ylabel=ylabel)
+        return real(x, energy, png, pdf, xlabel, ylabel, fitted, stamp)
+
+    monkeypatch.setattr(ppes, 'ppes_figure', capture)
+    return drawn
+
+
+NO_ZERO = '\nshifts = [-0.5, 0.25, 1.0, 3.0]\nfit = "none"'
+
+
+def test_without_the_shift_0_the_energies_are_referred_to_the_slabs_apart(ppes_copy, monkeypatch):
+    """The points where the calculations put them: E(shift) - E(bot_slab) - E(top_slab)."""
+    edit_config(ppes_copy, '\nfit = "none"', NO_ZERO)
+    drawn = drawn_figure(monkeypatch)
+    ppes.PpesStep().analyse(ppes_copy, SYSTEM, finish_ppes(ppes_copy))
+    slabs = sum(document(ppes_copy)['data'][label]['energy'] for label in ('bot_slab', 'top_slab'))
+    interface = ppes.PpesStep().inputs(ppes_copy, SYSTEM).read['interface']
+    jm2_per_ev = Converter.eV_to_Jm2(1.0, area_of(Structure.from_dict(interface)))
+    energy = ppes_doc(ppes_copy)['energy']['min_site']
+    rows = table_rows(ppes.output_path(system_dir(ppes_copy, SYSTEM), 'regular', 'min_site'))
+    for row, (_, ev) in zip(rows, energy['ppes_ev']):
+        assert math.isnan(row[4])  # adhesion_Jm2 needs the shift 0
+        assert row[5] == pytest.approx((ev - slabs) * jm2_per_ev, abs=1e-8)
+    assert np.allclose(drawn['energy'], [row[5] for row in rows], atol=1e-8)
+    assert drawn['ylabel'] == r'$E - E_\mathrm{bot} - E_\mathrm{top}$ (J/m$^2$)'
+
+
+def test_slabs_of_another_energy_model_are_not_subtracted(ppes_copy, monkeypatch, caplog):
+    edit_config(ppes_copy, '\nfit = "none"', NO_ZERO)
+    real = ppes.check_energy_model
+
+    def check(records):
+        records = list(records)
+        if any(record.step == 'adhesion' for record in records):
+            raise StoreError('records have more than one energy model')
+        return real(records)
+
+    monkeypatch.setattr(ppes, 'check_energy_model', check)
+    drawn = drawn_figure(monkeypatch)
+    with caplog.at_level(logging.WARNING, logger=ppes.__name__):
+        ppes.PpesStep().analyse(ppes_copy, SYSTEM, finish_ppes(ppes_copy))
+    assert (f'{SYSTEM}/ppes: energies not referred to the slabs alone of the adhesion '
+            '(separated_Jm2 nan): records have more than one energy model') in caplog.text
+    rows = table_rows(ppes.output_path(system_dir(ppes_copy, SYSTEM), 'regular', 'min_site'))
+    assert all(math.isnan(row[5]) for row in rows)
+    assert drawn['ylabel'] == r'$\Delta E$ (J/m$^2$)' and drawn['energy'].min() == 0.0
 
 
 @pytest.mark.parametrize('suffix', ['.output', '.png', '.pdf'])

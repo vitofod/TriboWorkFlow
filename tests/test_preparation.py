@@ -32,11 +32,13 @@ from triboworkflow.core import structures as st
 from triboworkflow.core.settings import SettingsError, load_settings
 from triboworkflow.core.settings.schema import (WALLTIME_STEPS, ExecutionParams, QEParams,
                                                 StepJobsParams)
-from triboworkflow.engines.qe.prepare import input_differences, single_input
+from triboworkflow.core.guard import NotOnHPCError
+from triboworkflow.engines.qe.prepare import input_differences, single_input, with_resources
 from triboworkflow.execution import layout
 from triboworkflow.execution import orchestrator as orchestrator_module
 from triboworkflow.execution import preparation
-from triboworkflow.execution.jobs import WITHDRAWN_FILE, Launch, Manifest, write_job
+from triboworkflow.execution.jobs import (MANIFEST_FILE, WITHDRAWN_FILE, Launch, Manifest,
+                                          read_manifest, write_job)
 from triboworkflow.execution.orchestrator import Orchestrator, OrchestratorError, Step
 from triboworkflow.execution.preparation import (PreparationError, ReplacementError,
                                                  check_calculations, prepare_calculations,
@@ -640,7 +642,8 @@ def test_replacement_refused_with_a_group_submitted_in_part(run, settings, refus
 
 @pytest.mark.parametrize('case, message', [
     ('unknown', 'submissions of outcome not known'),
-    ('pending', 'has no outcome recorded'),
+    # Recovered first, as by a cycle of the job manager: one of outcome not known.
+    ('pending', 'submissions of outcome not known'),
 ])
 def test_replacement_refused_with_a_submission_of_outcome_not_known(run, settings, case, message):
     orch = orchestrator(run, PesStep(settings))
@@ -659,6 +662,122 @@ def test_replacement_refused_with_a_submission_of_outcome_not_known(run, setting
     with pytest.raises(ReplacementError, match=message):
         orch.replace_step(SYSTEM, 'pes')
     assert not (layout.job_dir(run.dir, GROUP) / WITHDRAWN_FILE).exists()
+
+
+def test_replacement_asks_the_scheduler_first(run, settings):
+    """Jobs over since the last query no longer stop the replacement: they are asked first."""
+    orch = orchestrator(run, PesStep(settings))
+    orch.prepare_step(SYSTEM, 'pes')
+    jobs = run.group(GROUP, Launch.initial(SYSTEM, AA), Launch.initial(SYSTEM, AB))
+    run.start(AA, jobs[0], output=SCF_DONE)
+    run.finish(AA, status=store.Status('ended', 'converged', 'n/a'), stop_reason='completed',
+               clean_stop=True)
+    run.slurm.states.update({job_id: 'COMPLETED' for job_id in jobs})
+    # Submitted and never asked: "not queried yet", as after a relaunch with no pass since.
+    assert all(run.manager.jobs[job_id]['state'] is None for job_id in jobs)
+    change_ecutwfc(settings)
+    _, replacement = orch.replace_step(SYSTEM, 'pes')
+    assert set(replacement.calculations) == {AA, AB}
+
+
+def test_replacement_away_from_the_hpc_machine_keeps_the_last_states(run, settings, monkeypatch,
+                                                                     caplog):
+    orch = orchestrator(run, PesStep(settings))
+    orch.prepare_step(SYSTEM, 'pes')
+    first_attempt(run)
+
+    def away():
+        raise NotOnHPCError("Command 'sacct' not found")
+
+    monkeypatch.setattr(run.manager, 'poll', away)
+    change_ecutwfc(settings)
+    with caplog.at_level(logging.INFO, logger='triboworkflow'):
+        _, replacement = orch.replace_step(SYSTEM, 'pes')
+    assert set(replacement.calculations) == {AA, AB}
+    assert 'Not on the HPC machine: the states of the jobs are those of the last query' in caplog.text
+
+
+def test_replacement_refused_names_the_job_that_the_claims_give(run, settings):
+    """A submission of outcome not known whose job ran: its worker wrote the id in the claim."""
+    orch = orchestrator(run, PesStep(settings))
+    orch.prepare_step(SYSTEM, 'pes')
+    write_job(run.dir, Manifest(name=GROUP, scheduler='slurm', run_command='pw.x', walltime=3600,
+                                max_seconds_margin=60,
+                                calculations=(Launch.initial(SYSTEM, AA),)), run.jobscript)
+    run.manager.add_group(GROUP, 1)
+    run.manager.groups[GROUP]['unknown'].append({'error': 'Command timed out after 30 seconds',
+                                                 'at': 'x'})
+    run.manager._save()
+    run.claim(AA, 1, '64763228')
+    change_ecutwfc(settings)
+    with pytest.raises(ReplacementError) as error:
+        orch.replace_step(SYSTEM, 'pes')
+    assert (f'group {GROUP}: 1 submissions of outcome not known: the job may exist '
+            f'(resolve-submission {GROUP}); its calculations name job 64763228, not registered: '
+            f'once checked, "triboworkflow resolve-submission {GROUP} --job-id ID"') \
+        in str(error.value)
+
+
+# --- a relaunch takes the resources of the settings -------------------------------------
+
+def test_with_resources_takes_only_the_keys_of_the_resources():
+    kept = ("&CONTROL\n   pseudo_dir       = 'old'\n   title            = 'x'\n"
+            "   tprnfor          = .true.\n/\n&ELECTRONS\n   mixing_beta      = 0.3\n/\n"
+            "K_POINTS gamma\n")
+    new = (kept.replace("'old'", "'/new'").replace("   title            = 'x'\n", '')
+           .replace('0.3', '0.4')
+           .replace('   tprnfor', "   wfcdir           = 'WFC'\n   tprnfor"))
+    text, keys = with_resources(kept, new)
+    # The keys of the attempts (mixing_beta) and the others stay as they are.
+    assert text == ("&CONTROL\n   pseudo_dir       = '/new'\n   tprnfor          = .true.\n"
+                    "   wfcdir           = 'WFC'\n/\n&ELECTRONS\n   mixing_beta      = 0.3\n/\n"
+                    "K_POINTS gamma\n")
+    assert keys == (('namelists.CONTROL.pseudo_dir', "'old'", "'/new'"),
+                    ('namelists.CONTROL.title', "'x'", None),
+                    ('namelists.CONTROL.wfcdir', None, "'WFC'"))
+    assert with_resources(kept, kept) == (kept, ())
+
+
+def test_update_resources_writes_the_resources_of_the_settings(run, settings, caplog):
+    prepare_calculations(run.dir, SYSTEM, calcs(settings), step='pes')
+    path = run.path(AA) / layout.INPUT_FILE
+    path.write_text(path.read_text().replace('mixing_beta      = 0.3', 'mixing_beta      = 0.4'))
+    settings.namelists.CONTROL['pseudo_dir'] = '/leonardo/PSEUDO'
+    new = calcs(settings)
+    with caplog.at_level(logging.INFO, logger='triboworkflow'):
+        keys = preparation.update_resources(run.dir, SYSTEM, new[0])
+    assert keys == (('namelists.CONTROL.pseudo_dir', "'path/to/PSEUDO'", "'/leonardo/PSEUDO'"),)
+    text = path.read_text()
+    assert f"{'pseudo_dir':16} = '/leonardo/PSEUDO'" in text and 'mixing_beta      = 0.4' in text
+    assert (f"{SYSTEM}/{AA}: input.pwi: namelists.CONTROL.pseudo_dir = '/leonardo/PSEUDO' from "
+            "the settings, was 'path/to/PSEUDO'") in caplog.text
+    assert run.record(AA).fingerprint == new[0].record.fingerprint
+    # An input that differs from the settings elsewhere is left as it is.
+    change_ecutwfc(settings)
+    before = path.read_text()
+    assert preparation.update_resources(run.dir, SYSTEM, calcs(settings)[0]) == ()
+    assert path.read_text() == before
+
+
+def test_relaunch_takes_the_resources_of_the_settings(run, settings, caplog):
+    orch = orchestrator(run, PesStep(settings))
+    orch.prepare_step(SYSTEM, 'pes')
+    first_attempt(run)  # aa completed, its output not parsed: its results cannot be used
+    settings.namelists.CONTROL['pseudo_dir'] = '/leonardo/PSEUDO'
+    assert kinds(run, settings) == {AA: 'kept', AB: 'kept'}
+    with caplog.at_level(logging.INFO, logger='triboworkflow'):
+        group, _, left = orch.relaunch_step(SYSTEM, 'pes')
+    manifest, _ = read_manifest(layout.job_dir(run.dir, group) / MANIFEST_FILE)
+    # ab was not taken by the workers: it runs as it was listed.
+    assert [(launch.calc_id, launch.n, launch.kind, launch.restart)
+            for launch in manifest.calculations] == [(AA, 2, 'manual', False),
+                                                     (AB, 1, 'initial', False)] and left == {}
+    assert 'from scratch: attempt 1 completed, its output not parsed' in caplog.text
+    for calc_id in (AA, AB):
+        assert f"{'pseudo_dir':16} = '/leonardo/PSEUDO'" in \
+            (run.path(calc_id) / layout.INPUT_FILE).read_text()
+    # As the settings give them now, as a preparation tells.
+    assert kinds(run, settings) == {AA: 'current', AB: 'current'}
 
 
 # --- a replacement interrupted ----------------------------------------------------------

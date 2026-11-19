@@ -18,7 +18,7 @@ until this command, once the cause is fixed (e.g. more memory in the
 jobscript of the analyses, or more time in [execution.<step>]). It then starts
 again at the next pass of the orchestrator, or with "prepare" ("submit" for
 a new job of an analysis). A step failed because its calculations need the
-user is not retried: relaunch them.
+user is not retried: relaunch them ("relaunch --step <step>").
 
 Example:
  $ triboworkflow retry ppes
@@ -37,7 +37,8 @@ Example:
         orch = step_orchestrator(run_dir, settings, args.step)
         entry = orch.entry(system, args.step)
         if entry['status'] != 'failed' or entry['error'] is None:
-            reason = 'its calculations need the user: relaunch them' \
+            reason = (f'its calculations need the user: relaunch them with "triboworkflow '
+                      f'relaunch --step {args.step}"') \
                 if entry['status'] == 'failed' else 'retry is only for a failed step'
             raise RunError(f'{system}/{args.step} is {entry["status"]}: {reason}')
         orch.retry(system, args.step)

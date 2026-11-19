@@ -26,15 +26,29 @@ nstep); its step is followed again. It continues the last attempt from the
 files that pw.x left in the output directory when the workflow would (a run
 closed by pw.x at max_seconds with the same run command, at the step limit, or
 without SCF convergence in a relaxation, with the files on disk); --from-scratch
-starts it from scratch anyway. A completed calculation is not run again. When
-the launch of the last attempt of a calculation is not recorded and the groups
-that list it give different launches, choose one with --from-group (for a
-single calculation).
+starts it from scratch anyway. When the launch of the last attempt of a
+calculation is not recorded and the groups that list it give different
+launches, choose one with --from-group (for a single calculation).
+
+A completed calculation whose results cannot be used (e.g. pp.x failed, so its
+charge density is missing) runs again from scratch: pw.x, then pp.x. One whose
+results can be used runs again only with --redo, also from scratch; its step is
+analysed again once its calculations are completed, and the steps that read
+its entries run again at the next passes if those entries changed.
+
+The relaunch takes the settings as they are now for what does not change the
+fingerprint: run_command, pp_command, jobscript, walltime and submit_options,
+and the keys of the resources of input.pwi (e.g. pseudo_dir), each one changed
+being logged. The keys of the attempts (e.g. mixing_beta) stay as prepared,
+since --level starts from them; what changes the fingerprint needs
+"prepare <step> --replace".
 
 Example:
  $ triboworkflow relaunch --step ppes
+ $ triboworkflow relaunch --step charge
  $ triboworkflow relaunch --step adhesion --calc interface_max --level 2 --from-scratch
  $ triboworkflow relaunch --step ppes --calc min_site_1.5 min_site_2.0
+ $ triboworkflow relaunch --step pes --calc c0 --redo
  $ triboworkflow relaunch --step pes --calc c0 --from-group mp-30_mp-134.pes.2
     """
 
@@ -59,6 +73,9 @@ Example:
         parser.add_argument('--from-scratch', action='store_true',
                             help='start from scratch even when the last attempt could be '
                                  'continued from its output directory')
+        parser.add_argument('--redo', action='store_true',
+                            help='run again from scratch also the calculations completed with '
+                                 'results that can be used')
 
     def run(self, args, run_dir, settings):
         from triboworkflow.execution.jobs import MANIFEST_FILE, read_manifest
@@ -73,7 +90,7 @@ Example:
         before = submissions(orch.manager)
         system = system_name(settings)
         group, _, left = orch.relaunch_step(system, args.step, args.calc, args.from_group,
-                                            args.level, args.from_scratch)
+                                            args.level, args.from_scratch, args.redo)
         manifest, _ = read_manifest(job_dir(run_dir, group) / MANIFEST_FILE)
         for launch in manifest.calculations:
             start = 'restart from the output directory' if launch.restart else 'from scratch'

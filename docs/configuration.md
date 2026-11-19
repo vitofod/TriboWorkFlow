@@ -106,7 +106,12 @@ Keys the settings do not accept:
 | `wfcdir` absolute, `.`, through `..` or with `\` | CONTROL | the files that `pw.x` writes per process belong to the calculation: the worker removes them with `outdir` before a relaunch from scratch, and two calculations never share them; a relative directory (e.g. `"WFC"`) is inside the directory of each calculation |
 
 `pseudo_dir` and `outdir` are paths on the machine that runs `pw.x`; they
-are never resolved locally.
+are never resolved locally. `pw.x` runs in the directory of each calculation
+(`systems/<system>/<step>/<label>/` in a workflow), so a relative `pseudo_dir`
+is read from there, not from the folder of the settings file: give an
+absolute path (`check` warns about a relative one). A `pseudo_dir` changed
+after the preparation reaches the calculations relaunched by hand
+(`relaunch`), and those prepared again (`prepare <step> --replace`).
 
 Hubbard corrections are not implemented: the generator writes no `HUBBARD`
 card, which `pw.x` 7.2 needs to apply them. Their keys (`Hubbard_*`,
@@ -365,8 +370,8 @@ Needed only to run on HPC. No value is tied to a specific machine.
 |---|---|---|---|
 | `scheduler` | str | R | `slurm`, `pbs`, `torque`, `lsf`, `sge`, `htcondor`, `condor` (the names of Xsorb) |
 | `jobscript` | str | R | user jobscript, relative to the folder of the settings file: resources and environment of every job of the run (the calculations and, without `[execution.analysis]`, the analyses); copied for every group of jobs with the launch line added, never changed: write no line that runs `pw.x` or the worker (the package adds it), only the resources, the modules and the environment. Walltime and name of the jobs come from the settings (below) |
-| `run_command` | str | R | command up to the input file, e.g. `mpirun -np 32 pw.x -nk 4` |
-| `pp_command` | str | none | command of pp.x up to the input file, e.g. `mpirun -np 32 pp.x`: run after pw.x, in the same job, in the calculations that also give the charge density (the charge analysis, [qe_charge.md](qe_charge.md)); required only when such calculations are prepared or submitted, not empty |
+| `run_command` | str | R | command up to the input file, e.g. `mpirun -np 4 pw.x -nk 2` for a jobscript with 4 MPI tasks: it runs inside the job, with the processes that the jobscript asks for, and nothing compares the two |
+| `pp_command` | str | none | command of pp.x up to the input file, e.g. `mpirun -np 4 pp.x`, with the same MPI tasks as `run_command` and the jobscript: run after pw.x, in the same job, in the calculations that also give the charge density (the charge analysis, [qe_charge.md](qe_charge.md)); required only when such calculations are prepared or submitted, not empty. A pp.x that fails leaves the calculation to the user: fix the command, then `relaunch --step charge` |
 | `polling_interval` | int | R | > 0 s, time between two checks of the jobs |
 | `groups` | int | none | > 0, jobs (workers) over which the calculations of a group are spread, for the steps without `groups` in their section (below): 1 runs them one after the other, one per calculation runs them all at once; never more jobs than calculations are submitted. When a step that runs calculations has no value, give it on the command line (`--groups`); in a terminal the command asks for it, elsewhere it stops with an error |
 | `max_seconds_margin` | int | `600` | > 0 s and below the walltime of every step of `[interface].steps` that runs calculations (the walltime of a step not run is not compared), time kept free at the end of the walltime |

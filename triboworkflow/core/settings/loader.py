@@ -42,6 +42,10 @@ from .schema import (KEY_HINTS, TYPE_HINTS, GenerationParams, Settings, Settings
 
 logger = logging.getLogger(__name__)
 
+# Sentences of the species read from the structure files already logged by this process: the
+# settings are loaded again by every step at every pass of the orchestrator.
+_SPECIES_LOGGED = set()
+
 
 def load_settings(path):
     """Read, convert and validate a TOML settings file.
@@ -57,7 +61,8 @@ def load_settings(path):
         With ``source`` set to ``path``. The mass and the pseudopotential of
         the species written ``"auto"`` are those of the structure files
         (``triboworkflow.core.structures.resolve_species``), and
-        ``species_read`` tells where each one was read.
+        ``species_read`` tells where each one was read; each sentence is
+        logged once per process.
 
     Raises
     ------
@@ -88,7 +93,9 @@ def load_settings(path):
     except (StructureError, OSError) as error:
         raise SettingsError('atomic_species', str(error), path) from None
     for sentence in settings.species_read:
-        logger.info('%s', sentence)
+        if sentence not in _SPECIES_LOGGED:
+            _SPECIES_LOGGED.add(sentence)
+            logger.info('%s', sentence)
     return settings
 
 

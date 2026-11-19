@@ -94,9 +94,11 @@ outcome is the state `density` of the record:
 The exit code of pp.x is recorded; the state comes from the output and the
 file. A record that gives the charge density is complete only with the
 state `ok`. A density that failed is never produced again automatically:
-the calculation goes to the user, and a manual relaunch runs pw.x from
-scratch, then pp.x. pp.x runs in the time `max_seconds_margin` keeps free at
-the end of the walltime, with no limit of its own.
+the calculation goes to the user, and a manual relaunch (`relaunch --step
+charge`, after fixing the cause, e.g. `pp_command`) runs pw.x from scratch,
+then pp.x, with the commands of the settings as they are then. pp.x runs in
+the time `max_seconds_margin` keeps free at the end of the walltime, with no
+limit of its own.
 
 ## The file of pp.x
 

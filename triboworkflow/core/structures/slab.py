@@ -51,7 +51,7 @@ from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Structure
 from pymatgen.core.surface import Slab
 
-from .model import MAGMOM, StructureError
+from .model import MAGMOM, QE_SPECIES, StructureError
 from .readers import read_structure
 
 # |cos| of the angles between c and a, b above which c is not perpendicular.
@@ -83,7 +83,9 @@ class WorkflowSlab:
         Whether ``rotation`` differs from the identity.
     dropped : list of str
         Data of ``original`` missing from ``slab`` (site properties,
-        ``properties.<key>``, ``reconstruction``).
+        ``properties.<key>``, ``reconstruction``); not the species of a pw.x
+        file (``QE_SPECIES``), which reach the calculations through the
+        settings.
     added : list of str
         Site properties of ``slab`` missing from ``original`` (e.g. ``magmom``).
     swapped : bool
@@ -201,7 +203,9 @@ def workflow_slab(structure, miller):
         raise StructureError('the slab lattice is not a rotation of the cell of the file')
     original_props, slab_props = set(structure.site_properties), set(slab.site_properties)
     dropped = sorted(original_props - slab_props)
-    dropped += [f'properties.{k}' for k in sorted(structure.properties)]
+    # The species of a pw.x file reach the calculations through the settings ("auto"), not
+    # through the slab: not data lost.
+    dropped += [f'properties.{k}' for k in sorted(structure.properties) if k != QE_SPECIES]
     if getattr(structure, 'reconstruction', None) is not None:
         dropped.append('reconstruction')
     return WorkflowSlab(structure, slab, path, rotation,

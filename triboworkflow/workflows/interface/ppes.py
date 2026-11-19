@@ -60,7 +60,12 @@ above it writes:
   (``ppes_output``) and the figure ``ppes/ppes_<kind>_<site>_<name>.png`` and
   ``.pdf`` (``draw_ppes``): the energy of each shift against the distance
   between the slabs, referred so that the shift 0 has the adhesion energy of
-  the site (``ppes_curve``), with the UBER curve when fitted. They are renamed
+  the site (``ppes_curve``), with the UBER curve when fitted. Without the shift
+  0 among the shifts, the energy of each shift minus those of the two slabs
+  alone of the adhesion (``data.bot_slab`` and ``data.top_slab``, the
+  reference of the adhesion energy), when their records share the energy
+  model of the shifts: the points where the calculations put them, going to
+  zero as the slabs part. They are renamed
   into place once the entries are saved, and the step is done only with them
   carrying the stamp of the provenance saved (``outputs``).
 
@@ -102,7 +107,10 @@ coordinates without wrapping them, the vendored ``VaspInputSet``): where the
 original selection was right the structures are the same as the original ones
 and so are their fingerprints, where it was not the calculations change and the
 results computed with the wrong atoms are no longer reused (they are replaced
-with ``prepare ppes --replace``).
+with ``prepare ppes --replace``). TribChem's ``plot_ppes`` draws the energies
+referred to the shift 0 and stops without it (``get_shifts``,
+``highput/utils/plotting.py:694-709``); the figure without the shift 0,
+referred to the slabs apart, is DEV-62.
 """
 
 import contextlib
@@ -135,6 +143,7 @@ from triboworkflow.vendored.physics.tribology.ppes import PPES, PPESModel, fit_p
 
 from .adhesion import STEP as ADHESION
 from .adhesion import AdhesionStep
+from .adhesion import data_entry as adhesion_data
 from .chain import check_upstream, upstream_done, upstream_entries_done
 from .figures import figure_paths, ppes_figure
 from .match import COLLECTION, DEFAULTS, FILTER_KEYS, clear_entries, match_parameters, set_filter
@@ -745,7 +754,7 @@ def uber_parameters(values, fit):
     return float(popt[0]), float(popt[1]), float(popt[2])
 
 
-def ppes_curve(inputs, values, document):
+def ppes_curve(inputs, values, document, separated=True):
     """What the text file and the figure of the step show.
 
     Parameters
@@ -754,7 +763,11 @@ def ppes_curve(inputs, values, document):
     values : dict
         As ``arrange_data`` returns it.
     document : SystemDocument
-        The document of the system, with the adhesion energy of the site.
+        The document of the system, with the adhesion energy of the site and
+        the energies of the calculations of the adhesion.
+    separated : bool, optional
+        Whether the energies may be referred to the two slabs alone of the
+        adhesion: their records share the energy model of the shifts.
 
     Returns
     -------
@@ -766,6 +779,10 @@ def ppes_curve(inputs, values, document):
         (``adhesion.<kind>.<site>``), or None; ``adhesion_jm2``:
         ``energy_jm2`` minus its value at the shift 0 plus the adhesion
         energy, or None without the shift 0 or the adhesion energy;
+        ``slabs_ev``: the energies of the two slabs alone of the adhesion,
+        ``(bot_slab, top_slab)`` in eV (``data.<slab>.energy``), or None;
+        ``separated_jm2``: ``energy_ev`` minus those two energies, per area
+        of the cell in J/m^2, or None without them or without ``separated``;
         ``uber``: ``(g, l, s0)`` of the fit, or None; ``fit_values``: the fit
         as written, with its deviations, or None; ``jm2_per_ev``: J/m^2 of one
         eV on the area of the cell.
@@ -774,7 +791,7 @@ def ppes_curve(inputs, values, document):
     -----
     To remove: the energies of TribChem's ``plot_ppes`` (``get_shifts``,
     ``highput/utils/plotting.py:694-709``): the energy of the shift 0 is the
-    adhesion energy of the site.
+    adhesion energy of the site. ``separated_jm2`` is not in the original.
     """
     shift = np.array([row[0] for row in values['ppes_ev']], dtype=float)
     energy_ev = np.array([row[1] for row in values['ppes_ev']], dtype=float)
@@ -784,14 +801,20 @@ def ppes_curve(inputs, values, document):
     adhesion_jm2 = None
     if adhesion is not None and len(at_zero):
         adhesion_jm2 = energy_jm2 - energy_jm2[at_zero[0]] + adhesion
+    slabs = [document.get(adhesion_data(inputs.type) + (label, 'energy'))
+             for label in ('bot_slab', 'top_slab')]
+    slabs_ev = tuple(slabs) if None not in slabs else None
     fitted = inputs.fit != 'none'
     area, _ = get_cell_info(Structure.from_dict(inputs.read['interface']).lattice.matrix)
+    jm2_per_ev = Converter.eV_to_Jm2(1.0, area * 1e-20)
+    separated_jm2 = (energy_ev - sum(slabs_ev)) * jm2_per_ev \
+        if separated and slabs_ev is not None else None
     return {'shift': shift, 'energy_ev': energy_ev, 'energy_jm2': energy_jm2,
             'distance': slab_distance(inputs.read['interface']), 'adhesion': adhesion,
-            'adhesion_jm2': adhesion_jm2,
+            'adhesion_jm2': adhesion_jm2, 'slabs_ev': slabs_ev, 'separated_jm2': separated_jm2,
             'uber': uber_parameters(values, inputs.fit) if fitted else None,
             'fit_values': values[inputs.fit] if fitted else None,
-            'jm2_per_ev': Converter.eV_to_Jm2(1.0, area * 1e-20)}
+            'jm2_per_ev': jm2_per_ev}
 
 
 def output_path(sdir, kind, site):
@@ -821,7 +844,8 @@ def ppes_output(system, inputs, curve, now=None, stamp=None):
     -------
     str
     """
-    distance, adhesion = curve['distance'], curve['adhesion']
+    distance, adhesion, slabs = curve['distance'], curve['adhesion'], curve['slabs_ev']
+    data = '.'.join(adhesion_data(inputs.type))
     lines = header('Perpendicular PES of the interface', system, STEP, now, stamp) + [
         '#', '# Parameters',
         f'#   [interface.ppes]      site = "{inputs.site}", fit = "{inputs.fit}", shifts = '
@@ -831,23 +855,31 @@ def ppes_output(system, inputs, curve, now=None, stamp=None):
         f'{inputs.site}: ' + ('not told' if distance is None else f'{distance:.6f} angstrom'),
         f'#   adhesion energy at {inputs.site} (adhesion.{inputs.type}.{inputs.site}): '
         + ('not written' if adhesion is None else f'{adhesion:.8f} J/m^2'),
+        f'#   energies of the two slabs alone of the adhesion ({data}.bot_slab and top_slab): '
+        + ('not written' if slabs is None else f'{slabs[0]:.8f} and {slabs[1]:.8f} eV'),
         '#', '# One row per shift of the slab on top:',
-        '#   shift         shift of the slab on top along z from the relaxed interface, angstrom',
-        '#   distance      distance between the slabs, angstrom (nan: not told)',
-        f'#   energy_eV     total energy of the cell, eV (ppes.{inputs.type}.energy.'
+        '#   shift          shift of the slab on top along z from the relaxed interface, '
+        'angstrom',
+        '#   distance       distance between the slabs, angstrom (nan: not told)',
+        f'#   energy_eV      total energy of the cell, eV (ppes.{inputs.type}.energy.'
         f'{inputs.site}.ppes_ev)',
-        '#   energy_Jm2    the same per area of the cell, J/m^2 (ppes_jm2)',
-        '#   adhesion_Jm2  energy_Jm2 minus its value at the shift 0 plus the adhesion energy',
-        '#                 (nan without the shift 0 or the adhesion energy)',
+        '#   energy_Jm2     the same per area of the cell, J/m^2 (ppes_jm2)',
+        '#   adhesion_Jm2   energy_Jm2 minus its value at the shift 0 plus the adhesion energy',
+        '#                  (nan without the shift 0 or the adhesion energy)',
+        '#   separated_Jm2  energy_eV minus the energies of the two slabs alone, per area of the',
+        '#                  cell, J/m^2 (nan without them, or if their energy model differs)',
         f'# {"shift":>10} {"distance":>12} {"energy_eV":>18} {"energy_Jm2":>18} '
-        f'{"adhesion_Jm2":>14}']
+        f'{"adhesion_Jm2":>14} {"separated_Jm2":>14}']
+
+    def column(name, i):
+        return '{:>14}'.format('nan') if curve[name] is None else f'{curve[name][i]:>14.8f}'
+
     for i, shift in enumerate(curve['shift']):
         lines.append(
             f'  {shift:>10.4f} '
             f'{"nan" if distance is None else f"{distance + shift:.6f}":>12} '
             f'{curve["energy_ev"][i]:>18.8f} {curve["energy_jm2"][i]:>18.8f} '
-            + ('{:>14}'.format('nan') if curve['adhesion_jm2'] is None
-               else f'{curve["adhesion_jm2"][i]:>14.8f}'))
+            f'{column("adhesion_jm2", i)} {column("separated_jm2", i)}')
     if curve['uber'] is not None:
         g, l, s0 = curve['uber']
         fit, written = inputs.fit, curve['fit_values']
@@ -865,21 +897,29 @@ def draw_ppes(curve, png, pdf, stamp=None):
     """The figure of the PPES: energy against the distance between the slabs.
 
     The energy is the adhesion energy (``adhesion_jm2``) when the shift 0
-    and the adhesion energy are there, else the energy above the lowest one;
-    the distance is that between the slabs when told, else the shift. With a
-    fit, its UBER curve, from the shift 0 to the largest. ``stamp`` goes in
-    the metadata of the files.
+    and the adhesion energy are there; else the energy referred to the two
+    slabs alone of the adhesion (``separated_jm2``), the points where the
+    calculations put them; else, without those slabs, the energy above the
+    lowest one. The distance is that between the slabs when told, else the
+    shift. With a fit, its UBER curve, from the shift 0 to the largest.
+    ``stamp`` goes in the metadata of the files.
 
     Notes
     -----
     To remove: TribChem's ``plot_ppes`` (``highput/utils/plotting.py:631-661``) drew the
     energies against the shift minus the z of the highest atom below the contact plane
     (``estimate_interface(...)[0]``), the distance of the plane from the bottom slab; here
-    the abscissa is the distance between the two slabs, from the same structure.
+    the abscissa is the distance between the two slabs, from the same structure. Without
+    the shift 0 the original stops (``get_shifts``); here the energy is referred to the
+    slabs apart.
     """
     if curve['adhesion_jm2'] is not None:
         energy, ylabel = curve['adhesion_jm2'], r'adhesion energy (J/m$^2$)'
         offset = curve['adhesion_jm2'][0] - curve['energy_jm2'][0]
+    elif curve['separated_jm2'] is not None:
+        energy = curve['separated_jm2']
+        ylabel = r'$E - E_\mathrm{bot} - E_\mathrm{top}$ (J/m$^2$)'
+        offset = curve['separated_jm2'][0] - curve['energy_jm2'][0]
     else:
         energy, ylabel = curve['energy_jm2'] - curve['energy_jm2'].min(), r'$\Delta E$ (J/m$^2$)'
         offset = -curve['energy_jm2'].min()
@@ -1045,7 +1085,8 @@ class PpesStep(Step):
                                        list(plan))
             for entry in ppes_leaves(inputs.type, inputs.site):
                 writer.document.set_provenance(entry, provenance)
-            curve = ppes_curve(inputs, values, writer.document)
+            curve = ppes_curve(inputs, values, writer.document,
+                               self._separated(sdir, system, records))
             (output, *figure), stamp = self._exports(run_dir, system, writer.document, inputs)
             with staged([output, *figure]) as partials:
                 partials[output].write_text(ppes_output(system, inputs, curve, stamp=stamp),
@@ -1061,6 +1102,22 @@ class PpesStep(Step):
             logger.info('%s: %s', system, line)
         logger.info('%s: table of the PPES in %s, figure in %s', system, output,
                     ' and '.join(path.name for path in figure))
+
+    def _separated(self, sdir, system, records):
+        """Whether the energies of the shifts may be referred to the slabs alone of the adhesion.
+
+        Only when the records of ``adhesion/bot_slab`` and ``adhesion/top_slab``
+        share the energy model of the shifts (``check_energy_model``); otherwise
+        the reason is logged as a warning.
+        """
+        try:
+            slabs = [read_record(sdir, f'{ADHESION}/{label}') for label in ('bot_slab', 'top_slab')]
+            check_energy_model([*records, *slabs])
+        except (OSError, ValueError) as error:  # StoreError among them
+            logger.warning('%s/%s: energies not referred to the slabs alone of the adhesion '
+                           '(separated_Jm2 nan): %s', system, self.name, error)
+            return False
+        return True
 
     def inputs(self, run_dir, system):
         """``ppes_inputs`` of the step, from the settings of the run."""

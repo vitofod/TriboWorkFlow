@@ -256,7 +256,9 @@ def test_a_slab_with_c_along_z_is_read_from_an_output(tmp_path):
     path.write_text(pw_output(cu_slab(), 'relax', species=CU_SPECIES))
     slab = read_workflow_slab(path, (1, 1, 1))
     assert slab.path == 'custom_slab' and not slab.rotated
-    assert f'properties.{QE_SPECIES}' in slab.dropped
+    # The species of the file reach the calculations through the settings: not data lost.
+    assert QE_SPECIES in slab.original.properties
+    assert f'properties.{QE_SPECIES}' not in slab.dropped
 
 
 def test_a_slab_whose_c_is_tilted_is_refused_with_an_explicit_error(tmp_path):

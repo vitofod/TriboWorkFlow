@@ -145,7 +145,9 @@ if it already ran.
 A submission that fails says whether the job may exist
 (`JobSubmissionError.accepted`): False when the command exited with an error
 and printed no id, None when it timed out, failed in another way or printed
-no id after succeeding.
+no id after succeeding. The command line stops a command of the scheduler
+after 120 s (`cli.run.SCHEDULER_TIMEOUT`; the class alone waits 30 s): on a
+loaded login node `sbatch` may take longer and still create the job.
 
 None of these commands has been tried on a cluster yet.
 
@@ -167,7 +169,12 @@ created) waits for `clear_refusal` (`triboworkflow clear-refusal`, which also
 gives a group none of whose jobs was submitted the walltime of its step in
 `[execution.<step>]` as it is then); one of outcome not known takes the place
 of a job, stops the group and survives a restart until `resolve_submission`
-registers the job found, or frees its place.
+registers the job found, or frees its place. When that job ran, its worker
+wrote its id in the claims and in the attempts of the calculations it took:
+`status` and the refusal of `prepare <step> --replace` name the ids found
+there that the registry lacks (`reconcile.jobs_of_the_workers`), with the
+command that registers them; the user checks them first, since a worker
+started by hand in another job would write that job.
 
 Each job is:
 
@@ -269,7 +276,8 @@ known from the scheduler and the files.
 A charge density that failed is never produced again automatically: pw.x
 completed, so the calculation is `completed`, its results cannot be used
 (`reuse_problem`: `charge density failed: <reason>`) and it goes to the
-user. A manual relaunch runs pw.x again from scratch, then pp.x.
+user. A manual relaunch (`relaunch --step charge`) runs pw.x again from
+scratch, then pp.x, with the `pp_command` of the settings as they are then.
 
 **Time limit.** `max_seconds` of each attempt is `walltime` minus the time
 since the worker started minus `max_seconds_margin`, capped by the
@@ -426,7 +434,19 @@ that level), continuing the last attempt on the conditions of a relaunch of
 the workflow, also after a stop by request of the user, unless asked to
 start from scratch (`--from-scratch`); the count of
 the unchanged relaunches starts again. An attempt that groups listed and no
-worker took runs again as it was listed, at no other level.
+worker took runs again as it was listed, at no other level. A completed
+calculation whose results cannot be used (`policy.unusable_results`: output
+not parsed, an energy model not fully known, an output of another model, a
+charge density that failed) runs again from scratch; one whose results can
+be used only with `--redo`, also from scratch.
+
+A relaunch takes the settings as they are then for what does not change the
+fingerprint: the run and pp.x commands, the jobscript, the walltime and the
+options of the submission (in the manifest of its group), and the keys of
+the resources of `input.pwi` (`pseudo_dir`, …), which it writes there with one
+line of log per key changed (`preparation.update_resources`). The keys of the
+attempts (`mixing_beta`, `nstep`, …) stay as prepared, since the levels start
+from them. What changes the fingerprint needs `prepare <step> --replace`.
 
 ### Restart
 
@@ -537,9 +557,9 @@ Each pass:
    calculation is completed the step analyses them and is **completed**; a
    calculation completed whose output was not parsed, or whose results
    cannot be used (an energy model not fully known, an output of another
-   model), needs the user and is never relaunched, as for `analyse_step`;
-   when what is left needs the user it has **failed**, with the
-   calculations and why;
+   model, a charge density that failed), needs the user and is never
+   relaunched automatically, as for `analyse_step`; when what is left needs
+   the user it has **failed**, with the calculations and why;
 4. saves the steps in `orchestrator.json`: for each step its status,
    reason, calculations prepared, error of its own, calculations by outcome,
    those that need the user, the group of the job of its analysis (`job`,
@@ -549,8 +569,11 @@ Each pass:
 A failure blocks only the descendants: the other branches go on, and the
 workflow succeeds only when every requested step is completed. A step failed
 for its calculations goes back to running when they are relaunched by hand
-(`Orchestrator.relaunch`); one failed for an error of its own stays failed
-until `retry`. After a restart, or a pass interrupted at any point, the next
+(`Orchestrator.relaunch_step`); one failed for an error of its own stays failed
+until `retry`. A completed step whose calculations are run again by hand
+(`--redo`) goes back to running and is analysed again; the steps that read its
+entries are then no longer done if those entries changed, and run again at
+the next passes, reusing their calculations whose fingerprint is the same. After a restart, or a pass interrupted at any point, the next
 pass recovers the jobs, reconciles the attempts and only then submits,
 without duplicates.
 
@@ -675,7 +698,10 @@ kept ones included, and leaves those already current. A completed
 calculation that differs only in keys of the attempts is then computed
 again: to avoid it, restore those values before replacing.
 
-Every check comes before any change. The replacement is refused, with the
+On the HPC machine the jobs are first recovered and asked for their state, as
+by a relaunch, so that a job over since the last pass does not stop the
+replacement; elsewhere their states are those of the last query. Every check
+comes before any change. The replacement is refused, with the
 reason of each calculation and nothing changed, when a calculation has a
 claim whose worker may still run (an empty claim or one that cannot be read,
 a claim without a job, or one whose job is not in a final state confirmed by
@@ -734,7 +760,8 @@ machine (`locks` of `tests/hpc/hpc_check.py`).
 
 ## In the background
 
-`execution/daemon.py` runs the orchestrator on the login node, as SCS does:
+`execution/daemon.py` runs the orchestrator on the login node, as SCS does,
+with each pass in a process of its own (below):
 
 - `start(run_dir, factory, scheduler, factory_args)` checks that the
   submission command of the scheduler is found, creates `orchestrator.pid`
@@ -747,9 +774,10 @@ machine (`locks` of `tests/hpc/hpc_check.py`).
   directory and `factory_args`, written in its command) and then writes its
   own pid in the file, if the file still holds its token. `start` returns
   once that pid is written; a process that exits first, or does not write it
-  within `timeout` seconds (120 by default, then it is killed), leaves
+  within `timeout` seconds (600 by default, then it is killed), leaves
   neither the pid file nor the lock, and `start` raises an error naming the
-  log, unless it exited with code 0 (nothing left to do);
+  log, unless it exited with code 0 (nothing left to do). On a login node so
+  loaded that the start is killed, start it from another login node;
 - `status(run_dir)` tells whether it runs; a pid file of another host is
   never touched, one of a process gone is replaced at the next start;
 - `stop(run_dir)` sends SIGTERM: the orchestrator ends its pass, saves its
@@ -757,6 +785,22 @@ machine (`locks` of `tests/hpc/hpc_check.py`).
   records the request, so it cannot block the process whatever it is doing;
   between two passes the orchestrator checks it every 0.2 s. The lock of the
   run is removed when the process exits.
+
+**A process for each pass.** The login nodes of some machines stop a process
+once it has used a given CPU time (Leonardo: 600 s, `ulimit -t`), and an
+orchestrator that lives for days, with a first pass that builds the
+interface, would reach it. So each pass runs in a process of its own
+(`daemon.pass_in_child`: `python -m triboworkflow.execution.daemon pass`),
+which builds the orchestrator again with the factory, runs the pass, logs it
+(`Pass <n>: ...`) and tells by its exit code whether the passes are over; the
+process in the background only waits between passes. Each pass has the whole
+limit. A pass stopped by a signal leaves an error in `orchestrator.log` (`Pass
+<n>: its process was stopped by the signal SIGKILL ...`) and the next pass
+completes it, as after any interruption; after two such passes in a row the
+orchestrator stops, since the limit is then too low for a pass. A pass that
+ends with an error stops the orchestrator, with its traceback in the log. The
+pass under way is not signalled by `stop`: it ends, then the orchestrator
+stops.
 
 The commands of the command line (`triboworkflow start`, `stop`, `status`,
 the phases of a step and the actions of the user) are described in

@@ -182,6 +182,44 @@ def test_orchestrator_done_before_start_goes_on(run_dir, monkeypatch):
 
 
 @posix_only
+def test_each_pass_runs_in_a_process_of_its_own(run_dir):
+    """The limit of CPU time of a login node is per process: each pass has all of it."""
+    (run_dir / 'limit').write_text('3')
+    started = start(run_dir, FACTORY, 'slurm', factory_args=('10',))
+    assert wait_for(lambda: not (run_dir / daemon.PID_FILE).exists()), report(run_dir)
+    pids = read(run_dir / 'pids').split()
+    assert len(set(pids)) == 3 and str(started.pid) not in pids, report(run_dir)
+    assert read(run_dir / 'saved') == '3', report(run_dir)
+    # Each process of a pass builds the orchestrator with the arguments of the start.
+    assert json.loads(read(run_dir / 'factory_args.json')) == ['10'], report(run_dir)
+    assert 'Orchestrator done' in read(run_dir / daemon.LOG_FILE), report(run_dir)
+
+
+@posix_only
+def test_a_pass_stopped_by_a_signal_is_logged_and_the_next_one_goes_on(run_dir):
+    (run_dir / 'limit').write_text('3')
+    (run_dir / 'kill').write_text('[2]')
+    start(run_dir, FACTORY, 'slurm')
+    assert wait_for(lambda: not (run_dir / daemon.PID_FILE).exists()), report(run_dir)
+    log = read(run_dir / daemon.LOG_FILE)
+    assert 'Pass 2: its process was stopped by the signal SIGKILL (on a login node, likely its ' \
+           'limit of CPU time, "ulimit -t"); the next pass completes it' in log, report(run_dir)
+    assert read(run_dir / 'saved') == '3' and 'Orchestrator done' in log, report(run_dir)
+
+
+@posix_only
+def test_passes_stopped_by_a_signal_in_a_row_stop_the_orchestrator(run_dir):
+    (run_dir / 'kill').write_text('[1, 2, 3]')
+    start(run_dir, FACTORY, 'slurm')
+    message = 'passes 1, 2 stopped by a signal in a row: the orchestrator stops'
+    # The error ends the process: its traceback is written after the pid file is removed.
+    assert wait_for(lambda: message in (read(run_dir / daemon.LOG_FILE) or '')), report(run_dir)
+    assert not (run_dir / daemon.PID_FILE).exists() and not (run_dir / LOCK_FILE).exists(), \
+        report(run_dir)
+    assert 'Pass 3' not in read(run_dir / daemon.LOG_FILE), report(run_dir)
+
+
+@posix_only
 def test_failed_start_is_reported(run_dir):
     with pytest.raises(DaemonError, match=r'not running: pid \d+ exited with code 1 at its '
                                           r'start; see .*orchestrator\.log'):

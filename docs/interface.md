@@ -941,16 +941,23 @@ positive, so:
 
 | File, in `systems/<system>/ppes/` | Content |
 |---|---|
-| `ppes_<type>_<site>.output` | text: the system and the time; `[interface.ppes]` and `[interface.adhesion]`; the distance between the slabs of the interface relaxed by the adhesion (the lowest atom of the top slab minus the highest atom of the bottom slab, Å) and the adhesion energy of the site; one row per shift: `shift`, `distance` (that distance plus the shift, Å), `energy_eV` and `energy_Jm2` (as in the entries), `adhesion_Jm2` (`energy_Jm2` minus its value at the shift 0 plus the adhesion energy of the site); with the fit, `g` (also in J/m^2), `l`, `s0` (the shift of the minimum of the curve) and the deviations |
-| `ppes_<type>_<site>_<name>.png`, `.pdf` | the PPES: `adhesion_Jm2` of each shift against the distance between the slabs, with the UBER curve when fitted; the figure of the article as that of `plotpes` (8.5 cm, serif, 600 dpi and PDF) |
+| `ppes_<type>_<site>.output` | text: the system and the time; `[interface.ppes]` and `[interface.adhesion]`; the distance between the slabs of the interface relaxed by the adhesion (the lowest atom of the top slab minus the highest atom of the bottom slab, Å), the adhesion energy of the site and the energies of the two slabs alone of the adhesion (`data.bot_slab`, `data.top_slab`); one row per shift: `shift`, `distance` (that distance plus the shift, Å), `energy_eV` and `energy_Jm2` (as in the entries), `adhesion_Jm2` (`energy_Jm2` minus its value at the shift 0 plus the adhesion energy of the site), `separated_Jm2` (`energy_eV` minus the energies of the two slabs alone, per area); with the fit, `g` (also in J/m^2), `l`, `s0` (the shift of the minimum of the curve) and the deviations |
+| `ppes_<type>_<site>_<name>.png`, `.pdf` | the PPES: `adhesion_Jm2` of each shift against the distance between the slabs, or `separated_Jm2` without the shift 0, with the UBER curve when fitted; the figure of the article as that of `plotpes` (8.5 cm, serif, 600 dpi and PDF) |
 
 The adhesion energy at a distance is the energy of the shift referred so that
 the shift 0, the interface relaxed by the adhesion, has the adhesion energy of
 the site (`adhesion.<type>.<site>`): the curve goes from that value towards
-zero as the slabs part. Without the shift 0 among the shifts the column is
-`nan` and the figure gives ΔE, the energy above the lowest one; when the slabs
-of the atoms cannot be told, the distance is `nan` and the figure is against
-the shift. `s0` comes from the same fit run again on the same energies, whose
+zero as the slabs part. Without the shift 0 among the shifts `adhesion_Jm2`
+is `nan` (the original workflow stops), and the figure gives `separated_Jm2`,
+E(shift) − E(bot_slab) − E(top_slab): each point where its calculation puts
+it, referred to the slabs apart as the adhesion energy is, going towards zero
+as the slabs part. With the shift 0 the two columns differ only by the
+difference between the scf of the shift 0 and the relaxation of the adhesion
+on the same geometry. The slabs are subtracted only when their records share
+the energy model of the shifts; otherwise `separated_Jm2` is `nan`, a warning
+says why, and the figure gives ΔE, the energy above the lowest one. When the
+slabs of the atoms cannot be told, the distance is `nan` and the figure is
+against the shift. `s0` comes from the same fit run again on the same energies, whose
 `g` and `l` must be those written. The file and the figure are written with the
 entries, in the same save.
 

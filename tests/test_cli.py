@@ -135,6 +135,19 @@ def test_check_prints_the_placeholders_of_the_jobscripts(tmp_path, capsys):
             in capsys.readouterr().out)
 
 
+def test_check_warns_of_a_relative_pseudo_dir(tmp_path, capsys):
+    run_dir = write_run(tmp_path)
+    assert main(['check', '-r', str(run_dir)]) == 0
+    assert 'pseudo_dir' not in capsys.readouterr().err  # the example gives an absolute path
+    config = run_dir / 'config.toml'
+    config.write_text(config.read_text().replace('pseudo_dir = "/path/to/pseudo"',
+                                                 'pseudo_dir = "PSEUDO/"'))
+    assert main(['check', '-r', str(run_dir)]) == 0
+    assert ("namelists.CONTROL.pseudo_dir = 'PSEUDO/' is a relative path: pw.x reads it from the "
+            'directory of each calculation (systems/<system>/<step>/<label>/), not from the '
+            'folder of config.toml; give an absolute path') in capsys.readouterr().err
+
+
 def test_check_invalid_settings(tmp_path, capsys):
     run_dir = write_run(tmp_path)
     config = run_dir / 'config.toml'
@@ -524,6 +537,46 @@ def test_relaunch_of_a_step_relaunches_what_can_be_and_lists_the_rest(
     assert f'{SYSTEM}/pes/c1: not relaunched: ' in out
     assert launches(run_dir, f'{SYSTEM}.pes.2') == [('pes/c0', 2, 'manual', 1)]
     assert fake_slurm.submitted == 3
+
+
+def test_relaunch_of_completed_calculations(tmp_path, fake_steps, fake_slurm,
+                                           fake_scheduler_bin, capsys):
+    """Results that cannot be used: run again from scratch; results that can: only with --redo."""
+    run_dir = write_run(tmp_path)
+    submitted_pes(run_dir)
+    complete(run_dir, 'pes/c0', status=store_status('ended', 'converged'))  # output not parsed
+    complete(run_dir, 'pes/c1')
+    fake_slurm.states['900'] = 'COMPLETED'
+    assert cli(run_dir, 'submit', 'pes') == 1
+    capsys.readouterr()
+    assert cli(run_dir, 'retry', 'pes') == 1
+    assert (f'{SYSTEM}/pes is failed: its calculations need the user: relaunch them with '
+            '"triboworkflow relaunch --step pes"') in capsys.readouterr().err
+    assert cli(run_dir, 'relaunch', '--step', 'pes') == 0
+    out = capsys.readouterr().out
+    assert f'{SYSTEM}/pes/c0: relaunched by hand, attempt 2 at level 1, from scratch' in out
+    assert (f'{SYSTEM}/pes/c1: not relaunched: {SYSTEM}/pes/c1 is completed and its results can '
+            'be used: nothing to run again (--redo runs it again from scratch)') in out
+    assert cli(run_dir, 'relaunch', '--step', 'pes', '--calc', 'c1', '--redo') == 0
+    assert launches(run_dir, f'{SYSTEM}.pes.3') == [('pes/c1', 2, 'manual', 1)]
+
+
+def test_status_names_the_job_of_a_submission_of_outcome_not_known(
+        tmp_path, fake_steps, fake_slurm, fake_scheduler_bin, capsys):
+    run_dir = write_run(tmp_path)
+    submitted_pes(run_dir)
+    lost = {'error': 'Command timed out after 120 seconds', 'at': '2026-10-30T10:00:00+01:00'}
+    edit_registry(run_dir, lambda r: r['groups'][GROUP].update(unknown=[lost]))
+    capsys.readouterr()
+    assert cli(run_dir, 'status') == 0
+    assert (f'group {GROUP}: 1 submissions of outcome not known; look for the job in the queue'
+            in capsys.readouterr().out)
+    complete(run_dir, 'pes/c0', job_id='4242')  # the worker of a job the registry lacks
+    assert cli(run_dir, 'status') == 0
+    assert (f'group {GROUP}: 1 submissions of outcome not known; the claims or the attempts of '
+            'its calculations name job 4242, not registered: check that it is a job of this group '
+            f'(e.g. its output in jobs/{GROUP}), then "triboworkflow resolve-submission {GROUP} '
+            '--job-id 4242"') in capsys.readouterr().out
 
 
 @pytest.mark.parametrize('max_jobs, submitted', [(None, 2), (1, 1)])
