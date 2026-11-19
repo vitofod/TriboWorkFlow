@@ -971,6 +971,8 @@ def orchestrated_chain(tmp_path, fake_slurm):
     """
     run_dir = pes_run(tmp_path, steps=('adhesion', 'pes_scf', 'match'))
     configure(run_dir, 'pes_scf', 'regular')
+    # match runs in a job of its own, never in a pass: analysed here, as its job would.
+    MatchStep().analyse(run_dir, SYSTEM, [])
     orch = build_orchestrator(run_dir, groups=2)
     assert orch.order == ['match', 'pes_scf', 'adhesion']
 

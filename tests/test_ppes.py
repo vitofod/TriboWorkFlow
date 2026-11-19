@@ -57,6 +57,7 @@ from triboworkflow.vendored.physics.base.units import Converter
 from triboworkflow.vendored.physics.tribology.ppes import PPESModel, fit_ppes
 from triboworkflow.workflows.interface import adhesion, pes, ppes
 from triboworkflow.workflows.interface.figures import figure_paths
+from triboworkflow.workflows.interface.match import MatchStep
 from triboworkflow.workflows.interface.outputs import file_stamp
 
 SHIFT_LABELS = [f'min_site_{shift}' for shift in PPES_SHIFTS]
@@ -1573,6 +1574,8 @@ def orchestrated_chain(tmp_path, fake_slurm):
     """
     run_dir = pes_run(tmp_path, steps=('ppes', 'adhesion', 'pes_scf', 'match'))
     configure(run_dir, 'pes_scf', 'regular')
+    # match runs in a job of its own, never in a pass: analysed here, as its job would.
+    MatchStep().analyse(run_dir, SYSTEM, [])
     orch = build_orchestrator(run_dir, groups=2)
     assert orch.order == ['match', 'pes_scf', 'adhesion', 'ppes']
 

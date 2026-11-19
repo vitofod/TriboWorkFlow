@@ -69,6 +69,7 @@ from triboworkflow.vendored.highput.utils.manipulate_struct import (ManipulateSt
                                                                     generate_chargedisp_inputs)
 from triboworkflow.vendored.physics.electronics.charge import chgcar_integrator as ci
 from triboworkflow.workflows.interface import adhesion, charge, outputs, pes, ppes
+from triboworkflow.workflows.interface.match import MatchStep
 from triboworkflow.workflows.interface.plotpes import interface_name
 
 PARTS = ['interface', 'bot_slab', 'top_slab']
@@ -1223,6 +1224,8 @@ def test_the_orchestrator_runs_the_step_with_the_fake_engines(tmp_path, fake_slu
     complete with the density ``ok`` and the step analyses them.
     """
     run_dir = run_with_the_fake_engines(tmp_path)
+    # match runs in a job of its own, never in a pass: analysed here, as its job would.
+    MatchStep().analyse(run_dir, SYSTEM, [])
     orch = build_orchestrator(run_dir, groups=2)
     assert orch.order == ['match', 'pes_scf', 'adhesion', 'charge']
 
